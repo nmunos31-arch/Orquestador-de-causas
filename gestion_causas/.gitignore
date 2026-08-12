@@ -1,0 +1,11 @@
+# Credenciales — nunca deben subirse a git
+token_gmail_trabajo.json
+
+# Estado en tiempo de ejecución (datos reales de clientes/causas)
+registro_causas.json
+registro_ceco.json
+bitacora.md
+
+# Python
+__pycache__/
+*.pyc

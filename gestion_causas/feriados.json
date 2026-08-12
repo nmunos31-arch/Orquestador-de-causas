@@ -1,0 +1,39 @@
+{
+  "_comentario": "Feriados legales de Chile (nacionales, aplicables en todo el país) para el cálculo de días hábiles. Formato AAAA-MM-DD. Actualizar cada año (fuente: Diario Oficial / feriados.cl). No incluye feriados regionales (ej. Fiestas Patrias regional, San Pedro y San Pablo en algunas comunas) porque las causas de este proyecto no dependen de eso.",
+  "2026": [
+    "2026-01-01",
+    "2026-04-03",
+    "2026-04-04",
+    "2026-05-01",
+    "2026-05-21",
+    "2026-06-21",
+    "2026-06-29",
+    "2026-07-16",
+    "2026-08-15",
+    "2026-09-18",
+    "2026-09-19",
+    "2026-10-12",
+    "2026-10-31",
+    "2026-11-01",
+    "2026-12-08",
+    "2026-12-25"
+  ],
+  "2027": [
+    "2027-01-01",
+    "2027-03-26",
+    "2027-03-27",
+    "2027-05-01",
+    "2027-05-21",
+    "2027-06-21",
+    "2027-06-29",
+    "2027-07-16",
+    "2027-08-15",
+    "2027-09-18",
+    "2027-09-19",
+    "2027-10-11",
+    "2027-10-31",
+    "2027-11-01",
+    "2027-12-08",
+    "2027-12-25"
+  ]
+}

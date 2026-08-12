@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""
+Registro persistente de causas y de CECOs (locales) procesados por la gestión
+automática de causas nuevas desde la casilla nmunoz@gomezyriesco.cl.
+
+Dos archivos JSON, ambos junto a este módulo salvo que se indique otra ruta:
+- registro_causas.json: una entrada por RIT normalizado. Da idempotencia —
+  saber si una causa ya fue registrada, y qué datos faltan.
+- registro_ceco.json: por código CECO, el local y las fechas de despido para
+  las que ya se recibió el EERR (usado en la Fase 2 para no volver a pedirlo).
+
+Ver docs del diseño: "Actualizador de informes/docs/2026-07-07-informe-juicios-email-design.md"
+y el plan en C:\\Users\\usuario\\.claude\\plans\\1-contrato-de-trabajo-streamed-pizza.md.
+"""
+
+import json
+import re
+from datetime import date, datetime
+from pathlib import Path
+
+RUTA_REGISTRO_CAUSAS = Path(__file__).parent / "registro_causas.json"
+RUTA_REGISTRO_CECO = Path(__file__).parent / "registro_ceco.json"
+
+
+def normalizar_rit(valor) -> str:
+    """Quita espacios en blanco y normaliza guiones especiales a "-".
+
+    Duplicado deliberado de la función homónima en actualizar_informe_juicios.py
+    (mismo comportamiento, misma razón: RITs copiados a mano traen tabs o
+    guiones no separables). Se duplica en vez de importar para que este
+    paquete no dependa de la ubicación del script del Excel.
+    """
+    texto = "".join(str(valor).split()).upper()
+    for guion in ("‐", "‑", "‒", "–", "—"):
+        texto = texto.replace(guion, "-")
+    return texto
+
+
+def _cargar(ruta: Path) -> dict:
+    if not ruta.exists():
+        return {}
+    with open(ruta, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _guardar(ruta: Path, datos: dict) -> None:
+    with open(ruta, "w", encoding="utf-8") as f:
+        json.dump(datos, f, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+# ── Registro de causas ────────────────────────────────────────────────────
+def cargar_registro_causas(ruta: Path = RUTA_REGISTRO_CAUSAS) -> dict:
+    return _cargar(ruta)
+
+
+def obtener_causa(rit: str, ruta: Path = RUTA_REGISTRO_CAUSAS) -> dict | None:
+    return cargar_registro_causas(ruta).get(normalizar_rit(rit))
+
+
+def registrar_causa(rit: str, datos: dict, ruta: Path = RUTA_REGISTRO_CAUSAS) -> dict:
+    """Da de alta una causa nueva o actualiza (merge) una existente.
+
+    `datos` puede traer, entre otros: thread_id, message_id, empresa, ceco,
+    demandante, carpeta, fecha_despido, fecha_audiencia (AAAA-MM-DD, para la
+    Fase 4), tiene_demanda, tiene_ceco, campos_faltantes (lista).
+
+    Si el RIT ya existía, se hace merge superficial (los campos nuevos pisan
+    a los viejos; los campos no incluidos en `datos` se conservan) — así una
+    corrida posterior que trae el CECO que faltaba no pierde lo ya guardado.
+
+    Devuelve la entrada final guardada.
+    """
+    registro = cargar_registro_causas(ruta)
+    clave = normalizar_rit(rit)
+    existente = registro.get(clave, {})
+    fusionada = {**existente, **datos}
+    fusionada["rit"] = rit
+    fusionada.setdefault("primera_vez_registrada", datetime.now().isoformat())
+    fusionada["ultima_actualizacion"] = datetime.now().isoformat()
+    registro[clave] = fusionada
+    _guardar(ruta, registro)
+    return fusionada
+
+
+def causa_ya_registrada(rit: str, ruta: Path = RUTA_REGISTRO_CAUSAS) -> bool:
+    return obtener_causa(rit, ruta) is not None
+
+
+def causas_para_goteo(
+    hoy=None, dias_ventana_post_audiencia: int = 60, ruta: Path = RUTA_REGISTRO_CAUSAS
+) -> list:
+    """Causas que conviene seguir revisando por documentos nuevos (Fase 3):
+    las que todavía no tienen fecha de audiencia registrada, o cuya audiencia
+    fue hace `dias_ventana_post_audiencia` días o menos (la prueba puede
+    seguir llegando un tiempo después, ej. por una reprogramación). Acota el
+    barrido para que no crezca sin límite a medida que se acumulan causas
+    viejas ya cerradas.
+
+    `hoy` es inyectable para tests; por defecto usa la fecha actual.
+    Devuelve una lista de entradas del registro (dicts), cada una con su
+    "rit" y "thread_id".
+    """
+    if hoy is None:
+        hoy = date.today()
+    else:
+        hoy = _parsear_fecha(hoy)
+
+    resultado = []
+    for entrada in cargar_registro_causas(ruta).values():
+        fecha_audiencia = entrada.get("fecha_audiencia")
+        if not fecha_audiencia:
+            resultado.append(entrada)
+            continue
+        dias_desde_audiencia = (hoy - _parsear_fecha(fecha_audiencia)).days
+        if dias_desde_audiencia <= dias_ventana_post_audiencia:
+            resultado.append(entrada)
+    return resultado
+
+
+# ── Registro de CECO (locales) ────────────────────────────────────────────
+def cargar_registro_ceco(ruta: Path = RUTA_REGISTRO_CECO) -> dict:
+    return _cargar(ruta)
+
+
+def _parsear_fecha(valor) -> date:
+    if isinstance(valor, date):
+        return valor
+    return datetime.strptime(str(valor), "%Y-%m-%d").date()
+
+
+def _dias_entre(a: date, b: date) -> int:
+    return abs((a - b).days)
+
+
+def registrar_eerr_recibido(
+    ceco: str, fecha_despido, rit_causa: str, ruta: Path = RUTA_REGISTRO_CECO
+) -> None:
+    """Anota que se recibió el EERR del local `ceco` con motivo del despido de
+    fecha `fecha_despido` (para la causa `rit_causa`)."""
+    registro = cargar_registro_ceco(ruta)
+    ceco_norm = str(ceco).strip().upper()
+    entradas = registro.setdefault(ceco_norm, [])
+    entradas.append({
+        "fecha_despido": str(_parsear_fecha(fecha_despido)),
+        "rit_causa": rit_causa,
+    })
+    _guardar(ruta, registro)
+
+
+def buscar_eerr_reusable(
+    ceco: str, fecha_despido, dias_tolerancia: int = 90, ruta: Path = RUTA_REGISTRO_CECO
+) -> dict | None:
+    """Busca si ya existe un EERR recibido para el mismo CECO con un despido a
+    menos de `dias_tolerancia` días del `fecha_despido` dado (regla del
+    usuario: 3 meses ~ 90 días). Si hay más de uno dentro de tolerancia,
+    devuelve el más cercano en fecha.
+
+    Devuelve la entrada reusable o None.
+    """
+    if not ceco:
+        return None
+    registro = cargar_registro_ceco(ruta)
+    ceco_norm = str(ceco).strip().upper()
+    entradas = registro.get(ceco_norm, [])
+    if not entradas:
+        return None
+
+    objetivo = _parsear_fecha(fecha_despido)
+    candidatas = [
+        (e, _dias_entre(objetivo, _parsear_fecha(e["fecha_despido"])))
+        for e in entradas
+    ]
+    candidatas = [(e, dist) for e, dist in candidatas if dist <= dias_tolerancia]
+    if not candidatas:
+        return None
+    candidatas.sort(key=lambda par: par[1])
+    return candidatas[0][0]
