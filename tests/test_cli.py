@@ -22,7 +22,7 @@ class TestParser:
             "buscar-eerr-reusable", "registrar-eerr", "copiar-archivo",
             "listar-carpeta", "causas-activas", "dias-habiles-antes",
             "dias-corridos-antes", "obtener-causa", "parece-eerr",
-            "buscar-audiencia-por-rit",
+            "buscar-audiencia-por-rit", "diagnostico-calendario",
         }
         assert esperados.issubset(set(accion_sub.choices.keys()))
 

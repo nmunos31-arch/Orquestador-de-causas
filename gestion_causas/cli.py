@@ -32,6 +32,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from . import agenda as agenda_mod
 from . import bitacora as bitacora_mod
+from . import calendar_client
 from . import carpetas as carpetas_mod
 from . import gmail_client
 from . import ics as ics_mod
@@ -243,8 +244,24 @@ def cmd_dias_corridos_antes(args) -> int:
     return 0
 
 
+def cmd_diagnostico_calendario(args) -> int:
+    resultado = calendar_client.diagnostico()
+    _imprimir_json(resultado)
+    if resultado["email"] != "nmunoz@gomezyriesco.cl":
+        print(
+            f"ADVERTENCIA: la cuenta autenticada es '{resultado['email']}', "
+            "no 'nmunoz@gomezyriesco.cl'. Deten la tarea y revisa el token.",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
 def cmd_buscar_audiencia_por_rit(args) -> int:
-    eventos = ics_mod.buscar_audiencia_por_rit(args.ics, args.rit)
+    if args.ics:
+        eventos = ics_mod.buscar_audiencia_por_rit(args.ics, args.rit)
+    else:
+        eventos = calendar_client.buscar_audiencia_por_rit(args.rit, dias_adelante=args.dias_adelante)
     _imprimir_json({"rit": args.rit, "eventos": eventos, "total": len(eventos)})
     return 0
 
@@ -357,9 +374,16 @@ def construir_parser() -> argparse.ArgumentParser:
     p.add_argument("--n", type=int, required=True)
     p.set_defaults(func=cmd_dias_corridos_antes)
 
-    p = sub.add_parser("buscar-audiencia-por-rit", help="Fase 4: busca en un .ics exportado los eventos que mencionan este RIT")
-    p.add_argument("--ics", required=True, help="Ruta al archivo .ics exportado del calendario")
+    p = sub.add_parser("diagnostico-calendario", help="Verifica qué cuenta tiene el token de Calendar guardado")
+    p.set_defaults(func=cmd_diagnostico_calendario)
+
+    p = sub.add_parser(
+        "buscar-audiencia-por-rit",
+        help="Fase 4: busca eventos que mencionan este RIT en el calendario de nmunoz@gomezyriesco.cl (API directa; --ics fuerza el modo antiguo por archivo exportado)",
+    )
     p.add_argument("--rit", required=True)
+    p.add_argument("--dias-adelante", type=int, default=200, help="Ventana de búsqueda hacia adelante desde hoy (API)")
+    p.add_argument("--ics", default=None, help="Ruta a un .ics exportado a mano; si se indica, se usa en vez de la API")
     p.set_defaults(func=cmd_buscar_audiencia_por_rit)
 
     return parser
