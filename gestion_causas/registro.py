@@ -36,6 +36,23 @@ def normalizar_rit(valor) -> str:
     return texto
 
 
+_PATRON_RIT = re.compile(
+    r"([A-Za-z])[-‐‑‒–—]\s?(\d{1,6})[-‐‑‒–—]\s?(\d{4})"
+)
+
+
+def extraer_rit(texto: str) -> str | None:
+    """Busca un RIT (ej. "M-643-2026") dentro de un texto libre (título de
+    evento de calendario, asunto de correo) y lo devuelve normalizado, o
+    None si no encuentra ninguno. Usado por el barrido de calendario
+    (Fase 0) para identificar causas a partir del resumen del evento."""
+    coincidencia = _PATRON_RIT.search(texto)
+    if not coincidencia:
+        return None
+    letra, numero, anio = coincidencia.groups()
+    return f"{letra.upper()}-{numero}-{anio}"
+
+
 def _cargar(ruta: Path) -> dict:
     if not ruta.exists():
         return {}

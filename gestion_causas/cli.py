@@ -24,6 +24,7 @@ USO (ver también SKILL.md de la tarea "gestion-causas-smu"):
 import argparse
 import json
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -257,6 +258,15 @@ def cmd_diagnostico_calendario(args) -> int:
     return 0
 
 
+def cmd_eventos_calendario(args) -> int:
+    hoy = date.today()
+    desde = hoy - timedelta(days=args.dias_atras)
+    hasta = hoy + timedelta(days=args.dias_adelante)
+    eventos = calendar_client.eventos_empresas_interes(desde, hasta)
+    _imprimir_json({"eventos": eventos, "total": len(eventos)})
+    return 0
+
+
 def cmd_buscar_audiencia_por_rit(args) -> int:
     if args.ics:
         eventos = ics_mod.buscar_audiencia_por_rit(args.ics, args.rit)
@@ -376,6 +386,14 @@ def construir_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("diagnostico-calendario", help="Verifica qué cuenta tiene el token de Calendar guardado")
     p.set_defaults(func=cmd_diagnostico_calendario)
+
+    p = sub.add_parser(
+        "eventos-calendario",
+        help="Fase 0: eventos del calendario que mencionan alguna de las 6 empresas de interés, con RIT detectado si aparece en el título",
+    )
+    p.add_argument("--dias-atras", type=int, default=0)
+    p.add_argument("--dias-adelante", type=int, default=60)
+    p.set_defaults(func=cmd_eventos_calendario)
 
     p = sub.add_parser(
         "buscar-audiencia-por-rit",

@@ -104,3 +104,49 @@ class TestBuscarAudienciaPorRit:
         encontrados = calendar_client.buscar_audiencia_por_rit("M-643-2026", servicio=servicio)
         assert len(encontrados) == 1
         assert encontrados[0]["fecha"] == date(2026, 8, 21)
+
+
+class TestDetectarEmpresa:
+    def test_reconoce_cada_empresa_por_alias(self):
+        assert calendar_client.detectar_empresa("Audiencia Rendic Hermanos") == "Rendic Hermanos"
+        assert calendar_client.detectar_empresa('Audiencia única "Rebolledo con Salcobrand" M-637-2026') == "Salcobrand"
+        assert calendar_client.detectar_empresa("causa contra Súper 10 S.A.") == "Super 10"
+
+    def test_ignora_mayusculas_y_tildes(self):
+        assert calendar_client.detectar_empresa("AUDIENCIA UNICA SALCOBRAND") == "Salcobrand"
+
+    def test_devuelve_none_si_no_reconoce_ninguna(self):
+        assert calendar_client.detectar_empresa("Reunión equipo semanal") is None
+
+
+class TestEventosEmpresasInteres:
+    def test_filtra_y_agrega_empresa_y_rit_detectados(self):
+        servicio = _ServicioCalendarFalso([
+            {"items": [
+                _evento('Audiencia única "Rebolledo con Salcobrand" M-637-2026', fecha="2026-08-24"),
+                _evento("Reunion equipo semanal", fecha="2026-08-25"),
+            ]},
+        ])
+        eventos = calendar_client.eventos_empresas_interes(date(2026, 8, 1), date(2026, 8, 31), servicio=servicio)
+        assert len(eventos) == 1
+        assert eventos[0]["empresa_detectada"] == "Salcobrand"
+        assert eventos[0]["rit_detectado"] == "M-637-2026"
+
+    def test_rit_detectado_es_none_si_el_titulo_no_trae_rit(self):
+        servicio = _ServicioCalendarFalso([
+            {"items": [_evento("Audiencia Alvi sin RIT en el título", fecha="2026-08-24")]},
+        ])
+        eventos = calendar_client.eventos_empresas_interes(date(2026, 8, 1), date(2026, 8, 31), servicio=servicio)
+        assert eventos[0]["empresa_detectada"] == "Alvi"
+        assert eventos[0]["rit_detectado"] is None
+
+    def test_excluye_causas_con_rit_i_de_inspeccion_del_trabajo(self):
+        servicio = _ServicioCalendarFalso([
+            {"items": [
+                _evento('Audiencia única "Salcobrand S.A. con IPT Curico" I-38-2026', fecha="2026-09-15"),
+                _evento('Audiencia única "Rebolledo con Salcobrand" M-637-2026', fecha="2026-08-24"),
+            ]},
+        ])
+        eventos = calendar_client.eventos_empresas_interes(date(2026, 8, 1), date(2026, 9, 30), servicio=servicio)
+        assert len(eventos) == 1
+        assert eventos[0]["rit_detectado"] == "M-637-2026"

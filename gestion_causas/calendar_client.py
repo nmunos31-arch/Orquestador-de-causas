@@ -20,10 +20,44 @@ proyecto: la automatización solo lee el calendario, nunca lo toca.
 """
 
 import sys
+import unicodedata
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .ics import buscar_eventos_por_rit
+from .registro import extraer_rit
+
+# Alias por los que se reconoce a cada empresa en el texto de un evento de
+# calendario (títulos como "Audiencia Unica RIT M-643-2026 Iturriaga con
+# Rendic" o "Audiencia única "Rebolledo con Salcobrand" M-637-2026"). Usado
+# por el barrido de calendario (Fase 0) para detectar causas de las 6
+# empresas de interés que no llegaron a registrarse por correo (ver
+# gmail_client.COLOR_POR_EMPRESA para los nombres canónicos).
+EMPRESAS_ALIAS = {
+    "Rendic Hermanos": ["rendic"],
+    "Alvi": ["alvi"],
+    "Super 10": ["super 10"],
+    "Servicios Logísticos Santiago": ["servicios logisticos santiago", "ssll"],
+    "Preunic": ["preunic"],
+    "Salcobrand": ["salcobrand"],
+}
+
+
+def _normalizar_texto(valor: str) -> str:
+    """Minúsculas y sin tildes, para comparar alias sin depender de acentos
+    ("única" vs "unica", "Súper" vs "Super")."""
+    sin_tildes = unicodedata.normalize("NFKD", valor).encode("ascii", "ignore").decode("ascii")
+    return sin_tildes.lower()
+
+
+def detectar_empresa(texto: str) -> str | None:
+    """Devuelve el nombre canónico de la empresa (una de las 6) si `texto`
+    menciona alguno de sus alias, o None si no reconoce ninguna."""
+    normalizado = _normalizar_texto(texto)
+    for empresa, alias in EMPRESAS_ALIAS.items():
+        if any(_normalizar_texto(a) in normalizado for a in alias):
+            return empresa
+    return None
 
 CLIENT_SECRET_PATH = str(
     Path(__file__).parent.parent.parent / "Automatizacion Informe Semanal" / "client_secret.json"
@@ -128,6 +162,33 @@ def listar_eventos(desde: date, hasta: date, servicio=None) -> list[dict]:
             break
 
     return eventos
+
+
+def eventos_empresas_interes(desde: date, hasta: date, servicio=None) -> list[dict]:
+    """Fase 0 (barrido de calendario): eventos entre `desde` y `hasta` cuyo
+    resumen menciona alguna de las 6 empresas de interés, cada uno con
+    "empresa_detectada" agregado y "rit_detectado" (o None si el resumen no
+    trae un RIT reconocible — ver registro.extraer_rit). Existe para
+    encontrar causas con audiencia fijada que nunca se registraron por
+    correo (ej. correspondencia anterior a la automatización, o fuera de la
+    ventana de backlog de gestion-causas-smu)."""
+    eventos = listar_eventos(desde, hasta, servicio=servicio)
+    resultado = []
+    for evento in eventos:
+        empresa = detectar_empresa(evento["resumen"])
+        if empresa is None:
+            continue
+        rit = extraer_rit(evento["resumen"])
+        if rit is not None and rit.startswith("I-"):
+            # RIT "I-" es de Inspección del Trabajo (trámite administrativo), no
+            # una causa judicial laboral — fuera del alcance de este proceso.
+            continue
+        resultado.append({
+            **evento,
+            "empresa_detectada": empresa,
+            "rit_detectado": rit,
+        })
+    return resultado
 
 
 def buscar_audiencia_por_rit(rit: str, dias_adelante: int = 200, servicio=None) -> list[dict]:

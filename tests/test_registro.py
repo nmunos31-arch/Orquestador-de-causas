@@ -6,6 +6,7 @@ from gestion_causas.registro import (
     buscar_eerr_reusable,
     causa_ya_registrada,
     causas_para_goteo,
+    extraer_rit,
     normalizar_rit,
     obtener_causa,
     registrar_causa,
@@ -19,6 +20,20 @@ class TestNormalizarRit:
 
     def test_ignora_mayusculas(self):
         assert normalizar_rit("o-348-2026") == normalizar_rit("O-348-2026")
+
+
+class TestExtraerRit:
+    def test_encuentra_rit_en_texto_libre(self):
+        assert extraer_rit('Audiencia única "Rebolledo con Salcobrand" M-637-2026') == "M-637-2026"
+
+    def test_encuentra_rit_con_guion_no_separable(self):
+        assert extraer_rit("Audiencia Unica RIT M‑643‑2026 Iturriaga con Rendic") == "M-643-2026"
+
+    def test_devuelve_none_si_no_hay_rit(self):
+        assert extraer_rit("Reunión equipo semanal") is None
+
+    def test_normaliza_letra_a_mayuscula(self):
+        assert extraer_rit("causa m-637-2026") == "M-637-2026"
 
 
 class TestRegistrarCausa:
