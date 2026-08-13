@@ -149,3 +149,19 @@ class TestBuscarBorradorPorAsunto:
         })
         encontrados = gmail_client.buscar_borrador_por_asunto("Rit O-999-2026", servicio=servicio)
         assert encontrados == []
+
+
+class TestEmpresasSinExcel:
+    def test_preunic_y_salcobrand_no_van_al_excel(self):
+        assert gmail_client.EMPRESAS_SIN_EXCEL == {"Preunic", "Salcobrand"}
+
+    def test_las_4_empresas_smu_no_estan_en_sin_excel(self):
+        empresas_smu = {"Rendic Hermanos", "Alvi", "Super 10", "Servicios Logísticos Santiago"}
+        assert empresas_smu.isdisjoint(gmail_client.EMPRESAS_SIN_EXCEL)
+
+    def test_las_6_empresas_tienen_color_configurado(self):
+        esperadas = {
+            "Rendic Hermanos", "Alvi", "Super 10", "Servicios Logísticos Santiago",
+            "Preunic", "Salcobrand",
+        }
+        assert esperadas == set(gmail_client.COLOR_POR_EMPRESA)

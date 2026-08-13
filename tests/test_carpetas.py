@@ -29,6 +29,12 @@ class TestAbreviarEmpresa:
     def test_empresa_desconocida_se_devuelve_tal_cual(self):
         assert abreviar_empresa("Otra Empresa SPA") == "Otra Empresa SPA"
 
+    def test_preunic(self):
+        assert abreviar_empresa("Preunic S.A") == "Preunic"
+
+    def test_salcobrand(self):
+        assert abreviar_empresa("Salcobrand") == "Salcobrand"
+
 
 class TestSanearNombreWindows:
     def test_quita_caracteres_ilegales(self):

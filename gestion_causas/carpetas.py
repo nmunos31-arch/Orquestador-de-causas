@@ -26,6 +26,10 @@ _ABREVIATURA_EMPRESA = {
     "servicios logisticos santiago": "SSLL",
     "servicios logisticos santiago s.a": "SSLL",
     "ssll": "SSLL",
+    "preunic": "Preunic",
+    "preunic s.a": "Preunic",
+    "salcobrand": "Salcobrand",
+    "salcobrand s.a": "Salcobrand",
 }
 
 _CARACTERES_ILEGALES_WINDOWS = re.compile(r'[\\/:*?"<>|]')

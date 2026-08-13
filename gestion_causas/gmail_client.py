@@ -53,13 +53,24 @@ SCOPES = [
 
 # Paleta cerrada de colores que acepta la API de Gmail para etiquetas
 # (Gmail rechaza cualquier hex fuera de esta lista). Colores acordados con
-# el usuario para cada empresa.
+# el usuario para cada empresa. Solo se usan si la etiqueta no existe
+# todavía (obtener_o_crear_etiqueta reusa la existente e ignora el color si
+# ya existe) — "Preunic" y "Salcobrand" ya existían en la casilla antes de
+# esta automatización, así que estos colores son solo por si algún día hay
+# que recrearlas; en la práctica siempre se reusan las que Nico ya tenía.
 COLOR_POR_EMPRESA = {
     "Rendic Hermanos": {"backgroundColor": "#fb4c2f", "textColor": "#ffffff"},  # rojo
     "Alvi": {"backgroundColor": "#4a86e8", "textColor": "#ffffff"},  # azul
     "Super 10": {"backgroundColor": "#fad165", "textColor": "#000000"},  # amarillo
     "Servicios Logísticos Santiago": {"backgroundColor": "#16a766", "textColor": "#ffffff"},  # verde
+    "Preunic": {"backgroundColor": "#ffad46", "textColor": "#633e04"},  # naranja (ya existía)
+    "Salcobrand": {"backgroundColor": "#1e53b8", "textColor": "#ffffff"},  # azul oscuro (ya existía)
 }
+
+# Empresas cuyas causas NO se registran en el Informe de Juicios Vigentes
+# (ese Excel es solo para las causas de SMU: Rendic/Alvi/Super 10/SSLL).
+# Preunic y Salcobrand pasan por las 4 fases igual, pero sin escribir fila.
+EMPRESAS_SIN_EXCEL = {"Preunic", "Salcobrand"}
 
 ETIQUETA_PROCESADO = "Procesado-GestionCausas"
 
