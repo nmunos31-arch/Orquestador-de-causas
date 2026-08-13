@@ -34,6 +34,7 @@ from . import agenda as agenda_mod
 from . import bitacora as bitacora_mod
 from . import carpetas as carpetas_mod
 from . import gmail_client
+from . import ics as ics_mod
 from . import registro as registro_mod
 
 
@@ -242,6 +243,12 @@ def cmd_dias_corridos_antes(args) -> int:
     return 0
 
 
+def cmd_buscar_audiencia_por_rit(args) -> int:
+    eventos = ics_mod.buscar_audiencia_por_rit(args.ics, args.rit)
+    _imprimir_json({"rit": args.rit, "eventos": eventos, "total": len(eventos)})
+    return 0
+
+
 def construir_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
@@ -349,6 +356,11 @@ def construir_parser() -> argparse.ArgumentParser:
     p.add_argument("--fecha", required=True, help="AAAA-MM-DD")
     p.add_argument("--n", type=int, required=True)
     p.set_defaults(func=cmd_dias_corridos_antes)
+
+    p = sub.add_parser("buscar-audiencia-por-rit", help="Fase 4: busca en un .ics exportado los eventos que mencionan este RIT")
+    p.add_argument("--ics", required=True, help="Ruta al archivo .ics exportado del calendario")
+    p.add_argument("--rit", required=True)
+    p.set_defaults(func=cmd_buscar_audiencia_por_rit)
 
     return parser
 
