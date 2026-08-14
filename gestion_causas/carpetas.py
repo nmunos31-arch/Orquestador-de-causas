@@ -147,7 +147,15 @@ def guardar_adjunto(carpeta: Path, nombre_archivo: str, contenido: bytes) -> dic
     un archivo que ya exista con ese nombre (se asume que si el nombre ya
     está, el documento ya fue guardado en una corrida anterior).
 
-    Devuelve {"ruta": Path, "guardado": bool} — guardado=False si ya existía.
+    También evita duplicados cuando el nombre cambió pero el contenido es el
+    mismo (ej. la demanda se guarda como "demanda.pdf" en Fase 1/0, pero su
+    nombre original puede volver a aparecer como adjunto de ese mismo correo
+    en una corrida de goteo posterior — coincide en tamaño de bytes aunque no
+    en nombre): si ya existe un archivo de exactamente el mismo tamaño en la
+    carpeta, se asume que es el mismo documento y no se guarda de nuevo.
+
+    Devuelve {"ruta": Path, "guardado": bool} — guardado=False si ya existía
+    (por nombre o por tamaño coincidente).
     """
     carpeta.mkdir(parents=True, exist_ok=True)
     nombre_saneado = sanear_nombre_windows(nombre_archivo)
@@ -155,6 +163,11 @@ def guardar_adjunto(carpeta: Path, nombre_archivo: str, contenido: bytes) -> dic
 
     if destino.exists():
         return {"ruta": destino, "guardado": False}
+
+    tamano_nuevo = len(contenido)
+    for existente in carpeta.iterdir():
+        if existente.is_file() and existente.stat().st_size == tamano_nuevo:
+            return {"ruta": existente, "guardado": False}
 
     destino.write_bytes(contenido)
     return {"ruta": destino, "guardado": True}

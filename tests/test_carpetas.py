@@ -145,6 +145,28 @@ class TestGuardarAdjunto:
         resultado = guardar_adjunto(tmp_path, 'demanda: "final".pdf', b"x")
         assert resultado["ruta"].name == "demanda final.pdf"
 
+    def test_no_duplica_si_mismo_tamano_con_otro_nombre(self, tmp_path):
+        # Caso real: la demanda se guarda como "demanda.pdf" en Fase 1/0, pero
+        # su nombre original (ej. "Epsongsotoc_...pdf") puede volver a
+        # aparecer en una corrida de goteo posterior sobre el mismo correo —
+        # incluso si el dominio del remitente es de confianza para el goteo.
+        primero = guardar_adjunto(tmp_path, "demanda.pdf", b"contenido-identico")
+        assert primero["guardado"] is True
+
+        segundo = guardar_adjunto(tmp_path, "Epsongsotoc_20260514_112009.pdf", b"contenido-identico")
+        assert segundo["guardado"] is False
+        assert segundo["ruta"].name == "demanda.pdf"  # apunta al archivo ya guardado, no crea uno nuevo
+        assert not (tmp_path / "Epsongsotoc_20260514_112009.pdf").exists()
+
+    def test_guarda_si_mismo_nombre_pero_contenido_distinto_es_manejado_por_nombre(self, tmp_path):
+        # El chequeo por nombre sigue teniendo prioridad (ver test_no_pisa_archivo_existente);
+        # este test cubre que dos archivos genuinamente distintos con tamaños
+        # distintos no se confunden entre sí.
+        guardar_adjunto(tmp_path, "contrato.pdf", b"contenido-corto")
+        resultado = guardar_adjunto(tmp_path, "finiquito.pdf", b"contenido-mucho-mas-largo-que-el-otro")
+        assert resultado["guardado"] is True
+        assert resultado["ruta"].name == "finiquito.pdf"
+
 
 class TestCopiarArchivoLocal:
     def test_copia_archivo_nuevo(self, tmp_path):
