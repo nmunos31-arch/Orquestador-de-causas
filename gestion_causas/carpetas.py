@@ -36,7 +36,7 @@ _CARACTERES_ILEGALES_WINDOWS = re.compile(r'[\\/:*?"<>|]')
 
 # Extensiones de imagen que, combinadas con un tamaño chico, se tratan como
 # adjuntos de firma/logo del correo y no como prueba documental.
-_EXTENSIONES_IMAGEN_FIRMA = {".png", ".jpg", ".jpeg", ".gif", ".bmp"}
+_EXTENSIONES_IMAGEN_FIRMA = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".tif"}
 _TAMANO_MAXIMO_FIRMA_BYTES = 100 * 1024  # 100 KB
 
 

@@ -63,3 +63,27 @@ def dias_corridos_antes(fecha_objetivo, n: int) -> date:
     `fecha_objetivo`. Usado para el hito de "14 días corridos antes de la
     audiencia" del borrador de ofrecimiento."""
     return _parsear_fecha(fecha_objetivo) - timedelta(days=n)
+
+
+def dias_habiles_entre(desde, hasta, ruta_feriados: Path = RUTA_FERIADOS_DEFAULT) -> int:
+    """Cuenta los días hábiles estrictamente entre `desde` y `hasta` (sin
+    incluir `desde`, incluyendo `hasta` si es hábil) — es decir, cuántos días
+    hábiles han transcurrido desde `desde` hasta `hasta`. Si `hasta` es
+    anterior o igual a `desde`, devuelve 0.
+
+    Ej.: dias_habiles_entre("2026-07-28", "2026-08-03") == 4 (caso real de la
+    causa Yáñez con SSLL, O-348-2026: Nico pidió documentos un martes y no
+    tuvo respuesta; insistió el lunes siguiente, exactamente 4 días hábiles
+    después)."""
+    feriados = cargar_feriados(ruta_feriados)
+    fecha_desde = _parsear_fecha(desde)
+    fecha_hasta = _parsear_fecha(hasta)
+    if fecha_hasta <= fecha_desde:
+        return 0
+    dias = 0
+    fecha = fecha_desde
+    while fecha < fecha_hasta:
+        fecha += timedelta(days=1)
+        if es_dia_habil(fecha, feriados):
+            dias += 1
+    return dias

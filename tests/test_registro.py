@@ -5,13 +5,25 @@ import pytest
 from gestion_causas.registro import (
     buscar_eerr_reusable,
     causa_ya_registrada,
+    causas_con_borrador_pendiente,
     causas_para_goteo,
     extraer_rit,
     normalizar_rit,
     obtener_causa,
+    obtener_seguimiento,
+    puede_insistir,
+    registrar_aviso,
     registrar_causa,
     registrar_eerr_recibido,
 )
+
+
+def _feriados_sin_feriados(tmp_path):
+    import json
+
+    ruta = tmp_path / "feriados.json"
+    ruta.write_text(json.dumps({"2026": []}), encoding="utf-8")
+    return ruta
 
 
 class TestNormalizarRit:
@@ -71,6 +83,30 @@ class TestRegistrarCausa:
     def test_causa_inexistente_devuelve_none(self, tmp_path):
         ruta = tmp_path / "registro_causas.json"
         assert obtener_causa("M-9999-2026", ruta) is None
+
+
+class TestCausasConBorradorPendiente:
+    def test_incluye_causa_con_draft_id_seteado(self, tmp_path):
+        ruta = tmp_path / "registro_causas.json"
+        registrar_causa("M-1-2026", {"empresa": "Alvi", "borrador_documentos_draft_id": "d1"}, ruta)
+
+        pendientes = causas_con_borrador_pendiente(ruta)
+
+        assert len(pendientes) == 1
+        assert pendientes[0]["rit"] == "M-1-2026"
+
+    def test_excluye_causa_sin_draft_id(self, tmp_path):
+        ruta = tmp_path / "registro_causas.json"
+        registrar_causa("M-2-2026", {"empresa": "Alvi"}, ruta)
+
+        assert causas_con_borrador_pendiente(ruta) == []
+
+    def test_excluye_causa_con_draft_id_limpiado_a_none(self, tmp_path):
+        ruta = tmp_path / "registro_causas.json"
+        registrar_causa("M-3-2026", {"empresa": "Alvi", "borrador_documentos_draft_id": "d1"}, ruta)
+        registrar_causa("M-3-2026", {"borrador_documentos_draft_id": None}, ruta)
+
+        assert causas_con_borrador_pendiente(ruta) == []
 
 
 class TestReusoEerr:
@@ -138,3 +174,69 @@ class TestCausasParaGoteo:
 
         activas = causas_para_goteo(hoy=date(2026, 8, 12), dias_ventana_post_audiencia=60, ruta=ruta)
         assert len(activas) == 0
+
+    def test_excluye_causa_cerrada_aunque_no_tenga_fecha_audiencia(self, tmp_path):
+        ruta = tmp_path / "registro_causas.json"
+        registrar_causa("M-1-2026", {"causa_cerrada": True}, ruta)
+
+        activas = causas_para_goteo(hoy=date(2026, 8, 12), ruta=ruta)
+        assert len(activas) == 0
+
+
+class TestRegistrarAviso:
+    def test_primer_aviso_crea_entrada_con_un_aviso(self, tmp_path):
+        ruta = tmp_path / "registro_seguimiento.json"
+        entrada = registrar_aviso("t1", "acuerdo-daniela", "2026-08-19", rit="O-348-2026", draft_id="d1", ruta=ruta)
+
+        assert entrada["tipo"] == "acuerdo-daniela"
+        assert entrada["rit"] == "O-348-2026"
+        assert len(entrada["avisos"]) == 1
+        assert entrada["avisos"][0] == {"n": 1, "fecha": "2026-08-19", "draft_id": "d1"}
+
+    def test_segundo_aviso_se_acumula_sin_perder_el_primero(self, tmp_path):
+        ruta = tmp_path / "registro_seguimiento.json"
+        registrar_aviso("t1", "documentos", "2026-08-19", ruta=ruta)
+        entrada = registrar_aviso("t1", "documentos", "2026-08-21", draft_id="d2", ruta=ruta)
+
+        assert len(entrada["avisos"]) == 2
+        assert entrada["avisos"][1] == {"n": 2, "fecha": "2026-08-21", "draft_id": "d2"}
+
+    def test_obtener_seguimiento_de_hilo_inexistente_es_none(self, tmp_path):
+        ruta = tmp_path / "registro_seguimiento.json"
+        assert obtener_seguimiento("no-existe", ruta) is None
+
+
+class TestPuedeInsistir:
+    def test_sin_avisos_previos_siempre_puede(self, tmp_path):
+        ruta = tmp_path / "registro_seguimiento.json"
+        resultado = puede_insistir("t1", hoy=date(2026, 8, 19), ruta=ruta)
+        assert resultado == {"puede": True, "n_aviso": 1, "motivo": "sin avisos previos"}
+
+    def test_segundo_aviso_bloqueado_antes_de_2_dias_habiles(self, tmp_path):
+        ruta = tmp_path / "registro_seguimiento.json"
+        ruta_feriados = _feriados_sin_feriados(tmp_path)
+        registrar_aviso("t1", "documentos", "2026-08-19", ruta=ruta)  # miércoles
+
+        resultado = puede_insistir("t1", hoy=date(2026, 8, 20), ruta=ruta, ruta_feriados=ruta_feriados)
+        assert resultado["puede"] is False
+        assert resultado["n_aviso"] == 2
+
+    def test_segundo_aviso_permitido_a_los_2_dias_habiles(self, tmp_path):
+        ruta = tmp_path / "registro_seguimiento.json"
+        ruta_feriados = _feriados_sin_feriados(tmp_path)
+        registrar_aviso("t1", "documentos", "2026-08-19", ruta=ruta)  # miércoles
+
+        resultado = puede_insistir("t1", hoy=date(2026, 8, 21), ruta=ruta, ruta_feriados=ruta_feriados)  # viernes: 2 hábiles después
+        assert resultado["puede"] is True
+        assert resultado["n_aviso"] == 2
+
+    def test_tercer_aviso_nunca_procede(self, tmp_path):
+        ruta = tmp_path / "registro_seguimiento.json"
+        ruta_feriados = _feriados_sin_feriados(tmp_path)
+        registrar_aviso("t1", "documentos", "2026-08-19", ruta=ruta)
+        registrar_aviso("t1", "documentos", "2026-08-21", ruta=ruta)
+
+        resultado = puede_insistir("t1", hoy=date(2026, 9, 1), ruta=ruta, ruta_feriados=ruta_feriados)
+        assert resultado["puede"] is False
+        assert resultado["n_aviso"] == 3
+        assert "gestion manual" in resultado["motivo"]

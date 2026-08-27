@@ -2,9 +2,10 @@
 que los subcomandos que no requieren red (dry-run, bitácora, carpetas,
 registro) funcionen de punta a punta."""
 
+import html
 import json
 
-from gestion_causas.cli import construir_parser, main
+from gestion_causas.cli import _cuerpo_con_lista, _texto_a_lista_html, _texto_plano_a_html, construir_parser, main
 
 
 class TestParser:
@@ -23,6 +24,8 @@ class TestParser:
             "listar-carpeta", "causas-activas", "dias-habiles-antes",
             "dias-corridos-antes", "obtener-causa", "parece-eerr",
             "buscar-audiencia-por-rit", "diagnostico-calendario", "eventos-calendario",
+            "verificar-borradores-pendientes",
+            "hilos-sin-respuesta", "puede-insistir", "registrar-aviso", "dias-habiles-entre",
         }
         assert esperados.issubset(set(accion_sub.choices.keys()))
 
@@ -56,3 +59,120 @@ class TestSubcomandosSinRed:
 
         with pytest.raises(SystemExit):
             main(["no-existe"])
+
+    def test_crear_borrador_dry_run_acepta_flag_lista(self, capsys):
+        codigo = main([
+            "--dry-run", "crear-borrador",
+            "--destinatario", "prueba@sb.cl", "--asunto", "Re: prueba",
+            "--cuerpo-archivo", "no-se-lee-en-dry-run.txt", "--lista",
+        ])
+        assert codigo == 0
+        salida = json.loads(capsys.readouterr().out)
+        assert salida["simulado"] is True
+
+    def test_crear_borrador_dry_run_acepta_cc_y_lista_archivo(self, capsys):
+        codigo = main([
+            "--dry-run", "crear-borrador",
+            "--destinatario", "prueba@sb.cl", "--asunto", "Re: prueba",
+            "--cuerpo-archivo", "no-se-lee-en-dry-run.txt",
+            "--cc", "otro@sb.cl", "--lista-archivo", "no-se-lee.txt",
+        ])
+        assert codigo == 0
+        salida = json.loads(capsys.readouterr().out)
+        assert salida["simulado"] is True
+        assert salida["cc"] == "otro@sb.cl"
+
+    def test_registrar_aviso_dry_run_no_escribe_en_disco(self, capsys):
+        codigo = main(["--dry-run", "registrar-aviso", "--thread-id", "t1", "--tipo", "documentos"])
+        assert codigo == 0
+        salida = json.loads(capsys.readouterr().out)
+        assert salida["simulado"] is True
+
+    def test_dias_habiles_entre(self, capsys):
+        # Caso real O-348-2026: 4 días hábiles entre el pedido y la insistencia.
+        codigo = main(["dias-habiles-entre", "--desde", "2026-07-28", "--hasta", "2026-08-03"])
+        assert codigo == 0
+        salida = json.loads(capsys.readouterr().out)
+        assert salida["dias_habiles"] == 4
+
+    def test_puede_insistir_sin_avisos_previos(self, capsys):
+        # thread_id inventado y único: no puede tener avisos previos en el
+        # registro real (operación de solo lectura, no escribe nada).
+        codigo = main(["puede-insistir", "--thread-id", "t-test-cli-inexistente-xyz", "--hoy", "2026-08-19"])
+        assert codigo == 0
+        salida = json.loads(capsys.readouterr().out)
+        assert salida["puede"] is True
+        assert salida["n_aviso"] == 1
+
+
+class TestTextoAListaHtml:
+    def test_quita_numeracion_manual_y_arma_ol(self):
+        texto = "1. Contrato de trabajo\n2. Finiquito\n3. Testigos\n"
+        assert _texto_a_lista_html(texto) == (
+            "<ol><li>Contrato de trabajo</li><li>Finiquito</li><li>Testigos</li></ol>"
+        )
+
+    def test_funciona_sin_numeracion_previa(self):
+        texto = "Contrato de trabajo\nFiniquito"
+        assert _texto_a_lista_html(texto) == "<ol><li>Contrato de trabajo</li><li>Finiquito</li></ol>"
+
+    def test_ignora_lineas_vacias(self):
+        texto = "1. Contrato\n\n2. Finiquito\n\n"
+        assert _texto_a_lista_html(texto) == "<ol><li>Contrato</li><li>Finiquito</li></ol>"
+
+    def test_escapa_html_para_evitar_inyeccion(self):
+        texto = "1. Antecedentes de <script>alert(1)</script> & otros"
+        assert "<script>" not in _texto_a_lista_html(texto)
+        assert "&amp;" in _texto_a_lista_html(texto)
+
+
+class TestTextoPlanoAHtml:
+    def test_preserva_una_linea_larga_sin_partirla(self):
+        """Regresión: Gmail reflowea texto plano largo que llega crudo por la
+        API drafts().create() (confirmado en la práctica, agosto 2026) — al
+        mandarlo como HTML con <br> explícitos, ese reflow del lado del
+        servidor ya no puede alterar la estructura de párrafos."""
+        linea = "Si ves este mensaje junto con el mensaje 1 en la misma conversacion, el encadenado funciona."
+        assert _texto_plano_a_html(linea) == html.escape(linea)
+
+    def test_convierte_saltos_de_linea_reales_en_br(self):
+        texto = "Estimada Daniela:\n\nJunto con saludar, ruego tener presente el correo anterior.\n\nAtentamente,"
+        resultado = _texto_plano_a_html(texto)
+        assert resultado == (
+            "Estimada Daniela:<br><br>"
+            "Junto con saludar, ruego tener presente el correo anterior.<br><br>"
+            "Atentamente,"
+        )
+
+    def test_escapa_html(self):
+        texto = "Antecedentes de <script>alert(1)</script> & otros"
+        resultado = _texto_plano_a_html(texto)
+        assert "<script>" not in resultado
+        assert "&amp;" in resultado
+
+
+class TestCuerpoConLista:
+    def test_reemplaza_marcador_por_lista_conservando_saludo_y_despedida(self):
+        cuerpo = "Estimada Daniela:\n\nJunto con saludar, ruego tener presente lo siguiente:\n\n[[LISTA]]\n\nAtentamente,"
+        resultado = _cuerpo_con_lista(cuerpo, "Contrato de trabajo\nFiniquito")
+        assert resultado.startswith("Estimada Daniela:")
+        assert "<ol><li>Contrato de trabajo</li><li>Finiquito</li></ol>" in resultado
+        assert resultado.endswith("Atentamente,")
+
+    def test_falla_si_no_hay_marcador(self):
+        import pytest
+
+        with pytest.raises(ValueError):
+            _cuerpo_con_lista("Sin marcador aquí", "item 1")
+
+    def test_falla_si_hay_mas_de_un_marcador(self):
+        import pytest
+
+        with pytest.raises(ValueError):
+            _cuerpo_con_lista("[[LISTA]] y otra vez [[LISTA]]", "item 1")
+
+    def test_escapa_html_del_texto_alrededor_de_la_lista(self):
+        cuerpo = "Hola & <b>:\n\n[[LISTA]]\n\nFin"
+        resultado = _cuerpo_con_lista(cuerpo, "item")
+        assert "&amp;" in resultado
+        assert "<b>" not in resultado.split("<ol>")[0]

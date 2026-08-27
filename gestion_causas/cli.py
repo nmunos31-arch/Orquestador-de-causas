@@ -22,8 +22,11 @@ USO (ver también SKILL.md de la tarea "gestion-causas-smu"):
 """
 
 import argparse
+import html
 import json
+import re
 import sys
+import datetime
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -38,6 +41,7 @@ from . import carpetas as carpetas_mod
 from . import gmail_client
 from . import ics as ics_mod
 from . import registro as registro_mod
+from . import seguimiento as seguimiento_mod
 
 
 def _imprimir_json(datos) -> None:
@@ -73,6 +77,8 @@ def cmd_leer_hilo(args) -> int:
             "thread_id": mensaje_crudo["threadId"],
             "subject": headers.get("subject", ""),
             "sender": headers.get("from", ""),
+            "to": headers.get("to", ""),
+            "cc": headers.get("cc", ""),
             "date": headers.get("date", ""),
             "cuerpo_texto": gmail_client._extraer_texto_plano(mensaje_crudo["payload"]),
             "adjuntos": gmail_client._listar_adjuntos(mensaje_crudo["payload"]),
@@ -163,11 +169,59 @@ def cmd_bitacora(args) -> int:
     return 0
 
 
+def _texto_a_lista_html(texto: str) -> str:
+    """Convierte cada línea no vacía de `texto` en un ítem de una lista
+    <ol><li> de HTML, quitando numeración manual al inicio ("1. ", "2) ")
+    si la trae. Gmail muestra esto como una lista numerada nativa que se
+    renumera sola al insertar o quitar ítems, a diferencia de números
+    tipeados a mano en texto plano."""
+    items = []
+    for linea in texto.splitlines():
+        linea = linea.strip()
+        if not linea:
+            continue
+        linea = re.sub(r"^\d+[\.\)]\s*", "", linea)
+        items.append(f"<li>{html.escape(linea)}</li>")
+    return "<ol>" + "".join(items) + "</ol>"
+
+
+def _texto_plano_a_html(texto: str) -> str:
+    """Convierte cada salto de línea real de `texto` en un <br>, escapando
+    HTML. Se usa para TODO borrador que no trae lista: Gmail reprocesa el
+    texto plano que llega crudo por la API (drafts().create()) y reflowea
+    líneas largas insertando saltos de línea nuevos donde no había ninguno,
+    partiendo oraciones en dos párrafos sin que lo hayamos escrito así
+    (confirmado en la práctica, agosto 2026 — no pasa si se escribe el
+    correo a mano en Gmail, solo si llega por la API). Mandarlo como HTML
+    con <br> explícitos evita que ese reflow del lado del servidor cambie la
+    estructura del texto."""
+    return "<br>".join(html.escape(linea) for linea in texto.splitlines())
+
+
+def _cuerpo_con_lista(cuerpo_texto: str, items_texto: str) -> str:
+    """Reemplaza el marcador "[[LISTA]]" (en su propia línea) dentro de
+    `cuerpo_texto` por una lista HTML <ol><li> armada a partir de
+    `items_texto` (una línea por ítem). A diferencia de _texto_a_lista_html
+    (que convierte TODO el cuerpo en lista), esto sirve para el recordatorio
+    de documentos pendientes (Fase 6), que tiene saludo antes y despedida
+    después de la lista. El resto del cuerpo se escapa igual que la lista,
+    para que Gmail lo reciba como HTML consistente."""
+    partes = cuerpo_texto.split("[[LISTA]]")
+    if len(partes) != 2:
+        raise ValueError('El cuerpo debe contener exactamente un marcador "[[LISTA]]"')
+    antes, despues = partes
+    lista_html = _texto_a_lista_html(items_texto)
+    antes_html = "<br>".join(html.escape(l) for l in antes.splitlines())
+    despues_html = "<br>".join(html.escape(l) for l in despues.splitlines())
+    return antes_html + lista_html + despues_html
+
+
 def cmd_crear_borrador(args) -> int:
     if args.dry_run:
         _imprimir_json({
             "simulado": True, "accion": "crear-borrador",
             "destinatario": args.destinatario, "asunto": args.asunto, "thread_id": args.thread_id,
+            "cc": args.cc,
         })
         return 0
     if args.thread_id:
@@ -185,8 +239,149 @@ def cmd_crear_borrador(args) -> int:
             return 0
     with open(args.cuerpo_archivo, "r", encoding="utf-8") as f:
         cuerpo = f.read()
-    borrador = gmail_client.crear_borrador(args.destinatario, args.asunto, cuerpo, thread_id=args.thread_id)
+    if args.lista_archivo:
+        with open(args.lista_archivo, "r", encoding="utf-8") as f:
+            items_texto = f.read()
+        cuerpo = _cuerpo_con_lista(cuerpo, items_texto)
+    elif args.lista:
+        cuerpo = _texto_a_lista_html(cuerpo)
+    else:
+        cuerpo = _texto_plano_a_html(cuerpo)
+    borrador = gmail_client.crear_borrador(
+        args.destinatario, args.asunto, cuerpo, thread_id=args.thread_id, html=True, cc=args.cc
+    )
     _imprimir_json({"creado": True, "draft_id": borrador.get("id")})
+    return 0
+
+
+def cmd_verificar_borradores_pendientes(args) -> int:
+    """Para cada causa con un borrador de documentos registrado (campo
+    borrador_documentos_draft_id), consulta si ese borrador sigue existiendo
+    en Gmail. Los que siguen ahí son borradores que Nico todavía no revisó ni
+    envió — se devuelven en 'pendientes'. Los que ya no existen (Nico los
+    envió o los borró a mano) se limpian del registro para no volver a
+    chequearlos ('limpiados')."""
+    causas = registro_mod.causas_con_borrador_pendiente()
+    pendientes = []
+    limpiados = []
+    for causa in causas:
+        draft_id = causa["borrador_documentos_draft_id"]
+        if gmail_client.borrador_existe(draft_id):
+            pendientes.append({
+                "rit": causa.get("rit"),
+                "empresa": causa.get("empresa"),
+                "demandante": causa.get("demandante"),
+                "draft_id": draft_id,
+                "thread_id": causa.get("thread_id"),
+            })
+        else:
+            limpiados.append(causa.get("rit"))
+            if not args.dry_run:
+                registro_mod.registrar_causa(causa["rit"], {"borrador_documentos_draft_id": None})
+    _imprimir_json({"pendientes": pendientes, "limpiados": limpiados})
+    return 0
+
+
+def _mensajes_de_hilo(thread_id: str) -> list:
+    """Trae y aplana los mensajes de un hilo al mismo formato que usa
+    cmd_leer_hilo (con to/cc), para pasarlos a seguimiento.analizar_hilo."""
+    hilo = gmail_client.obtener_hilo(thread_id)
+    mensajes = []
+    for mensaje_crudo in hilo.get("messages", []):
+        headers = {h["name"].lower(): h["value"] for h in mensaje_crudo["payload"].get("headers", [])}
+        mensajes.append({
+            "id": mensaje_crudo["id"],
+            "thread_id": mensaje_crudo["threadId"],
+            "subject": headers.get("subject", ""),
+            "sender": headers.get("from", ""),
+            "to": headers.get("to", ""),
+            "cc": headers.get("cc", ""),
+            "date": headers.get("date", ""),
+            "cuerpo_texto": gmail_client._extraer_texto_plano(mensaje_crudo["payload"]),
+        })
+    return mensajes
+
+
+def cmd_hilos_sin_respuesta(args) -> int:
+    """Fase 5/6: busca hilos con `--query` cuyo último mensaje propio
+    (nmunoz@gomezyriesco.cl) sigue sin respuesta hace al menos `--horas`
+    horas. Si se entrega `--responder-esperado`, exige que esa dirección
+    puntual no haya contestado (no basta con que responda un tercero del
+    hilo). Si se entrega `--iniciado-por`, descarta los hilos cuyo primer
+    mensaje no venga de esa dirección."""
+    perfil = gmail_client.diagnostico()
+    direccion_propia = perfil["email"]
+
+    hilos = gmail_client.buscar_hilos(args.query, max_resultados=args.max_hilos)
+    ahora = datetime.datetime.now(datetime.timezone.utc)
+    resultado = []
+    for hilo in hilos:
+        mensajes = _mensajes_de_hilo(hilo["id"])
+        if not mensajes:
+            continue
+        if args.iniciado_por:
+            if seguimiento_mod.extraer_direccion(mensajes[0]["sender"]) != args.iniciado_por.strip().lower():
+                continue
+        analisis = seguimiento_mod.analizar_hilo(
+            mensajes, ahora, direccion_propia, responder_esperado=args.responder_esperado
+        )
+        if analisis["hay_respuesta_posterior"] is not False:
+            continue  # sin mensaje propio, o ya hay respuesta: no aplica
+        if analisis["horas_sin_respuesta"] < args.horas:
+            continue
+
+        ultimo_propio = analisis["ultimo_mensaje_propio"]
+        asunto = ultimo_propio["subject"]
+        asunto_normalizado = seguimiento_mod.normalizar_asunto(asunto)
+        texto_para_detectar = asunto + " " + ultimo_propio["cuerpo_texto"]
+        destinatarios = seguimiento_mod.destinatarios_de_ultimo_propio(ultimo_propio, direccion_propia)
+        fecha_ultimo_propio = seguimiento_mod.parsear_fecha(ultimo_propio["date"]).date()
+        dias_habiles_sin_respuesta = agenda_mod.dias_habiles_entre(fecha_ultimo_propio, ahora.date())
+
+        resultado.append({
+            "thread_id": hilo["id"],
+            "asunto": asunto,
+            "asunto_normalizado": asunto_normalizado,
+            "rit": registro_mod.extraer_rit(texto_para_detectar),
+            "empresa": calendar_client.detectar_empresa(texto_para_detectar),
+            "iniciado_por": analisis["iniciado_por"],
+            "horas_sin_respuesta": round(analisis["horas_sin_respuesta"], 1),
+            "dias_habiles_sin_respuesta": dias_habiles_sin_respuesta,
+            "ultimo_mensaje_propio": {
+                "id": ultimo_propio["id"],
+                "fecha": ultimo_propio["date"],
+                "extracto": ultimo_propio["cuerpo_texto"][:400],
+            },
+            "destinatarios": destinatarios,
+            "participantes": analisis["participantes"],
+        })
+    if args.dias_habiles is not None:
+        resultado = [r for r in resultado if r["dias_habiles_sin_respuesta"] >= args.dias_habiles]
+    _imprimir_json({"hilos": resultado, "total": len(resultado)})
+    return 0
+
+
+def cmd_puede_insistir(args) -> int:
+    resultado = registro_mod.puede_insistir(args.thread_id, hoy=args.hoy)
+    _imprimir_json({"thread_id": args.thread_id, **resultado})
+    return 0
+
+
+def cmd_registrar_aviso(args) -> int:
+    if args.dry_run:
+        _imprimir_json({"simulado": True, "accion": "registrar-aviso", "thread_id": args.thread_id, "tipo": args.tipo})
+        return 0
+    hoy = args.fecha or str(date.today())
+    entrada = registro_mod.registrar_aviso(
+        args.thread_id, args.tipo, hoy, rit=args.rit, draft_id=args.draft_id
+    )
+    _imprimir_json(entrada)
+    return 0
+
+
+def cmd_dias_habiles_entre(args) -> int:
+    dias = agenda_mod.dias_habiles_entre(args.desde, args.hasta)
+    _imprimir_json({"desde": args.desde, "hasta": args.hasta, "dias_habiles": dias})
     return 0
 
 
@@ -342,7 +537,56 @@ def construir_parser() -> argparse.ArgumentParser:
     p.add_argument("--asunto", required=True)
     p.add_argument("--cuerpo-archivo", required=True, help="Ruta a un .txt con el cuerpo del borrador")
     p.add_argument("--thread-id", default=None, help="Si se indica, el borrador queda como respuesta en esa cadena")
+    p.add_argument(
+        "--lista", action="store_true",
+        help="Cada línea no vacía del cuerpo se envía como un ítem de una lista numerada HTML "
+             "(<ol>), para que Gmail la renumere sola al insertar o quitar documentos",
+    )
+    p.add_argument("--cc", default=None, help="Direcciones en copia, separadas por coma")
+    p.add_argument(
+        "--lista-archivo", default=None,
+        help="Ruta a un .txt (una línea por ítem); reemplaza el marcador [[LISTA]] del "
+             "cuerpo por una lista numerada HTML, a diferencia de --lista que convierte "
+             "todo el cuerpo (usar cuando el cuerpo tiene saludo/despedida además de la lista)",
+    )
     p.set_defaults(func=cmd_crear_borrador)
+
+    p = sub.add_parser(
+        "hilos-sin-respuesta",
+        help="Fase 5/6: busca hilos cuyo último mensaje propio sigue sin respuesta hace N horas",
+    )
+    p.add_argument("--query", required=True, help="Sintaxis de búsqueda de Gmail")
+    p.add_argument("--horas", type=float, required=True)
+    p.add_argument("--dias-habiles", type=int, default=None, help="Si se indica, filtra además por días hábiles mínimos sin respuesta")
+    p.add_argument("--iniciado-por", default=None, help="Descarta hilos cuyo primer mensaje no venga de esta dirección")
+    p.add_argument("--responder-esperado", default=None, help="Exige que esta dirección puntual no haya respondido (no basta con que responda un tercero)")
+    p.add_argument("--max-hilos", type=int, default=50)
+    p.set_defaults(func=cmd_hilos_sin_respuesta)
+
+    p = sub.add_parser("puede-insistir", help="Fase 5/6: aplica la cadencia de insistencia (1er aviso siempre, 2do a los 2 dias habiles, despues nunca)")
+    p.add_argument("--thread-id", required=True)
+    p.add_argument("--hoy", default=None, help="AAAA-MM-DD, para tests; por defecto hoy")
+    p.set_defaults(func=cmd_puede_insistir)
+
+    p = sub.add_parser("registrar-aviso", help="Fase 5/6: anota que se creó un borrador de insistencia/recordatorio para este hilo")
+    p.add_argument("--thread-id", required=True)
+    p.add_argument("--tipo", required=True, choices=["acuerdo-daniela", "causa-laboral", "documentos"])
+    p.add_argument("--rit", default=None)
+    p.add_argument("--draft-id", default=None)
+    p.add_argument("--fecha", default=None, help="AAAA-MM-DD, para tests; por defecto hoy")
+    p.set_defaults(func=cmd_registrar_aviso)
+
+    p = sub.add_parser("dias-habiles-entre", help="Fase 6: cuenta los dias habiles transcurridos entre dos fechas")
+    p.add_argument("--desde", required=True, help="AAAA-MM-DD")
+    p.add_argument("--hasta", required=True, help="AAAA-MM-DD")
+    p.set_defaults(func=cmd_dias_habiles_entre)
+
+    p = sub.add_parser(
+        "verificar-borradores-pendientes",
+        help="Revisa los borradores de documentos creados en corridas anteriores (guardados en "
+             "el registro de causas) y avisa cuales siguen sin enviar",
+    )
+    p.set_defaults(func=cmd_verificar_borradores_pendientes)
 
     p = sub.add_parser("buscar-eerr-reusable", help="Fase 2: busca si ya hay un EERR recibido reusable para este CECO/fecha")
     p.add_argument("--ceco", required=True)

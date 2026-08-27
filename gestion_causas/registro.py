@@ -20,6 +20,7 @@ from pathlib import Path
 
 RUTA_REGISTRO_CAUSAS = Path(__file__).parent / "registro_causas.json"
 RUTA_REGISTRO_CECO = Path(__file__).parent / "registro_ceco.json"
+RUTA_REGISTRO_SEGUIMIENTO = Path(__file__).parent / "registro_seguimiento.json"
 
 
 def normalizar_rit(valor) -> str:
@@ -103,6 +104,17 @@ def causa_ya_registrada(rit: str, ruta: Path = RUTA_REGISTRO_CAUSAS) -> bool:
     return obtener_causa(rit, ruta) is not None
 
 
+def causas_con_borrador_pendiente(ruta: Path = RUTA_REGISTRO_CAUSAS) -> list:
+    """Causas cuyo campo `borrador_documentos_draft_id` está seteado (no
+    None/vacío) — candidatas a que la tarea programada verifique contra
+    Gmail si ese borrador sigue sin enviar (ver gmail_client.borrador_existe).
+    Este módulo no llama a Gmail: solo lee el registro local."""
+    return [
+        entrada for entrada in cargar_registro_causas(ruta).values()
+        if entrada.get("borrador_documentos_draft_id")
+    ]
+
+
 def causas_para_goteo(
     hoy=None, dias_ventana_post_audiencia: int = 60, ruta: Path = RUTA_REGISTRO_CAUSAS
 ) -> list:
@@ -111,7 +123,8 @@ def causas_para_goteo(
     fue hace `dias_ventana_post_audiencia` días o menos (la prueba puede
     seguir llegando un tiempo después, ej. por una reprogramación). Acota el
     barrido para que no crezca sin límite a medida que se acumulan causas
-    viejas ya cerradas.
+    viejas ya cerradas. Las causas con `causa_cerrada: true` se excluyen
+    siempre, sin importar si tienen fecha de audiencia.
 
     `hoy` es inyectable para tests; por defecto usa la fecha actual.
     Devuelve una lista de entradas del registro (dicts), cada una con su
@@ -124,6 +137,8 @@ def causas_para_goteo(
 
     resultado = []
     for entrada in cargar_registro_causas(ruta).values():
+        if entrada.get("causa_cerrada"):
+            continue
         fecha_audiencia = entrada.get("fecha_audiencia")
         if not fecha_audiencia:
             resultado.append(entrada)
@@ -192,3 +207,85 @@ def buscar_eerr_reusable(
         return None
     candidatas.sort(key=lambda par: par[1])
     return candidatas[0][0]
+
+
+# ── Registro de seguimiento (Fases 5 y 6: correos sin respuesta / documentos
+# pendientes) ────────────────────────────────────────────────────────────
+def cargar_registro_seguimiento(ruta: Path = RUTA_REGISTRO_SEGUIMIENTO) -> dict:
+    return _cargar(ruta)
+
+
+def obtener_seguimiento(thread_id: str, ruta: Path = RUTA_REGISTRO_SEGUIMIENTO) -> dict | None:
+    return cargar_registro_seguimiento(ruta).get(thread_id)
+
+
+def registrar_aviso(
+    thread_id: str,
+    tipo: str,
+    fecha,
+    rit: str | None = None,
+    draft_id: str | None = None,
+    ruta: Path = RUTA_REGISTRO_SEGUIMIENTO,
+) -> dict:
+    """Anota que se creó un borrador de insistencia/recordatorio para
+    `thread_id` en `fecha` (AAAA-MM-DD). `tipo` es uno de "acuerdo-daniela",
+    "causa-laboral" o "documentos" — solo informativo, no cambia la lógica de
+    cadencia. Devuelve la entrada final guardada."""
+    registro = cargar_registro_seguimiento(ruta)
+    entrada = registro.setdefault(thread_id, {"tipo": tipo, "rit": rit, "avisos": []})
+    entrada["tipo"] = tipo
+    if rit:
+        entrada["rit"] = rit
+    entrada["avisos"].append({
+        "n": len(entrada["avisos"]) + 1,
+        "fecha": str(_parsear_fecha(fecha)),
+        "draft_id": draft_id,
+    })
+    entrada["ultima_revision"] = datetime.now().isoformat()
+    registro[thread_id] = entrada
+    _guardar(ruta, registro)
+    return entrada
+
+
+def puede_insistir(
+    thread_id: str,
+    hoy=None,
+    ruta: Path = RUTA_REGISTRO_SEGUIMIENTO,
+    ruta_feriados=None,
+) -> dict:
+    """Aplica la cadencia acordada con el usuario: el 1er aviso siempre
+    procede; el 2º solo si pasaron al menos 2 días hábiles desde el 1º; del
+    3º en adelante nunca se genera borrador (solo se reporta en el resumen
+    de la tarea, requiere gestión manual).
+
+    Devuelve {"puede": bool, "n_aviso": int, "motivo": str}, donde
+    `n_aviso` es el número de aviso que correspondería crear a continuación
+    (1, 2, o el que ya se agotó).
+    """
+    from . import agenda as agenda_mod
+
+    if hoy is None:
+        hoy = date.today()
+    else:
+        hoy = _parsear_fecha(hoy)
+
+    entrada = obtener_seguimiento(thread_id, ruta)
+    avisos = entrada["avisos"] if entrada else []
+
+    if len(avisos) == 0:
+        return {"puede": True, "n_aviso": 1, "motivo": "sin avisos previos"}
+
+    if len(avisos) == 1:
+        kwargs = {} if ruta_feriados is None else {"ruta_feriados": ruta_feriados}
+        transcurridos = agenda_mod.dias_habiles_entre(avisos[0]["fecha"], hoy, **kwargs)
+        if transcurridos >= 2:
+            return {"puede": True, "n_aviso": 2, "motivo": f"pasaron {transcurridos} dias habiles desde el 1er aviso"}
+        return {
+            "puede": False, "n_aviso": 2,
+            "motivo": f"solo pasaron {transcurridos} dias habiles desde el 1er aviso (se requieren 2)",
+        }
+
+    return {
+        "puede": False, "n_aviso": len(avisos) + 1,
+        "motivo": f"ya se hicieron {len(avisos)} avisos, requiere gestion manual",
+    }

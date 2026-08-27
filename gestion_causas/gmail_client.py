@@ -164,6 +164,41 @@ def obtener_hilo(thread_id: str, servicio=None) -> dict:
     return servicio.users().threads().get(userId="me", id=thread_id, format="full").execute()
 
 
+def cabeceras_respuesta_de_hilo(thread_id: str, servicio=None) -> dict:
+    """Devuelve {"in_reply_to", "references"} a partir de los headers
+    Message-ID/References del ÚLTIMO mensaje del hilo.
+
+    El campo `threadId` de la API de Gmail solo agrupa el mensaje dentro de
+    la propia cuenta de Gmail — es un puntero interno que nunca viaja en el
+    correo. Para que un cliente ajeno (Outlook/Exchange corporativo, otro
+    Gmail, etc.) reconozca un borrador como respuesta dentro de la
+    conversación, el mensaje saliente necesita las cabeceras estándar
+    In-Reply-To/References (RFC 5322) — sin ellas, el destinatario puede ver
+    el correo como un mensaje suelto aunque en tu propia bandeja se vea
+    encadenado (confirmado en la práctica: causa Tiznado/Salcobrand
+    M-744-2026, agosto 2026)."""
+    if servicio is None:
+        servicio = construir_servicio()
+
+    hilo = servicio.users().threads().get(
+        userId="me", id=thread_id, format="metadata", metadataHeaders=["Message-ID", "References"]
+    ).execute()
+    mensajes = hilo.get("messages", [])
+    if not mensajes:
+        return {"in_reply_to": None, "references": None}
+
+    # Los nombres de cabecera son case-insensitive por RFC 5322 — un mensaje
+    # que pasó por otro cliente de correo (Apple Mail, Outlook) puede traer
+    # "Message-Id" o "message-id" en vez de "Message-ID", y una búsqueda con
+    # mayúsculas exactas falla en silencio (bug real encontrado en la
+    # práctica: hilo "Consulta respecto a funcionario", agosto 2026).
+    headers = {h["name"].lower(): h["value"] for h in mensajes[-1]["payload"].get("headers", [])}
+    message_id = headers.get("message-id")
+    referencias_previas = headers.get("references", "")
+    referencias = (referencias_previas + " " + message_id).strip() if message_id else referencias_previas or None
+    return {"in_reply_to": message_id, "references": referencias}
+
+
 def _decodificar_base64url(datos: str) -> bytes:
     return base64.urlsafe_b64decode(datos.encode("utf-8"))
 
@@ -228,6 +263,8 @@ def leer_mensaje(message_id: str, servicio=None) -> dict:
         "thread_id": mensaje["threadId"],
         "subject": headers.get("subject", ""),
         "sender": headers.get("from", ""),
+        "to": headers.get("to", ""),
+        "cc": headers.get("cc", ""),
         "date": headers.get("date", ""),
         "cuerpo_texto": _extraer_texto_plano(mensaje["payload"]),
         "adjuntos": _listar_adjuntos(mensaje["payload"]),
@@ -298,31 +335,69 @@ def crear_borrador(
     cuerpo_texto: str,
     thread_id: str | None = None,
     servicio=None,
+    html: bool = False,
+    cc: str | None = None,
 ) -> dict:
     """Crea un borrador. Si se entrega `thread_id`, el borrador queda como
     respuesta dentro de esa cadena; si no, es un correo nuevo.
+
+    Si `html` es True, `cuerpo_texto` se envía como text/html (p. ej. una
+    lista `<ol><li>` para que Gmail la renumere solo al editarla) en vez de
+    texto plano.
+
+    `cc` (opcional) es una cadena de direcciones separadas por coma, para el
+    "responder a todos" del recordatorio de documentos pendientes (Fase 6).
+
+    Si se entrega `thread_id`, además se agregan las cabeceras estándar
+    In-Reply-To/References (leídas del último mensaje del hilo — ver
+    cabeceras_respuesta_de_hilo) para que el destinatario reconozca el
+    correo como respuesta aunque su cliente de correo no sea Gmail; el
+    `threadId` de la API por sí solo solo agrupa el mensaje en TU propia
+    cuenta, nunca viaja con el correo.
 
     Este módulo deliberadamente NO implementa drafts.send ni messages.send.
     Un borrador creado aquí requiere que un humano lo revise y lo envíe a
     mano desde Gmail.
     """
-    import email.mime.text
-
     if servicio is None:
         servicio = construir_servicio()
 
-    mensaje = email.mime.text.MIMEText(cuerpo_texto)
+    in_reply_to = referencias = None
+    if thread_id:
+        cabeceras = cabeceras_respuesta_de_hilo(thread_id, servicio=servicio)
+        in_reply_to = cabeceras["in_reply_to"]
+        referencias = cabeceras["references"]
+
+    cuerpo_mensaje = _construir_cuerpo_mensaje(
+        destinatario, asunto, cuerpo_texto, thread_id, html, cc, in_reply_to, referencias
+    )
+
+    return servicio.users().drafts().create(
+        userId="me", body={"message": cuerpo_mensaje}
+    ).execute()
+
+
+def _construir_cuerpo_mensaje(
+    destinatario: str, asunto: str, cuerpo_texto: str, thread_id: str | None, html: bool, cc: str | None,
+    in_reply_to: str | None = None, referencias: str | None = None,
+) -> dict:
+    import email.mime.text
+
+    mensaje = email.mime.text.MIMEText(cuerpo_texto, "html" if html else "plain")
     mensaje["to"] = destinatario
+    if in_reply_to:
+        mensaje["In-Reply-To"] = in_reply_to
+    if referencias:
+        mensaje["References"] = referencias
+    if cc:
+        mensaje["cc"] = cc
     mensaje["subject"] = asunto
     raw = base64.urlsafe_b64encode(mensaje.as_bytes()).decode("utf-8")
 
     cuerpo_mensaje = {"raw": raw}
     if thread_id:
         cuerpo_mensaje["threadId"] = thread_id
-
-    return servicio.users().drafts().create(
-        userId="me", body={"message": cuerpo_mensaje}
-    ).execute()
+    return cuerpo_mensaje
 
 
 def listar_borradores_de_hilo(thread_id: str, servicio=None) -> list[dict]:
@@ -359,3 +434,21 @@ def buscar_borrador_por_asunto(fragmento_asunto: str, servicio=None) -> list[dic
         if objetivo in asunto.lower():
             resultado.append(detalle)
     return resultado
+
+
+def borrador_existe(draft_id: str, servicio=None) -> bool:
+    """True si `draft_id` sigue existiendo como borrador. Una vez que Nico
+    envía un borrador, Gmail lo convierte en mensaje enviado y el draft_id
+    deja de existir (drafts().get devuelve 404) — así se detecta que un
+    borrador de una corrida anterior ya fue revisado y enviado."""
+    from googleapiclient.errors import HttpError
+
+    if servicio is None:
+        servicio = construir_servicio()
+    try:
+        servicio.users().drafts().get(userId="me", id=draft_id).execute()
+        return True
+    except HttpError as e:
+        if getattr(e, "status_code", None) == 404 or e.resp.status == 404:
+            return False
+        raise

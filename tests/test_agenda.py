@@ -4,6 +4,7 @@ from gestion_causas.agenda import (
     cargar_feriados,
     dias_corridos_antes,
     dias_habiles_antes,
+    dias_habiles_entre,
     es_dia_habil,
 )
 
@@ -77,3 +78,27 @@ class TestDiasCorridosAntes:
     def test_resta_dias_corridos_sin_excluir_nada(self):
         resultado = dias_corridos_antes("2026-08-25", 14)
         assert str(resultado) == "2026-08-11"
+
+
+class TestDiasHabilesEntre:
+    def test_caso_real_yanez_con_ssll_o_348_2026(self, tmp_path):
+        # Nico pidió documentos el martes 2026-07-28 y no tuvo respuesta;
+        # insistió a mano el lunes 2026-08-03, exactamente 4 días hábiles
+        # después (verificado contra la casilla real).
+        ruta = _feriados_prueba(tmp_path, [])
+        assert dias_habiles_entre("2026-07-28", "2026-08-03", ruta) == 4
+
+    def test_hasta_igual_a_desde_es_cero(self, tmp_path):
+        ruta = _feriados_prueba(tmp_path, [])
+        assert dias_habiles_entre("2026-08-03", "2026-08-03", ruta) == 0
+
+    def test_hasta_anterior_a_desde_es_cero(self, tmp_path):
+        ruta = _feriados_prueba(tmp_path, [])
+        assert dias_habiles_entre("2026-08-03", "2026-07-28", ruta) == 0
+
+    def test_descuenta_feriado_en_el_tramo(self, tmp_path):
+        # 2026-09-18 (viernes) es feriado nacional; entre el miércoles
+        # 2026-09-16 y el lunes 2026-09-21 los hábiles son jue 17 y lun 21
+        # (se saltan vie 18 feriado, sáb 19 y dom 20).
+        ruta = _feriados_prueba(tmp_path, ["2026-09-18"])
+        assert dias_habiles_entre("2026-09-16", "2026-09-21", ruta) == 2

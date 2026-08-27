@@ -38,6 +38,7 @@ class TestNoExponeEnvioNiBorrado:
         assert ".send(" not in fuente
 
 
+
 class TestScopesMinimos:
     def test_pide_scope_modify_solo_para_etiquetar(self):
         # gmail.modify es necesario porque la API de Gmail no ofrece un scope
@@ -149,6 +150,115 @@ class TestBuscarBorradorPorAsunto:
         })
         encontrados = gmail_client.buscar_borrador_por_asunto("Rit O-999-2026", servicio=servicio)
         assert encontrados == []
+
+
+class _ServicioDraftsCreacionFalso:
+    """Stub que imita servicio.users().drafts().create() y
+    servicio.users().threads().get(), guardando el mensaje MIME crudo para
+    inspeccionar sus headers sin red. `headers_ultimo_mensaje_hilo` simula
+    los headers Message-ID/References del último mensaje del hilo, para
+    probar cabeceras_respuesta_de_hilo()/crear_borrador(thread_id=...)."""
+
+    def __init__(self, headers_ultimo_mensaje_hilo=None):
+        self.ultimo_body = None
+        self._headers_hilo = headers_ultimo_mensaje_hilo or {}
+
+    def users(self):
+        return self
+
+    def drafts(self):
+        return self
+
+    def threads(self):
+        return self
+
+    def create(self, userId, body):
+        self.ultimo_body = body
+        return _Ejecutable({"id": "draft-1"})
+
+    def get(self, userId, id, format=None, metadataHeaders=None):
+        headers = [{"name": k, "value": v} for k, v in self._headers_hilo.items()]
+        return _Ejecutable({"messages": [{"payload": {"headers": headers}}]})
+
+
+class TestCrearBorradorConCc:
+    def test_agrega_header_cc_cuando_se_entrega(self):
+        import base64
+
+        servicio = _ServicioDraftsCreacionFalso()
+        gmail_client.crear_borrador(
+            "alexis@divisionlogistica.cl", "Re: prueba", "cuerpo",
+            cc="dsanchezv@smu.cl,rgomez@gomezyriesco.cl", servicio=servicio,
+        )
+        raw = servicio.ultimo_body["message"]["raw"]
+        crudo = base64.urlsafe_b64decode(raw).decode("utf-8")
+        assert "cc: dsanchezv@smu.cl,rgomez@gomezyriesco.cl" in crudo.lower()
+
+    def test_sin_cc_no_agrega_el_header(self):
+        import base64
+
+        servicio = _ServicioDraftsCreacionFalso()
+        gmail_client.crear_borrador("alexis@divisionlogistica.cl", "Re: prueba", "cuerpo", servicio=servicio)
+        raw = servicio.ultimo_body["message"]["raw"]
+        crudo = base64.urlsafe_b64decode(raw).decode("utf-8")
+        assert "cc:" not in crudo.lower()
+
+
+class TestCabecerasRespuestaDeHilo:
+    def test_lee_message_id_y_references_del_ultimo_mensaje(self):
+        servicio = _ServicioDraftsCreacionFalso(headers_ultimo_mensaje_hilo={
+            "Message-ID": "<abc123@smu.cl>",
+            "References": "<primero@sb.cl> <segundo@smu.cl>",
+        })
+        cabeceras = gmail_client.cabeceras_respuesta_de_hilo("thread-1", servicio=servicio)
+        assert cabeceras["in_reply_to"] == "<abc123@smu.cl>"
+        assert cabeceras["references"] == "<primero@sb.cl> <segundo@smu.cl> <abc123@smu.cl>"
+
+    def test_sin_message_id_devuelve_none(self):
+        servicio = _ServicioDraftsCreacionFalso(headers_ultimo_mensaje_hilo={})
+        cabeceras = gmail_client.cabeceras_respuesta_de_hilo("thread-1", servicio=servicio)
+        assert cabeceras["in_reply_to"] is None
+        assert cabeceras["references"] is None
+
+    def test_reconoce_message_id_con_otra_capitalizacion(self):
+        """Un mensaje que pasó por otro cliente de correo (Apple Mail,
+        Outlook) puede traer "Message-Id" en vez de "Message-ID" — los
+        nombres de cabecera son case-insensitive por RFC 5322 (bug real
+        encontrado en la práctica: hilo "Consulta respecto a funcionario")."""
+        servicio = _ServicioDraftsCreacionFalso(headers_ultimo_mensaje_hilo={
+            "Message-Id": "<xyz789@gomezyriesco.cl>",
+            "References": "<primero@sb.cl>",
+        })
+        cabeceras = gmail_client.cabeceras_respuesta_de_hilo("thread-1", servicio=servicio)
+        assert cabeceras["in_reply_to"] == "<xyz789@gomezyriesco.cl>"
+        assert cabeceras["references"] == "<primero@sb.cl> <xyz789@gomezyriesco.cl>"
+
+
+class TestCrearBorradorConThreadIdAgregaCabecerasDeRespuesta:
+    def test_agrega_in_reply_to_y_references_cuando_hay_thread_id(self):
+        import base64
+
+        servicio = _ServicioDraftsCreacionFalso(headers_ultimo_mensaje_hilo={
+            "Message-ID": "<original@smu.cl>",
+        })
+        gmail_client.crear_borrador(
+            "alexis@divisionlogistica.cl", "Re: prueba", "cuerpo",
+            thread_id="thread-1", servicio=servicio,
+        )
+        raw = servicio.ultimo_body["message"]["raw"]
+        crudo = base64.urlsafe_b64decode(raw).decode("utf-8")
+        assert "in-reply-to: <original@smu.cl>" in crudo.lower()
+        assert "references: <original@smu.cl>" in crudo.lower()
+
+    def test_sin_thread_id_no_agrega_esas_cabeceras(self):
+        import base64
+
+        servicio = _ServicioDraftsCreacionFalso()
+        gmail_client.crear_borrador("alexis@divisionlogistica.cl", "Re: prueba", "cuerpo", servicio=servicio)
+        raw = servicio.ultimo_body["message"]["raw"]
+        crudo = base64.urlsafe_b64decode(raw).decode("utf-8")
+        assert "in-reply-to:" not in crudo.lower()
+        assert "references:" not in crudo.lower()
 
 
 class TestEmpresasSinExcel:
