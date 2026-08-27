@@ -16,10 +16,14 @@ from gestion_causas import gmail_personal_client
 
 
 class TestScopeMinimo:
-    def test_solo_pide_scope_send(self):
-        assert gmail_personal_client.SCOPES == [
-            "https://www.googleapis.com/auth/gmail.send"
-        ]
+    def test_pide_solo_send_y_userinfo_email(self):
+        # userinfo.email no da acceso a Gmail: solo permite diagnostico()
+        # confirmar la cuenta autenticada (gmail.send solo no alcanza para
+        # leer el perfil vía la API de Gmail).
+        assert set(gmail_personal_client.SCOPES) == {
+            "https://www.googleapis.com/auth/gmail.send",
+            "https://www.googleapis.com/auth/userinfo.email",
+        }
 
     def test_no_pide_acceso_total(self):
         assert "https://mail.google.com/" not in gmail_personal_client.SCOPES

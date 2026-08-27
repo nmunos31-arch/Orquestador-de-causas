@@ -33,10 +33,16 @@ CLIENT_SECRET_PATH = str(
 )
 TOKEN_PATH = str(Path(__file__).parent / "token_gmail_personal.json")
 
-# Único scope necesario: este módulo no lee, no etiqueta, no crea
-# borradores — solo envía el panel de estado.
+# gmail.send es el único scope de Gmail: este módulo no lee, no etiqueta,
+# no crea borradores — solo envía el panel de estado. userinfo.email se
+# agrega aparte, no da acceso a Gmail: solo permite confirmar qué cuenta
+# quedó autenticada antes de enviar (mismo criterio de verificación que ya
+# usan gmail_client.diagnostico() y calendar_client.diagnostico()) — sin
+# él, gmail.send por sí solo no autoriza leer el perfil (users.getProfile
+# devuelve 403 insufficientPermissions con gmail.send únicamente).
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/userinfo.email",
 ]
 
 # Único destinatario permitido de enviar_panel_estado() — ver esa función
@@ -95,14 +101,21 @@ def construir_servicio(credenciales=None):
     return build("gmail", "v1", credentials=credenciales)
 
 
-def diagnostico(servicio=None) -> dict:
+def diagnostico(credenciales=None) -> dict:
     """Devuelve {"email": ..., "scopes": [...]} de la cuenta autenticada,
     para verificar ANTES de operar que el token quedó atado a la cuenta
-    correcta (nmunos31@gmail.com) y no a la del trabajo."""
-    if servicio is None:
-        servicio = construir_servicio()
-    perfil = servicio.users().getProfile(userId="me").execute()
-    return {"email": perfil.get("emailAddress"), "scopes": SCOPES}
+    correcta (nmunos31@gmail.com) y no a la del trabajo.
+
+    Usa el servicio "oauth2" (scope userinfo.email), no el de Gmail: el
+    scope gmail.send por sí solo no autoriza leer el perfil de Gmail
+    (users.getProfile devuelve 403 con gmail.send únicamente)."""
+    from googleapiclient.discovery import build
+
+    if credenciales is None:
+        credenciales = obtener_credenciales()
+    servicio_userinfo = build("oauth2", "v2", credentials=credenciales)
+    perfil = servicio_userinfo.userinfo().get().execute()
+    return {"email": perfil.get("email"), "scopes": SCOPES}
 
 
 def enviar_panel_estado(asunto: str, html: str, servicio=None) -> dict:
