@@ -44,11 +44,18 @@ TOKEN_PATH = str(Path(__file__).parent / "token_gmail_trabajo.json")
 # etiquetas en sí) y gmail.readonly/gmail.compose. Deliberadamente NO se
 # pide https://mail.google.com/ (acceso total, incluye enviar sin
 # restricciones).
+#
+# gmail.send se agregó para una única excepción acotada: enviar_panel_estado()
+# (ver más abajo), que solo puede mandar el panel de estado del ciclo de
+# gestión de causas a nmunoz@gomezyriesco.cl — un correo de auto-reporte, no
+# una gestión hacia terceros. El resto del módulo sigue sin poder enviar
+# nada (ver GARANTÍA DE SEGURIDAD).
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.labels",
     "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.send",
 ]
 
 # Paleta cerrada de colores que acepta la API de Gmail para etiquetas
@@ -73,6 +80,11 @@ COLOR_POR_EMPRESA = {
 EMPRESAS_SIN_EXCEL = {"Preunic", "Salcobrand"}
 
 ETIQUETA_PROCESADO = "Procesado-GestionCausas"
+
+# Único destinatario permitido de enviar_panel_estado() — ver esa función
+# más abajo. No es un parámetro: la garantía de que este módulo no puede
+# mandar correo a nadie más queda en el código, no en el llamador.
+PANEL_DESTINATARIO = "nmunoz@gomezyriesco.cl"
 
 
 def log(msg):
@@ -452,3 +464,33 @@ def borrador_existe(draft_id: str, servicio=None) -> bool:
         if getattr(e, "status_code", None) == 404 or e.resp.status == 404:
             return False
         raise
+
+
+# ── Excepción acotada: envío del panel de estado (NO es una gestión) ───────
+def enviar_panel_estado(asunto: str, html: str, servicio=None) -> dict:
+    """Envía el panel de estado del ciclo de gestión de causas a
+    PANEL_DESTINATARIO (nmunoz@gomezyriesco.cl).
+
+    Única función de este módulo que llama a messages().send — excepción
+    acotada y verificada por tests/test_gmail_client.py
+    (TestEnvioAcotadoDelPanel): no acepta un destinatario distinto del
+    propio Nico (no expone parámetro `destinatario`/`to`), y es un correo
+    de auto-reporte a sí mismo, no una gestión hacia terceros. Ver GARANTÍA
+    DE SEGURIDAD al inicio del módulo.
+    """
+    import email.mime.text
+
+    if not html or not html.strip():
+        raise ValueError("El panel no puede enviarse vacío")
+
+    if servicio is None:
+        servicio = construir_servicio()
+
+    mensaje = email.mime.text.MIMEText(html, "html")
+    mensaje["to"] = PANEL_DESTINATARIO
+    mensaje["subject"] = asunto
+    raw = base64.urlsafe_b64encode(mensaje.as_bytes()).decode("utf-8")
+
+    return servicio.users().messages().send(
+        userId="me", body={"raw": raw}
+    ).execute()

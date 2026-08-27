@@ -13,8 +13,11 @@ from gestion_causas import gmail_client
 class TestNoExponeEnvioNiBorrado:
     def test_no_hay_funciones_de_envio(self):
         nombres = [n for n, _ in inspect.getmembers(gmail_client, inspect.isfunction)]
+        permitido_envio = {"enviar_panel_estado"}
         prohibidos_envio = {"enviar", "send", "mandar", "responder", "reply"}
         for nombre in nombres:
+            if nombre in permitido_envio:
+                continue
             partes = set(nombre.lower().replace("_", " ").split())
             assert not (partes & prohibidos_envio), f"Función sospechosa de enviar: {nombre}"
 
@@ -25,12 +28,14 @@ class TestNoExponeEnvioNiBorrado:
             partes = set(nombre.lower().replace("_", " ").split())
             assert not (partes & prohibidos_borrado), f"Función sospechosa de borrar: {nombre}"
 
-    def test_codigo_fuente_no_llama_a_drafts_send_ni_messages_send(self):
-        fuente = inspect.getsource(gmail_client)
-        assert "drafts().send" not in fuente
-        assert "messages().send" not in fuente
-        assert ".trash(" not in fuente
-        assert "untrash" not in fuente
+    def test_codigo_fuente_no_llama_a_drafts_send_ni_messages_send_fuera_del_panel(self):
+        fuente_modulo = inspect.getsource(gmail_client)
+        fuente_panel = inspect.getsource(gmail_client.enviar_panel_estado)
+        fuente_sin_panel = fuente_modulo.replace(fuente_panel, "")
+        assert "drafts().send" not in fuente_modulo
+        assert ".trash(" not in fuente_modulo
+        assert "untrash" not in fuente_modulo
+        assert "messages().send" not in fuente_sin_panel
 
     def test_crear_borrador_usa_drafts_create_no_send(self):
         fuente = inspect.getsource(gmail_client.crear_borrador)
@@ -56,8 +61,29 @@ class TestScopesMinimos:
             "https://www.googleapis.com/auth/gmail.labels",
             "https://www.googleapis.com/auth/gmail.compose",
             "https://www.googleapis.com/auth/gmail.modify",
+            "https://www.googleapis.com/auth/gmail.send",
         }
         assert set(gmail_client.SCOPES) == esperados
+
+
+class TestEnvioAcotadoDelPanel:
+    def test_enviar_panel_estado_llama_a_messages_send(self):
+        fuente = inspect.getsource(gmail_client.enviar_panel_estado)
+        assert "messages().send" in fuente
+
+    def test_enviar_panel_estado_no_acepta_destinatario_arbitrario(self):
+        parametros = inspect.signature(gmail_client.enviar_panel_estado).parameters
+        assert "destinatario" not in parametros
+        assert "to" not in parametros
+
+    def test_enviar_panel_estado_usa_destinatario_fijo(self):
+        assert gmail_client.PANEL_DESTINATARIO == "nmunoz@gomezyriesco.cl"
+
+    def test_enviar_panel_estado_rechaza_html_vacio(self):
+        import pytest
+
+        with pytest.raises(ValueError):
+            gmail_client.enviar_panel_estado("Asunto de prueba", "")
 
 
 class TestExtraccionDeTextoYAdjuntos:
