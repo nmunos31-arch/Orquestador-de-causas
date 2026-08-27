@@ -8,19 +8,27 @@ Existe porque el conector de Gmail de Claude apunta solo a la cuenta personal
 imprescindible para archivar la demanda y los documentos de cada causa.
 
 GARANTÍA DE SEGURIDAD (verificada por tests/test_gmail_client.py):
-Este módulo NO expone ninguna función que envíe correos (messages.send,
-drafts.send) ni que borre o mande a la papelera mensajes o hilos (messages/
-threads .trash, .delete). Esa garantía es de CÓDIGO, no de scope: la API de
+Este módulo NO expone ninguna función que envíe correos a terceros
+(messages.send, drafts.send) ni que borre o mande a la papelera mensajes o
+hilos (messages/threads .trash, .delete), con UNA única excepción acotada:
+enviar_panel_estado(), que solo puede mandar el panel de estado del ciclo de
+gestión de causas a nmunoz@gomezyriesco.cl (el propio Nico, un correo de
+auto-reporte, no una gestión hacia terceros) — no acepta un destinatario
+distinto, no expone parámetro `destinatario`/`to`, y esa restricción está
+verificada por tests/test_gmail_client.py::TestEnvioAcotadoDelPanel. Fuera
+de esa única función, el resto del módulo sigue sin poder enviar nada a
+nadie ni borrar nada. Esa garantía es de CÓDIGO, no de scope: la API de
 Gmail exige el scope gmail.modify para poder aplicar etiquetas a un hilo (no
 existe un scope más angosto que permita "solo etiquetar" — gmail.labels
 únicamente administra las etiquetas en sí, no su aplicación a mensajes), y
 gmail.modify técnicamente también habilita mover correos a la papelera. Se
 pidió igual porque es el único camino de la API para el etiquetado
 automático que pidió el usuario — la garantía de que NUNCA se llama a
-trash/delete/send queda en el código (ver funciones de este módulo) y se
-verifica con un test que falla si alguna vez se agrega una llamada así. Ver
-también el plan del proyecto: la automatización nunca debe enviar ni borrar
-correos.
+trash/delete, ni a send/drafts.send fuera de enviar_panel_estado(), queda en
+el código (ver funciones de este módulo) y se verifica con un test que
+falla si alguna vez se agrega una llamada así. Ver también el plan del
+proyecto: la automatización nunca debe enviar (salvo esa excepción) ni
+borrar correos.
 
 Reutiliza el mismo client_secret.json (proyecto informe-semanal-501614) que
 ya usa 'Automatizacion Informe Semanal/generar_informe_semanal.py' para
@@ -478,19 +486,14 @@ def enviar_panel_estado(asunto: str, html: str, servicio=None) -> dict:
     de auto-reporte a sí mismo, no una gestión hacia terceros. Ver GARANTÍA
     DE SEGURIDAD al inicio del módulo.
     """
-    import email.mime.text
-
     if not html or not html.strip():
         raise ValueError("El panel no puede enviarse vacío")
 
     if servicio is None:
         servicio = construir_servicio()
 
-    mensaje = email.mime.text.MIMEText(html, "html")
-    mensaje["to"] = PANEL_DESTINATARIO
-    mensaje["subject"] = asunto
-    raw = base64.urlsafe_b64encode(mensaje.as_bytes()).decode("utf-8")
+    cuerpo_mensaje = _construir_cuerpo_mensaje(PANEL_DESTINATARIO, asunto, html, None, True, None)
 
     return servicio.users().messages().send(
-        userId="me", body={"raw": raw}
+        userId="me", body=cuerpo_mensaje
     ).execute()

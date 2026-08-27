@@ -85,6 +85,12 @@ class TestEnvioAcotadoDelPanel:
         with pytest.raises(ValueError):
             gmail_client.enviar_panel_estado("Asunto de prueba", "")
 
+    def test_enviar_panel_estado_rechaza_html_solo_espacios(self):
+        import pytest
+
+        with pytest.raises(ValueError):
+            gmail_client.enviar_panel_estado("Asunto de prueba", "   ")
+
 
 class TestExtraccionDeTextoYAdjuntos:
     def test_extrae_texto_plano_de_payload_simple(self):
