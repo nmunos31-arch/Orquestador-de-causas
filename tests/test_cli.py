@@ -26,6 +26,7 @@ class TestParser:
             "buscar-audiencia-por-rit", "diagnostico-calendario", "eventos-calendario",
             "verificar-borradores-pendientes",
             "hilos-sin-respuesta", "puede-insistir", "registrar-aviso", "dias-habiles-entre",
+            "panel-html", "enviar-panel",
         }
         assert esperados.issubset(set(accion_sub.choices.keys()))
 
@@ -176,3 +177,47 @@ class TestCuerpoConLista:
         resultado = _cuerpo_con_lista(cuerpo, "item")
         assert "&amp;" in resultado
         assert "<b>" not in resultado.split("<ol>")[0]
+
+
+class TestPanel:
+    def test_panel_html_escribe_archivo(self, tmp_path, capsys):
+        resumen_json = tmp_path / "resumen.json"
+        resumen_json.write_text(
+            json.dumps([{"fase": "smu", "resultado": "sin novedades", "error": None}]),
+            encoding="utf-8",
+        )
+        salida_html = tmp_path / "panel.html"
+        registro_vacio = tmp_path / "registro_causas.json"
+        registro_vacio.write_text("{}", encoding="utf-8")
+
+        import gestion_causas.registro as registro_mod
+        original = registro_mod.RUTA_REGISTRO_CAUSAS
+        registro_mod.RUTA_REGISTRO_CAUSAS = registro_vacio
+        try:
+            codigo = main([
+                "panel-html",
+                "--resumen-json", str(resumen_json),
+                "--salida", str(salida_html),
+                "--hoy", "2026-08-27",
+            ])
+        finally:
+            registro_mod.RUTA_REGISTRO_CAUSAS = original
+
+        assert codigo == 0
+        salida = json.loads(capsys.readouterr().out)
+        assert salida["escrito"] is True
+        assert salida_html.exists()
+        assert "smu" in salida_html.read_text(encoding="utf-8")
+
+    def test_enviar_panel_dry_run_no_envia(self, tmp_path, capsys):
+        html_file = tmp_path / "panel.html"
+        html_file.write_text("<html>contenido</html>", encoding="utf-8")
+
+        codigo = main([
+            "--dry-run", "enviar-panel",
+            "--html-file", str(html_file),
+            "--asunto", "Panel de prueba",
+        ])
+        assert codigo == 0
+        salida = json.loads(capsys.readouterr().out)
+        assert salida["simulado"] is True

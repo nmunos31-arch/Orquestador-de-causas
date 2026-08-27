@@ -40,6 +40,7 @@ from . import calendar_client
 from . import carpetas as carpetas_mod
 from . import gmail_client
 from . import ics as ics_mod
+from . import panel as panel_mod
 from . import registro as registro_mod
 from . import seguimiento as seguimiento_mod
 
@@ -471,6 +472,26 @@ def cmd_buscar_audiencia_por_rit(args) -> int:
     return 0
 
 
+def cmd_panel_html(args) -> int:
+    with open(args.resumen_json, "r", encoding="utf-8") as f:
+        resumen = json.load(f)
+    hoy = date.fromisoformat(args.hoy) if args.hoy else None
+    contenido = panel_mod.generar_panel_html(resumen, hoy=hoy)
+    Path(args.salida).write_text(contenido, encoding="utf-8")
+    _imprimir_json({"escrito": True, "ruta": args.salida})
+    return 0
+
+
+def cmd_enviar_panel(args) -> int:
+    contenido = Path(args.html_file).read_text(encoding="utf-8")
+    if args.dry_run:
+        _imprimir_json({"simulado": True, "accion": "enviar-panel", "asunto": args.asunto})
+        return 0
+    resultado = gmail_client.enviar_panel_estado(args.asunto, contenido)
+    _imprimir_json(resultado)
+    return 0
+
+
 def construir_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
@@ -647,6 +668,23 @@ def construir_parser() -> argparse.ArgumentParser:
     p.add_argument("--dias-adelante", type=int, default=200, help="Ventana de búsqueda hacia adelante desde hoy (API)")
     p.add_argument("--ics", default=None, help="Ruta a un .ics exportado a mano; si se indica, se usa en vez de la API")
     p.set_defaults(func=cmd_buscar_audiencia_por_rit)
+
+    p = sub.add_parser(
+        "panel-html",
+        help="Arma el HTML del panel de estado del ciclo de causas y lo escribe a un archivo",
+    )
+    p.add_argument("--resumen-json", required=True, help='Ruta a un JSON: [{"fase":.., "resultado":.., "error":..}, ...]')
+    p.add_argument("--salida", required=True, help="Ruta donde escribir el HTML generado")
+    p.add_argument("--hoy", default=None, help="Fecha AAAA-MM-DD a usar como 'hoy' (pruebas); por defecto hoy")
+    p.set_defaults(func=cmd_panel_html)
+
+    p = sub.add_parser(
+        "enviar-panel",
+        help="Envia el panel de estado por correo a nmunoz@gomezyriesco.cl (unica excepcion a la regla de no enviar correos)",
+    )
+    p.add_argument("--html-file", required=True)
+    p.add_argument("--asunto", required=True)
+    p.set_defaults(func=cmd_enviar_panel)
 
     return parser
 
