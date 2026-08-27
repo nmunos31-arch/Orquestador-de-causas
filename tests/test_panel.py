@@ -58,6 +58,14 @@ class TestEstadoCausas:
         filas = estado_causas(hoy=date(2026, 8, 27), ruta=ruta)
         assert filas[0]["fase"] == "Minuta generada"
 
+    def test_sin_ultima_actualizacion_da_none(self, tmp_path):
+        ruta = _escribir_registro(tmp_path, {
+            "M-8-2026": {"rit": "M-8-2026", "empresa": "Alvi", "demandante": "Soto"},
+        })
+        filas = estado_causas(hoy=date(2026, 8, 27), ruta=ruta)
+        assert filas[0]["dias_sin_actualizar"] is None
+        assert filas[0]["alerta"] is False
+
     def test_causa_cerrada(self, tmp_path):
         ruta = _escribir_registro(tmp_path, {
             "M-5-2026": {

@@ -74,6 +74,9 @@ def estado_causas(hoy: date | None = None, ruta=None) -> list[dict]:
     return filas
 
 
+# Recordá: todo campo nuevo que se agregue a _fila_resumen_html o
+# _fila_causa_html debe pasar por html_mod.escape antes de insertarse en el
+# f-string — no hay un wrapper que lo obligue estructuralmente.
 def _fila_resumen_html(item: dict) -> str:
     fase = html_mod.escape(str(item.get("fase", "")))
     error = item.get("error")
