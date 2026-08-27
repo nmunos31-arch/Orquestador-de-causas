@@ -39,10 +39,15 @@ TOKEN_PATH = str(Path(__file__).parent / "token_gmail_personal.json")
 # quedó autenticada antes de enviar (mismo criterio de verificación que ya
 # usan gmail_client.diagnostico() y calendar_client.diagnostico()) — sin
 # él, gmail.send por sí solo no autoriza leer el perfil (users.getProfile
-# devuelve 403 insufficientPermissions con gmail.send únicamente).
+# devuelve 403 insufficientPermissions con gmail.send únicamente). "openid"
+# se lista explícito porque Google lo agrega solo al otorgar userinfo.email
+# (es parte de OpenID Connect); sin listarlo acá, google-auth-oauthlib lo
+# ve como un scope "extra" no pedido y aborta el login con un error de
+# "Scope has changed" antes de guardar el token.
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/userinfo.email",
+    "openid",
 ]
 
 # Único destinatario permitido de enviar_panel_estado() — ver esa función

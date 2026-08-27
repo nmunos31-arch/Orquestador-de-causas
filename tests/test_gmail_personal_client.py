@@ -16,13 +16,16 @@ from gestion_causas import gmail_personal_client
 
 
 class TestScopeMinimo:
-    def test_pide_solo_send_y_userinfo_email(self):
-        # userinfo.email no da acceso a Gmail: solo permite diagnostico()
-        # confirmar la cuenta autenticada (gmail.send solo no alcanza para
-        # leer el perfil vía la API de Gmail).
+    def test_pide_solo_send_userinfo_email_y_openid(self):
+        # userinfo.email/openid no dan acceso a Gmail: solo permiten que
+        # diagnostico() confirme la cuenta autenticada (gmail.send solo no
+        # alcanza para leer el perfil vía la API de Gmail). "openid" se
+        # pide explícito porque Google lo agrega solo junto a
+        # userinfo.email (ver comentario en gmail_personal_client.py).
         assert set(gmail_personal_client.SCOPES) == {
             "https://www.googleapis.com/auth/gmail.send",
             "https://www.googleapis.com/auth/userinfo.email",
+            "openid",
         }
 
     def test_no_pide_acceso_total(self):
