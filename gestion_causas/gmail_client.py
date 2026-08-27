@@ -8,27 +8,25 @@ Existe porque el conector de Gmail de Claude apunta solo a la cuenta personal
 imprescindible para archivar la demanda y los documentos de cada causa.
 
 GARANTÍA DE SEGURIDAD (verificada por tests/test_gmail_client.py):
-Este módulo NO expone ninguna función que envíe correos a terceros
-(messages.send, drafts.send) ni que borre o mande a la papelera mensajes o
-hilos (messages/threads .trash, .delete), con UNA única excepción acotada:
-enviar_panel_estado(), que solo puede mandar el panel de estado del ciclo de
-gestión de causas a nmunoz@gomezyriesco.cl (el propio Nico, un correo de
-auto-reporte, no una gestión hacia terceros) — no acepta un destinatario
-distinto, no expone parámetro `destinatario`/`to`, y esa restricción está
-verificada por tests/test_gmail_client.py::TestEnvioAcotadoDelPanel. Fuera
-de esa única función, el resto del módulo sigue sin poder enviar nada a
-nadie ni borrar nada. Esa garantía es de CÓDIGO, no de scope: la API de
+Este módulo NO expone ninguna función que envíe correos (messages.send,
+drafts.send) ni que borre o mande a la papelera mensajes o hilos (messages/
+threads .trash, .delete). Esa garantía es de CÓDIGO, no de scope: la API de
 Gmail exige el scope gmail.modify para poder aplicar etiquetas a un hilo (no
 existe un scope más angosto que permita "solo etiquetar" — gmail.labels
 únicamente administra las etiquetas en sí, no su aplicación a mensajes), y
 gmail.modify técnicamente también habilita mover correos a la papelera. Se
 pidió igual porque es el único camino de la API para el etiquetado
 automático que pidió el usuario — la garantía de que NUNCA se llama a
-trash/delete, ni a send/drafts.send fuera de enviar_panel_estado(), queda en
-el código (ver funciones de este módulo) y se verifica con un test que
-falla si alguna vez se agrega una llamada así. Ver también el plan del
-proyecto: la automatización nunca debe enviar (salvo esa excepción) ni
-borrar correos.
+trash/delete/send queda en el código (ver funciones de este módulo) y se
+verifica con un test que falla si alguna vez se agrega una llamada así. Ver
+también el plan del proyecto: la automatización nunca debe enviar ni borrar
+correos.
+
+Política del usuario (2026-08-27): esta cuenta (nmunoz@gomezyriesco.cl) NUNCA
+envía correo bajo ninguna circunstancia, ni siquiera auto-reportes — solo deja
+borradores. El envío del panel de estado del ciclo de causas lo hace un
+módulo aparte, gmail_personal_client.py, autenticado como nmunos31@gmail.com
+(la única cuenta que el usuario autoriza a enviar).
 
 Reutiliza el mismo client_secret.json (proyecto informe-semanal-501614) que
 ya usa 'Automatizacion Informe Semanal/generar_informe_semanal.py' para
@@ -50,20 +48,13 @@ TOKEN_PATH = str(Path(__file__).parent / "token_gmail_trabajo.json")
 # GARANTÍA DE SEGURIDAD arriba sobre por qué se pidió pese a ser más amplio
 # de lo ideal. Se mantiene además gmail.labels (administración de las
 # etiquetas en sí) y gmail.readonly/gmail.compose. Deliberadamente NO se
-# pide https://mail.google.com/ (acceso total, incluye enviar sin
-# restricciones).
-#
-# gmail.send se agregó para una única excepción acotada: enviar_panel_estado()
-# (ver más abajo), que solo puede mandar el panel de estado del ciclo de
-# gestión de causas a nmunoz@gomezyriesco.cl — un correo de auto-reporte, no
-# una gestión hacia terceros. El resto del módulo sigue sin poder enviar
-# nada (ver GARANTÍA DE SEGURIDAD).
+# pide gmail.send ni https://mail.google.com/ (acceso total) — esta cuenta
+# nunca envía correo, ver GARANTÍA DE SEGURIDAD arriba.
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.labels",
     "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/gmail.send",
 ]
 
 # Paleta cerrada de colores que acepta la API de Gmail para etiquetas
@@ -88,11 +79,6 @@ COLOR_POR_EMPRESA = {
 EMPRESAS_SIN_EXCEL = {"Preunic", "Salcobrand"}
 
 ETIQUETA_PROCESADO = "Procesado-GestionCausas"
-
-# Único destinatario permitido de enviar_panel_estado() — ver esa función
-# más abajo. No es un parámetro: la garantía de que este módulo no puede
-# mandar correo a nadie más queda en el código, no en el llamador.
-PANEL_DESTINATARIO = "nmunoz@gomezyriesco.cl"
 
 
 def log(msg):
@@ -472,28 +458,3 @@ def borrador_existe(draft_id: str, servicio=None) -> bool:
         if getattr(e, "status_code", None) == 404 or e.resp.status == 404:
             return False
         raise
-
-
-# ── Excepción acotada: envío del panel de estado (NO es una gestión) ───────
-def enviar_panel_estado(asunto: str, html: str, servicio=None) -> dict:
-    """Envía el panel de estado del ciclo de gestión de causas a
-    PANEL_DESTINATARIO (nmunoz@gomezyriesco.cl).
-
-    Única función de este módulo que llama a messages().send — excepción
-    acotada y verificada por tests/test_gmail_client.py
-    (TestEnvioAcotadoDelPanel): no acepta un destinatario distinto del
-    propio Nico (no expone parámetro `destinatario`/`to`), y es un correo
-    de auto-reporte a sí mismo, no una gestión hacia terceros. Ver GARANTÍA
-    DE SEGURIDAD al inicio del módulo.
-    """
-    if not html or not html.strip():
-        raise ValueError("El panel no puede enviarse vacío")
-
-    if servicio is None:
-        servicio = construir_servicio()
-
-    cuerpo_mensaje = _construir_cuerpo_mensaje(PANEL_DESTINATARIO, asunto, html, None, True, None)
-
-    return servicio.users().messages().send(
-        userId="me", body=cuerpo_mensaje
-    ).execute()
