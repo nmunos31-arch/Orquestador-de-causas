@@ -39,6 +39,7 @@ from . import bitacora as bitacora_mod
 from . import calendar_client
 from . import carpetas as carpetas_mod
 from . import gmail_client
+from . import gmail_personal_client
 from . import ics as ics_mod
 from . import panel as panel_mod
 from . import registro as registro_mod
@@ -491,8 +492,21 @@ def cmd_enviar_panel(args) -> int:
     if args.dry_run:
         _imprimir_json({"simulado": True, "accion": "enviar-panel", "asunto": args.asunto})
         return 0
-    resultado = gmail_client.enviar_panel_estado(args.asunto, contenido)
+    resultado = gmail_personal_client.enviar_panel_estado(args.asunto, contenido)
     _imprimir_json(resultado)
+    return 0
+
+
+def cmd_diagnostico_personal(args) -> int:
+    resultado = gmail_personal_client.diagnostico()
+    _imprimir_json(resultado)
+    if resultado["email"] != "nmunos31@gmail.com":
+        print(
+            f"ADVERTENCIA: la cuenta autenticada es '{resultado['email']}', "
+            "no 'nmunos31@gmail.com'. Deten la tarea y revisa el token.",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
@@ -685,11 +699,14 @@ def construir_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "enviar-panel",
-        help="Envia el panel de estado por correo a nmunoz@gomezyriesco.cl (unica excepcion a la regla de no enviar correos)",
+        help="Envia el panel de estado a nmunoz@gomezyriesco.cl desde la cuenta personal (nmunos31@gmail.com), la unica autorizada a enviar",
     )
     p.add_argument("--html-file", required=True)
     p.add_argument("--asunto", required=True)
     p.set_defaults(func=cmd_enviar_panel)
+
+    p = sub.add_parser("diagnostico-personal", help="Verifica que el token de la cuenta personal (nmunos31@gmail.com) este autorizado")
+    p.set_defaults(func=cmd_diagnostico_personal)
 
     return parser
 

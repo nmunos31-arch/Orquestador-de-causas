@@ -101,22 +101,41 @@ un correo HTML y lo envía a `nmunoz@gomezyriesco.cl`. Contenido:
 El panel es una vista **calculada al vuelo** sobre datos existentes — no persiste su
 propio estado ni duplica el registro.
 
-## Excepción puntual a "nunca envía correos"
+## Envío del panel: cuenta personal, no la de trabajo
 
-La automatización tiene como regla dura no enviar correos, solo dejar borradores. Se
-agrega una **excepción acotada y explícita** solo para este panel:
+**Corrección de diseño (2026-08-27):** la primera versión de este documento proponía
+agregar una excepción acotada de envío directamente a `gmail_client.py` (la cuenta de
+trabajo, `nmunoz@gomezyriesco.cl`). Nico corrigió esto: **`nmunoz@gomezyriesco.cl` nunca
+envía correo bajo ninguna circunstancia**, ni siquiera un auto-reporte — es una regla sin
+excepciones. La única cuenta que Nico autoriza a enviar es la personal,
+**`nmunos31@gmail.com`**. `gmail_client.py` queda intacto, sin scope `gmail.send` y sin
+ninguna función de envío (se revirtió la excepción que se había agregado por error).
 
-- Nueva función en `gmail_client.py`, ej. `enviar_panel_estado(html: str)`, que **solo
-  puede enviar a `nmunoz@gomezyriesco.cl`** — la dirección va hardcodeada en la función,
-  no como parámetro. No existe una función de envío genérica con destinatario libre.
-- Requiere sumar el scope `gmail.send` al token de trabajo (`token_gmail_trabajo.json`) —
-  nuevo consentimiento OAuth de Nico, una sola vez.
-- El resto de la automatización (borrador de ofrecimiento a Román, avisos de insistencia)
-  sigue sin poder enviar nada — la excepción es únicamente este correo de auto-reporte a
-  sí mismo.
-- El test existente que verifica que `gmail_client.py` no implementa envío se actualiza
-  para permitir explícitamente esta única función acotada, y se agrega un test que
-  confirma que no acepta un destinatario distinto de `nmunoz@gomezyriesco.cl`.
+En su lugar, el envío del panel lo hace un módulo nuevo y deliberadamente mínimo,
+`gmail_personal_client.py`:
+
+- Autenticado como `nmunos31@gmail.com`, con un token propio
+  (`token_gmail_personal.json`) separado del de trabajo, reutilizando el mismo
+  `client_secret.json` (proyecto `informe-semanal-501614`) que ya usan `gmail_client.py`
+  y `Automatizacion Informe Semanal/generar_informe_semanal.py`.
+- **Único scope pedido: `gmail.send`.** No lee correo, no etiqueta, no crea borradores —
+  su única razón de existir es enviar el panel.
+- Una única función, `enviar_panel_estado(asunto, html)`, que **solo puede enviar a
+  `nmunoz@gomezyriesco.cl`** — la dirección va hardcodeada, no como parámetro. No expone
+  un `destinatario`/`to` libre.
+- El conector de Gmail de Claude para la cuenta personal (ya conectado) se descartó como
+  mecanismo de envío: hoy solo expone `create_draft`, no una herramienta de envío — de
+  ahí la necesidad de este cliente Python propio, mismo patrón que ya usa `gmail_client.py`
+  para el trabajo.
+- Tests en `tests/test_gmail_personal_client.py` verifican: el scope es únicamente
+  `gmail.send`, no hay funciones de lectura/etiquetado/borrado, `enviar_panel_estado` no
+  acepta destinatario arbitrario, y rechaza HTML vacío o solo espacios.
+- Requiere un consentimiento OAuth de Nico, una sola vez, con la cuenta personal.
+
+`gestion_causas/cli.py` expone `enviar-panel` (llama a
+`gmail_personal_client.enviar_panel_estado`) y `diagnostico-personal` (verifica que el
+token esté atado a `nmunos31@gmail.com`, mismo patrón que `diagnostico`/
+`diagnostico-calendario`). `panel-html` (arma el HTML, sin tocar Gmail) no cambia.
 
 ## Manejo de errores
 

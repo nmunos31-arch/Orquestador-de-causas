@@ -26,7 +26,7 @@ class TestParser:
             "buscar-audiencia-por-rit", "diagnostico-calendario", "eventos-calendario",
             "verificar-borradores-pendientes",
             "hilos-sin-respuesta", "puede-insistir", "registrar-aviso", "dias-habiles-entre",
-            "panel-html", "enviar-panel",
+            "panel-html", "enviar-panel", "diagnostico-personal",
         }
         assert esperados.issubset(set(accion_sub.choices.keys()))
 

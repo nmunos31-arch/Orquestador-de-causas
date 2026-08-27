@@ -12,6 +12,32 @@
 
 ---
 
+> **⚠️ Revisión post-implementación (2026-08-27):** Tasks 1-7 de abajo describen y se
+> ejecutaron tal cual está escrito, PERO el diseño del envío del panel cambió después de
+> completarlas — ver la sección "Envío del panel: cuenta personal, no la de trabajo" del
+> spec. `nmunoz@gomezyriesco.cl` **nunca** envía correo, ni siquiera este auto-reporte; la
+> excepción de envío que la Task 1 agregó a `gmail_client.py` **se revirtió** en un commit
+> posterior. El envío real lo hace un módulo nuevo, `gmail_personal_client.py`
+> (autenticado como `nmunos31@gmail.com`, la única cuenta que envía), no descrito en las
+> Tasks 1-7 de abajo. Si estás retomando este plan desde cero (ej. para reproducirlo en
+> otro entorno), estos son los cambios netos reales:
+> - `gmail_client.py`: **sin cambios** respecto al estado anterior a este proyecto (Task 1
+>   se implementó y luego se revirtió por completo — no agregues `enviar_panel_estado` ni
+>   el scope `gmail.send` ahí).
+> - `gmail_personal_client.py` (nuevo, no descrito abajo): mismo patrón que `gmail_client.py`
+>   pero para `nmunos31@gmail.com`, scope único `gmail.send`, una sola función
+>   `enviar_panel_estado(asunto, html)` con destinatario fijo `nmunoz@gomezyriesco.cl`. Ver
+>   `tests/test_gmail_personal_client.py` para las pruebas exactas ya escritas.
+> - `cli.py`: el subcomando `enviar-panel` (Task 3) llama a
+>   `gmail_personal_client.enviar_panel_estado`, no a `gmail_client.enviar_panel_estado`.
+>   Se agregó además `diagnostico-personal` (no descrito en la Task 3 de abajo), mismo
+>   patrón que `diagnostico`/`diagnostico-calendario` pero para la cuenta personal.
+> - El Paso 1 de la Task 8 (renovar token) aplica a `token_gmail_personal.json` (cuenta
+>   personal, consentimiento nuevo), NO a `token_gmail_trabajo.json` — ese último no
+>   necesita ningún cambio de scope.
+
+---
+
 ## File Structure
 
 | Archivo | Responsabilidad |
@@ -974,21 +1000,22 @@ git commit -m "feat(gestion_causas): migrar Fases 4-6 (agenda) a subagente del o
 
 **Files:** N/A — configuración de runtime (scheduled task), no archivos del repo.
 
-- [ ] **Step 1: Autoriza el scope nuevo de Gmail (una sola vez, interactivo)**
+- [ ] **Step 1: Autoriza el token de la cuenta personal (una sola vez, interactivo)**
 
-El token `token_gmail_trabajo.json` fue autorizado antes de agregar el scope `gmail.send`
-(Task 1) — hay que renovarlo con el consentimiento del usuario. Borra el token actual y
-fuerza un nuevo login:
+**(Corregido — ver nota de revisión al inicio del documento.)** El scope `gmail.send`
+NO se agrega a `token_gmail_trabajo.json` — esa cuenta nunca envía correo. Se autoriza en
+cambio `token_gmail_personal.json`, un token nuevo para `nmunos31@gmail.com`:
 
 ```bash
-cd "Actualizador de informes" && rm gestion_causas/token_gmail_trabajo.json && python -m gestion_causas.cli diagnostico
+cd "Actualizador de informes" && python -m gestion_causas.cli diagnostico-personal
 ```
 
-Expected: se abre el navegador pidiendo iniciar sesión con `nmunoz@gomezyriesco.cl` y
-aceptar los permisos (ahora incluye "enviar correo en tu nombre"); al terminar, el
-comando imprime `{"email": "nmunoz@gomezyriesco.cl", "scopes": [...]}`. Si esto no lo
-puede hacer el agente que ejecuta el plan (requiere un navegador interactivo del
-usuario), delega este paso a Nico antes de continuar.
+Expected: como el archivo no existe todavía, se abre el navegador pidiendo iniciar
+sesión con `nmunos31@gmail.com` y aceptar el permiso "enviar correo en tu nombre"; al
+terminar, el comando imprime `{"email": "nmunos31@gmail.com", "scopes": [...]}`. Si esto
+no lo puede hacer el agente que ejecuta el plan (requiere un navegador interactivo del
+usuario), delega este paso a Nico antes de continuar. `token_gmail_trabajo.json` no
+necesita ningún cambio — sigue con sus 4 scopes de siempre.
 
 - [ ] **Step 2: Crea la tarea programada con `create_scheduled_task`**
 
