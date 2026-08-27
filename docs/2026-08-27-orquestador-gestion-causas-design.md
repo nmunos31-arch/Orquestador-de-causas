@@ -5,8 +5,8 @@
 Hoy el ciclo de gestión automática de causas nuevas (ver
 [docs/superpowers/plans/2026-07-07-informe-juicios-email.md](../../docs/superpowers/plans/2026-07-07-informe-juicios-email.md)
 y `C:\Users\usuario\.claude\plans\1-contrato-de-trabajo-streamed-pizza.md`) vive repartido
-en 5 tareas programadas independientes, cada una con su propio `SKILL.md` y su propio
-cron:
+en 4 tareas programadas independientes, cada una con su propio `SKILL.md` y su propio
+cron, todas construidas sobre el mismo CLI y el mismo estado en disco:
 
 | Tarea | Fase | Cron actual |
 |---|---|---|
@@ -14,24 +14,32 @@ cron:
 | `gestion-causas-smu` | Fases 1-2 — ingesta de causas nuevas desde Gmail | 09:08 / 14:xx / 18:xx |
 | `gestion-causas-goteo` | Fase 3 — documentos nuevos de causas ya conocidas | 11:04 / 17:xx |
 | `gestion-causas-agenda` | Fases 4-6 — ofrecimiento y disparo de minuta | 08:04 diario |
-| `revision-semanal-calendario-audiencias` | Recordatorios de audiencia | Viernes 16:08 |
 
-Todas comparten la misma librería Python (`gestion_causas/`) y el mismo estado en disco
+Las 4 comparten la misma librería Python (`gestion_causas/`) y el mismo estado en disco
 (`registro_causas.json`, `registro_seguimiento.json`, `bitacora.md`), pero corren en
 sesiones de Claude Code separadas y sin ningún punto en común donde ver el ciclo completo
 de una causa de un vistazo. Nico tiene que revisar `bitacora.md` o el registro a mano para
 saber en qué fase está cada causa.
+
+**Nota sobre `revision-semanal-calendario-audiencias`:** existe una 5ª tarea programada
+relacionada por nombre ("calendario", "audiencias"), pero **no forma parte de este
+proyecto**: no usa el CLI de `gestion_causas`, no lee/escribe `registro_causas.json`, y su
+mecanismo es completamente distinto (exporta el calendario vía automatización de Chrome,
+cruza contra un Excel maestro separado "Causas Gomez y Riesco", y su función es programar
+recordatorios de audiencia y llevar un informe de causas **penales**, no laborales). Se
+deja fuera del orquestador y sigue corriendo exactamente igual que hoy, sin cambios.
 
 **Problema a resolver:** falta de visibilidad/control del estado del ciclo completo, no un
 problema de coordinación entre fases (el orden actual ya funciona).
 
 ## Decisión de arquitectura
 
-Se reemplazan las 5 tareas programadas por **una sola tarea programada**
+Se reemplazan las 4 tareas programadas por **una sola tarea programada**
 (`gestion-causas-orquestador`), que corre 3 veces al día (09:00 / 14:00 / 18:00, igual
-que hoy `gestion-causas-smu`). Las 5 tareas antiguas se **desactivan, no se borran**
+que hoy `gestion-causas-smu`). Las 4 tareas antiguas se **desactivan, no se borran**
 (mismo criterio ya usado con `actualizar-informe-juicios`); sus `SKILL.md` quedan como
-referencia histórica de las reglas migradas.
+referencia histórica de las reglas migradas. `revision-semanal-calendario-audiencias`
+queda fuera de este proyecto y sigue exactamente igual que hoy (ver nota en Contexto).
 
 En cada corrida, el orquestador despacha, en este **orden fijo y secuencial** (no en
 paralelo), un subagente por fase. El contenido de cada `SKILL.md` actual se migra casi
@@ -44,11 +52,10 @@ exclusión de `invite.ics`, cadencia de insistencia, etc. no cambian):
 3. **`goteo`** (Fase 3) — documentos nuevos de causas ya conocidas. Corre después de
    `smu` a propósito, para poder revisar en el mismo lote las causas recién registradas.
 4. **`agenda`** (Fases 4-6) — ofrecimiento a Román y disparo de `/minuta-laboral`.
-5. **`revision-audiencias`** — se autoevalúa: solo actúa si hoy es viernes.
 
 ### Por qué secuencial y no paralelo
 
-Las 5 fases comparten `registro_causas.json` y `registro_seguimiento.json`. Si dos
+Las 4 fases comparten `registro_causas.json` y `registro_seguimiento.json`. Si dos
 subagentes los escribieran al mismo tiempo, una escritura podría pisar a la otra. Además
 `goteo` depende de que `smu` ya haya registrado las causas nuevas de la corrida (Fase 1-2
 antes de Fase 3) — sin orden, un subagente podría revisar una causa que otro todavía no
@@ -65,10 +72,10 @@ completo.
 
 ## Panel de estado (HTML por correo)
 
-Al terminar los 5 subagentes (hayan actuado, no actuado, o fallado), el orquestador arma
+Al terminar los 4 subagentes (hayan actuado, no actuado, o fallado), el orquestador arma
 un correo HTML y lo envía a `nmunoz@gomezyriesco.cl`. Contenido:
 
-1. **Resumen de la corrida**: qué hizo cada una de las 5 fases esta vez. Ejemplos:
+1. **Resumen de la corrida**: qué hizo cada una de las 4 fases esta vez. Ejemplos:
    - "smu: 2 causas nuevas registradas — Pérez con Alvi M-XXX-2026, Soto con Rendic
      M-YYY-2026"
    - "goteo: 3 documentos guardados (2 en Pérez con Alvi, 1 en Soto con Rendic)"
@@ -130,15 +137,17 @@ agrega una **excepción acotada y explícita** solo para este panel:
 
 ## Migración
 
-1. Se implementa `gestion-causas-orquestador` y sus 5 subagentes, reutilizando el
+1. Se implementa `gestion-causas-orquestador` y sus 4 subagentes, reutilizando el
    contenido de cada `SKILL.md` actual.
 2. Se agrega `enviar_panel_estado` y la función de armado del HTML del panel.
 3. Se prueba en paralelo con las tareas antiguas **todavía activas** (para comparar
    resultados) antes de desactivarlas.
-4. Una vez validado, se desactivan (`enabled: false`, sin borrar) las 5 tareas antiguas.
+4. Una vez validado, se desactivan (`enabled: false`, sin borrar) las 4 tareas antiguas.
 
 ## Fuera de alcance
 
+- `revision-semanal-calendario-audiencias` no se toca: no comparte CLI ni registro con
+  `gestion_causas` (ver nota en Contexto), sigue como tarea independiente sin cambios.
 - `Automatizacion Informe Semanal` (Relok) y las tareas manuales/inactivas
   (`buscador-preunic`, `actualizar-informe-juicios`) no se tocan — son dominios aparte que
   no comparten registro ni CLI con `gestion_causas`.
