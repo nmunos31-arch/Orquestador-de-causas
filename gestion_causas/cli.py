@@ -473,10 +473,14 @@ def cmd_buscar_audiencia_por_rit(args) -> int:
 
 
 def cmd_panel_html(args) -> int:
+    if args.dry_run:
+        _imprimir_json({"simulado": True, "accion": "panel-html", "salida": args.salida})
+        return 0
     with open(args.resumen_json, "r", encoding="utf-8") as f:
         resumen = json.load(f)
     hoy = date.fromisoformat(args.hoy) if args.hoy else None
-    contenido = panel_mod.generar_panel_html(resumen, hoy=hoy)
+    ruta_registro = Path(args.ruta_registro) if args.ruta_registro else None
+    contenido = panel_mod.generar_panel_html(resumen, hoy=hoy, ruta_registro=ruta_registro)
     Path(args.salida).write_text(contenido, encoding="utf-8")
     _imprimir_json({"escrito": True, "ruta": args.salida})
     return 0
@@ -676,6 +680,7 @@ def construir_parser() -> argparse.ArgumentParser:
     p.add_argument("--resumen-json", required=True, help='Ruta a un JSON: [{"fase":.., "resultado":.., "error":..}, ...]')
     p.add_argument("--salida", required=True, help="Ruta donde escribir el HTML generado")
     p.add_argument("--hoy", default=None, help="Fecha AAAA-MM-DD a usar como 'hoy' (pruebas); por defecto hoy")
+    p.add_argument("--ruta-registro", default=None, help="Ruta alternativa al registro de causas (pruebas); por defecto el registro real")
     p.set_defaults(func=cmd_panel_html)
 
     p = sub.add_parser(
