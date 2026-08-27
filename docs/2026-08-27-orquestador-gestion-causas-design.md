@@ -83,12 +83,17 @@ un correo HTML y lo envía a `nmunoz@gomezyriesco.cl`. Contenido:
    - Cualquier fallo, con su mensaje de error, en su propia sub-sección.
 2. **Estado de cada causa activa**: RIT, empresa, demandante, una fase inferida a partir de
    los campos que **ya existen** en `registro_causas.json` (sin agregar campos nuevos al
-   registro):
-   - `tiene_demanda` → demanda guardada
-   - `ceco` presente / EERR reusado o registrado → prueba económica lista
-   - `aplica_ofrecimiento` → borrador de ofrecimiento dejado
-   - `aplica_minuta_laboral` → minuta generada
-   - `causa_cerrada` → cierre
+   registro), en este orden de prioridad (primera coincidencia gana):
+   - `causa_cerrada` → "Cerrada"
+   - `minuta_ejecutada` → "Minuta generada"
+   - `oferta_borrador_creado` → "Ofrecimiento enviado a Román"
+   - `tiene_demanda` → "Demanda guardada, en curso"
+   - ninguno de los anteriores → "Recién registrada"
+
+   (Implementado así en `panel.py::_fase_actual` — se descartó una fase intermedia de
+   "prueba económica lista" en base a `ceco`/EERR: agregaba una distinción que no se
+   traduce en una acción distinta para Nico, y `ceco` puede estar presente sin que eso
+   signifique nada sobre el avance del ofrecimiento o la minuta.)
    - Próxima fecha relevante: `fecha_audiencia`.
    - Alerta simple si una causa sigue abierta pero `ultima_actualizacion` lleva varios días
      sin cambios (umbral a definir en la implementación, ej. 7 días corridos).
