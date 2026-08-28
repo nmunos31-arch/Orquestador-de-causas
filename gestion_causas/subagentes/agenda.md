@@ -58,9 +58,21 @@ excluyen solas (no hay nada más que agendar). Si `total` es 0, termina con un r
 
 ## 2. Por cada causa activa, busca su audiencia en el calendario
 
+Antes de procesar la primera causa, revisa si existe
+`gestion_causas/cache_eventos_calendario.json` — lo genera el subagente `goteo`, que
+corre justo antes que vos en el orden fijo del orquestador, así que en una corrida normal
+ya está fresco. Si existe, vas a usarlo con `--desde-cache` en vez de golpear la API por
+cada causa; si no existe (ej. goteo falló antes de llegar a ese paso, o estás corriendo
+agenda de forma suelta fuera del orquestador), vas a usar la llamada en vivo de siempre,
+sin `--desde-cache` — el resultado es idéntico en ambos casos, solo cambia si se repite la
+llamada a la API por cada causa o no.
+
 ```
-python -m gestion_causas.cli buscar-audiencia-por-rit --rit "<rit>"
+python -m gestion_causas.cli buscar-audiencia-por-rit --rit "<rit>" --desde-cache "gestion_causas/cache_eventos_calendario.json"
 ```
+(si el archivo no existe, omití `--desde-cache` y corré el comando tal cual, sin ese
+flag — cae de vuelta al comportamiento de siempre)
+
 Busca en el calendario de `nmunoz@gomezyriesco.cl` (vía API, ventana de 200 días hacia
 adelante desde hoy por defecto — usa `--dias-adelante` si necesitas más rango) los
 eventos que mencionan ese RIT, y devuelve fecha + resumen del título, ordenados por fecha
