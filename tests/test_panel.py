@@ -58,6 +58,28 @@ class TestEstadoCausas:
         filas = estado_causas(hoy=date(2026, 8, 27), ruta=ruta)
         assert filas[0]["fase"] == "Minuta generada"
 
+    def test_causa_con_acuerdo_pendiente_pago(self, tmp_path):
+        ruta = _escribir_registro(tmp_path, {
+            "M-5-2026": {
+                "rit": "M-5-2026", "empresa": "Alvi", "demandante": "Soto",
+                "tiene_demanda": True, "estado_acuerdo": "pendiente_pago",
+                "ultima_actualizacion": "2026-08-27T10:00:00",
+            }
+        })
+        filas = estado_causas(hoy=date(2026, 8, 27), ruta=ruta)
+        assert filas[0]["fase"] == "Acuerdo pendiente de pago"
+
+    def test_causa_con_pago_recibido_pendiente_confirmar(self, tmp_path):
+        ruta = _escribir_registro(tmp_path, {
+            "M-6-2026": {
+                "rit": "M-6-2026", "empresa": "Alvi", "demandante": "Soto",
+                "tiene_demanda": True, "estado_acuerdo": "pago_recibido_pendiente_confirmar",
+                "ultima_actualizacion": "2026-08-27T10:00:00",
+            }
+        })
+        filas = estado_causas(hoy=date(2026, 8, 27), ruta=ruta)
+        assert filas[0]["fase"] == "Pago recibido, pendiente confirmar cierre"
+
     def test_sin_ultima_actualizacion_da_none(self, tmp_path):
         ruta = _escribir_registro(tmp_path, {
             "M-8-2026": {"rit": "M-8-2026", "empresa": "Alvi", "demandante": "Soto"},

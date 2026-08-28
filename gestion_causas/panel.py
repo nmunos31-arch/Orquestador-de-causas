@@ -28,6 +28,10 @@ def _fase_actual(causa: dict) -> str:
     propio, se recalcula siempre desde cero."""
     if causa.get("causa_cerrada"):
         return "Cerrada"
+    if causa.get("estado_acuerdo") == "pago_recibido_pendiente_confirmar":
+        return "Pago recibido, pendiente confirmar cierre"
+    if causa.get("estado_acuerdo") == "pendiente_pago":
+        return "Acuerdo pendiente de pago"
     if causa.get("minuta_ejecutada"):
         return "Minuta generada"
     if causa.get("oferta_borrador_creado"):
@@ -104,6 +108,8 @@ _COLOR_FASE_CAUSA = {
     "Recien registrada": ("#92400e", "#fef3c7"),
     "Demanda guardada, en curso": ("#075985", "#e0f2fe"),
     "Ofrecimiento enviado a Roman": ("#6d28d9", "#ede9fe"),
+    "Acuerdo pendiente de pago": ("#9a3412", "#ffedd5"),
+    "Pago recibido, pendiente confirmar cierre": ("#0f766e", "#ccfbf1"),
     "Minuta generada": ("#065f46", "#d1fae5"),
     "Cerrada": ("#4b5563", "#f3f4f6"),
 }
