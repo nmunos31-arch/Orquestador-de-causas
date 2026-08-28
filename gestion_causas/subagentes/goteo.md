@@ -135,7 +135,10 @@ python -m gestion_causas.cli cache-eventos-calendario
 Guarda la `ruta` que devuelve — la vas a pasar como `--desde-cache <ruta>` en el paso 2a
 de **todas** las causas de esta corrida (por defecto ya es
 `gestion_causas/cache_eventos_calendario.json`, así que si no le pasaste `--ruta` propia,
-podés usar esa ruta fija directamente sin necesidad de leerla de la respuesta).
+podés usar esa ruta fija directamente sin necesidad de leerla de la respuesta). Si este
+comando falla (error de red, cuota, etc.), no reintentes ni improvises un fallback: detén
+la corrida en este punto y reporta el error tal cual en el resumen final (mismo criterio
+que la sección 0 para el caso del token colgado).
 
 ## 2. Por cada causa activa
 
