@@ -127,6 +127,16 @@ o cuya audiencia fue hace 60 días o menos (la prueba puede seguir llegando un t
 después de la audiencia, ej. por reprogramación). Si `total` es 0, termina con un resumen
 de "sin causas activas para revisar".
 
+Después, trae el calendario **una sola vez** para toda la corrida (en vez de que cada
+causa dispare su propia llamada a la API en el paso 2a):
+```
+python -m gestion_causas.cli cache-eventos-calendario
+```
+Guarda la `ruta` que devuelve — la vas a pasar como `--desde-cache <ruta>` en el paso 2a
+de **todas** las causas de esta corrida (por defecto ya es
+`gestion_causas/cache_eventos_calendario.json`, así que si no le pasaste `--ruta` propia,
+podés usar esa ruta fija directamente sin necesidad de leerla de la respuesta).
+
 ## 2. Por cada causa activa
 
 Antes de procesar la primera causa, determina la fecha de hoy (zona horaria de Chile) y
@@ -135,9 +145,10 @@ de "es lunes" y para la fecha que se guarda en `goteo_ultima_revision`).
 
 a. **Determina la carpeta destino de los documentos**, según el tipo de la próxima
    audiencia (mismo mecanismo que usa `gestion-causas-agenda` paso 2 — calendario de
-   `nmunoz@gomezyriesco.cl` en solo lectura):
+   `nmunoz@gomezyriesco.cl` en solo lectura), usando el cache que ya trajiste en el paso 1
+   (no vuelvas a llamar a la API por cada causa):
    ```
-   python -m gestion_causas.cli buscar-audiencia-por-rit --rit "<rit>"
+   python -m gestion_causas.cli buscar-audiencia-por-rit --rit "<rit>" --desde-cache "<ruta del cache del paso 1>"
    ```
    Quédate con el primer evento futuro o de hoy. Del `resumen` del evento, determina el
    tipo:
