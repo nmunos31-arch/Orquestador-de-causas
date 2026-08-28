@@ -18,6 +18,12 @@ después. Por eso esta tarea no busca por query/etiqueta, sino por el RIT de cad
 documentos reales muchas veces llegan en una cadena **distinta**, reenviada ("RV: ...")
 por la persona de RR.HH./legal de la empresa, y esa cadena Fase 1 nunca la ve.
 
+**Filtro incremental (2026-08-28):** para no re-escanear correos de causas sin
+novedades en cada una de las 3 corridas diarias, el paso 2b usa `goteo_ultima_revision`
+(fecha `AAAA-MM-DD` guardada en el registro de cada causa) para acotar la búsqueda a
+mail nuevo desde la corrida anterior — ver el paso 2b y 2h más abajo. Los lunes se hace
+igual el escaneo completo de siempre (sin el filtro), como red de seguridad semanal.
+
 **Filtro de remitente confiable (2026-08-13, actualizado 2026-08-17):** de todos los
 adjuntos que aparezcan en cualquier hilo relacionado con la causa, **solo se guardan los
 que vienen de un mensaje enviado desde una dirección que termine en**:
@@ -149,12 +155,30 @@ a. **Determina la carpeta destino de los documentos**, según el tipo de la pró
 
 b. **Busca todos los hilos relacionados con el RIT**, no solo el `thread_id` original que
    guardó Fase 1 (los documentos reales suelen llegar en una cadena "RV:" aparte, abierta
-   por RR.HH./legal de la empresa — ver nota de dominios más arriba):
+   por RR.HH./legal de la empresa — ver nota de dominios más arriba).
+
+   **Si hoy es lunes, o la causa no tiene `goteo_ultima_revision` en su registro**
+   (revísalo con `obtener-causa --rit "<rit>"` — primera vez que el goteo la revisa):
+   escaneo completo, igual que siempre:
    ```
    python -m gestion_causas.cli buscar-hilos --query "<rit>"
    ```
-   Incluye el `thread_id` guardado en el registro de la causa aunque no aparezca en esta
-   búsqueda (por si acaso). Si un hilo encontrado claramente no tiene que ver con la causa
+   Incluye también el `thread_id` guardado en el registro de la causa aunque no aparezca
+   en esta búsqueda (por si acaso).
+
+   **Cualquier otro día**, con `goteo_ultima_revision` ya registrada: acota la búsqueda a
+   mail nuevo desde la corrida anterior, restando 1 día a `goteo_ultima_revision` como
+   colchón (el operador `after:` de Gmail filtra por día completo, no por hora, así que
+   sin el colchón se podría perder algo llegado el mismo día después de que goteo ya
+   pasó):
+   ```
+   python -m gestion_causas.cli buscar-hilos --query "<rit> after:<goteo_ultima_revision menos 1 día, formato AAAA/MM/DD>"
+   ```
+   No hace falta forzar además la inclusión del `thread_id` original en este caso — si
+   llegó mail nuevo ahí, el mismo filtro `after:` ya lo encuentra (el RIT queda en el
+   asunto de todos los mensajes de esa cadena, incluidas las réplicas).
+
+   En ambos casos: si un hilo encontrado claramente no tiene que ver con la causa
    (coincidencia de texto casual), descártalo — usa criterio, no proceses todo a ciegas.
    Esto incluye los hilos "Provisiones demanda laborales [mes]", "Informe de provisión
    [mes]" / "INFORME PROVISIÓN [mes]" y "Risgo causas estado sentencias" / "Riesgo causas
@@ -167,6 +191,33 @@ c. Para cada hilo relevante (el original + los que encontraste en 2b), trae todo
    ```
    python -m gestion_causas.cli leer-hilo --thread-id <thread_id>
    ```
+
+c2. **Detecta acuerdo alcanzado y pago recibido**, con el mismo contenido que ya
+    trajiste en el paso c (no es una lectura adicional, es criterio sobre lo que ya
+    leíste):
+
+    - Si la causa **no** tiene todavía `estado_acuerdo` en su registro (revísalo con
+      `obtener-causa --rit "<rit>"`) y el contenido de algún hilo confirma que se
+      **alcanzó y aprobó** un avenimiento/conciliación/acuerdo — no una negociación en
+      curso ni una oferta, hace falta confirmación de que el acuerdo ya se cerró (ej.
+      "acta de conciliación", "avenimiento aprobado", "se aprobó el acuerdo por $X",
+      "conciliación total"):
+      ```
+      python -m gestion_causas.cli registrar-causa --rit "<rit>" --datos-json "<json con {\"estado_acuerdo\": \"pendiente_pago\"}>"
+      ```
+      Anota en la bitácora ("Acuerdo alcanzado, pendiente de pago") y menciónalo en el
+      resumen final.
+
+    - Si la causa **ya** tiene `estado_acuerdo: "pendiente_pago"` y algún hilo (el mismo
+      u otro) trae un comprobante de pago/transferencia asociado a ese acuerdo:
+      guárdalo como cualquier adjunto de este paso (mismas reglas de dominio confiable y
+      de-dupe del paso e más abajo — no hace falta un mecanismo nuevo), y luego:
+      ```
+      python -m gestion_causas.cli registrar-causa --rit "<rit>" --datos-json "<json con {\"estado_acuerdo\": \"pago_recibido_pendiente_confirmar\"}>"
+      ```
+      Anota en la bitácora ("Comprobante de pago recibido, pendiente que Nico confirme
+      el cierre") y destácalo en el resumen final — **no** marques `causa_cerrada`, eso
+      lo decide Nico a mano.
 
 d. Lista lo que ya está guardado en la carpeta destino:
    ```
@@ -221,12 +272,20 @@ g. Si guardaste al menos un documento nuevo, anota en la bitácora (menciona si 
    Si no había nada nuevo, no hace falta anotar nada para esa causa (evita ruido en la
    bitácora en cada corrida sin novedades).
 
+h. **Guarda la fecha de esta revisión**, siempre (haya habido novedades o no) — es lo
+   que permite que la próxima corrida use el filtro incremental del paso 2b:
+   ```
+   python -m gestion_causas.cli registrar-causa --rit "<rit>" --datos-json "<json con {\"goteo_ultima_revision\": \"<fecha de hoy AAAA-MM-DD>\"}>"
+   ```
+
 ## 3. Resumen final
 
 Tu **último mensaje** de esta ejecución es el resumen que el orquestador va a copiar tal
 cual a la sección "Fase goteo" del panel de estado. Entrega un resumen breve: cuántas
-causas se revisaron, cuántas tenían documentos nuevos
-(con el RIT y los nombres de los documentos, indicando cuáles se guardaron en la
-subcarpeta "Exhibición de documentos" por tener audiencia de juicio próxima), y cuántos
-de esos documentos se identificaron como EERR y quedaron disponibles para reuso futuro.
-Si no hubo novedades en ninguna causa, dilo en una sola línea.
+causas se revisaron (y si hoy fue rescan completo de lunes o revisión incremental),
+cuántas tenían documentos nuevos (con el RIT y los nombres de los documentos, indicando
+cuáles se guardaron en la subcarpeta "Exhibición de documentos" por tener audiencia de
+juicio próxima), cuántos de esos documentos se identificaron como EERR y quedaron
+disponibles para reuso futuro, cuántas causas pasaron a "acuerdo pendiente de pago" y
+cuántas a "pago recibido, pendiente confirmar cierre" (con su RIT, para que Nico las
+revise). Si no hubo novedades en ninguna causa, dilo en una sola línea.
