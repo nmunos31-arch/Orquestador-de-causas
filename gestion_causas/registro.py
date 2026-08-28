@@ -121,10 +121,12 @@ def causas_para_goteo(
     """Causas que conviene seguir revisando por documentos nuevos (Fase 3):
     las que todavía no tienen fecha de audiencia registrada, o cuya audiencia
     fue hace `dias_ventana_post_audiencia` días o menos (la prueba puede
-    seguir llegando un tiempo después, ej. por una reprogramación). Acota el
-    barrido para que no crezca sin límite a medida que se acumulan causas
-    viejas ya cerradas. Las causas con `causa_cerrada: true` se excluyen
-    siempre, sin importar si tienen fecha de audiencia.
+    seguir llegando un tiempo después, ej. por una reprogramación), o cuyo
+    `estado_acuerdo` es "pendiente_pago" o "pago_recibido_pendiente_confirmar"
+    (el pago de un acuerdo puede demorar meses, más allá de la ventana normal
+    post-audiencia). Acota el barrido para que no crezca sin límite a medida
+    que se acumulan causas viejas ya cerradas. Las causas con
+    `causa_cerrada: true` se excluyen siempre, sin importar lo anterior.
 
     `hoy` es inyectable para tests; por defecto usa la fecha actual.
     Devuelve una lista de entradas del registro (dicts), cada una con su
@@ -138,6 +140,9 @@ def causas_para_goteo(
     resultado = []
     for entrada in cargar_registro_causas(ruta).values():
         if entrada.get("causa_cerrada"):
+            continue
+        if entrada.get("estado_acuerdo") in ("pendiente_pago", "pago_recibido_pendiente_confirmar"):
+            resultado.append(entrada)
             continue
         fecha_audiencia = entrada.get("fecha_audiencia")
         if not fecha_audiencia:

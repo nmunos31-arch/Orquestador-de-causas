@@ -175,6 +175,30 @@ class TestCausasParaGoteo:
         activas = causas_para_goteo(hoy=date(2026, 8, 12), dias_ventana_post_audiencia=60, ruta=ruta)
         assert len(activas) == 0
 
+    def test_incluye_causa_con_acuerdo_pendiente_pago_aunque_audiencia_muy_antigua(self, tmp_path):
+        ruta = tmp_path / "registro_causas.json"
+        registrar_causa(
+            "M-1-2026",
+            {"fecha_audiencia": "2026-01-01", "estado_acuerdo": "pendiente_pago"},
+            ruta,
+        )  # audiencia muy pasada, pero con acuerdo pendiente de pago
+
+        activas = causas_para_goteo(hoy=date(2026, 8, 12), dias_ventana_post_audiencia=60, ruta=ruta)
+        assert len(activas) == 1
+        assert activas[0]["rit"] == "M-1-2026"
+
+    def test_incluye_causa_con_pago_recibido_pendiente_confirmar_aunque_audiencia_muy_antigua(self, tmp_path):
+        ruta = tmp_path / "registro_causas.json"
+        registrar_causa(
+            "M-2-2026",
+            {"fecha_audiencia": "2026-01-01", "estado_acuerdo": "pago_recibido_pendiente_confirmar"},
+            ruta,
+        )
+
+        activas = causas_para_goteo(hoy=date(2026, 8, 12), dias_ventana_post_audiencia=60, ruta=ruta)
+        assert len(activas) == 1
+        assert activas[0]["rit"] == "M-2-2026"
+
     def test_excluye_causa_cerrada_aunque_no_tenga_fecha_audiencia(self, tmp_path):
         ruta = tmp_path / "registro_causas.json"
         registrar_causa("M-1-2026", {"causa_cerrada": True}, ruta)
