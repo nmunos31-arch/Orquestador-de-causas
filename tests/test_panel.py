@@ -116,7 +116,7 @@ class TestGenerarPanelHtml:
             {"fase": "smu", "resultado": "2 causas nuevas", "error": None},
         ]
         contenido = generar_panel_html(resumen, hoy=date(2026, 8, 27), ruta_registro=ruta)
-        assert "calendario" in contenido
+        assert "Calendario" in contenido
         assert "No corresponde hoy" in contenido
         assert "2 causas nuevas" in contenido
 
@@ -147,7 +147,7 @@ class TestGenerarPanelHtml:
         })
         contenido = generar_panel_html([], hoy=date(2026, 8, 27), ruta_registro=ruta)
         assert "M-1-2026" in contenido
-        assert "2026-09-10" in contenido
+        assert "10-09-2026" in contenido
 
     def test_sin_causas_activas_no_falla(self, tmp_path):
         ruta = _escribir_registro(tmp_path, {})

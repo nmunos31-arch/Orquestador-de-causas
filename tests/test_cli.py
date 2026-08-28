@@ -202,7 +202,7 @@ class TestPanel:
         salida = json.loads(capsys.readouterr().out)
         assert salida["escrito"] is True
         assert salida_html.exists()
-        assert "smu" in salida_html.read_text(encoding="utf-8")
+        assert "sin novedades" in salida_html.read_text(encoding="utf-8")
 
     def test_panel_html_dry_run_no_escribe_en_disco(self, tmp_path, capsys):
         resumen_json = tmp_path / "resumen.json"

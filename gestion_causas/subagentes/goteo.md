@@ -90,6 +90,20 @@ Toda la parte mecánica se hace con el CLI `gestion_causas.cli`, corrido con
 Bash/PowerShell desde `Actualizador de informes` como directorio de trabajo:
 `python -m gestion_causas.cli <subcomando> ...`.
 
+**Regla de ejecución obligatoria — nada de scripts propios ni procesos en background.**
+Procesa las causas activas **una por una, dentro de tu propio turno**, con llamadas
+directas y de corta duración al CLI (`python -m gestion_causas.cli <subcomando> ...`,
+cada una termina y devuelve su resultado al toque) — exactamente como hacen
+`gestion-causas-smu` y `gestion-causas-agenda`, que no tienen este problema. **No**
+escribas un script Python (u otro) que reimplemente este loop, **no** lo lances con
+`Bash run_in_background`, y **no** uses `Monitor` para esperarlo. Confirmado en la
+corrida del 2026-08-27: un runner casero lanzado así se cortó dos veces sin terminar
+ninguna causa, porque el proceso en background no sobrevive a la frontera en que tu
+turno se suspende (p. ej. mientras esperás una notificación) — el orquestador cree que
+terminaste y sigue adelante, y el proceso queda huérfano y se mata. Si 27+ causas activas
+parecen demasiado para un turno, no importa: se procesan igual, una por una — nunca con
+un proceso de fondo que quede corriendo para consultarlo después.
+
 ## 0. Prerrequisito: token autorizado
 
 Igual que en `gestion-causas-smu`: si algún comando del CLI se queda esperando un login
