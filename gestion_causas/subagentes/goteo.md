@@ -129,6 +129,10 @@ de "sin causas activas para revisar".
 
 ## 2. Por cada causa activa
 
+Antes de procesar la primera causa, determina la fecha de hoy (zona horaria de Chile) y
+el día de la semana — la vas a necesitar en los pasos b y h de cada causa (para el check
+de "es lunes" y para la fecha que se guarda en `goteo_ultima_revision`).
+
 a. **Determina la carpeta destino de los documentos**, según el tipo de la próxima
    audiencia (mismo mecanismo que usa `gestion-causas-agenda` paso 2 — calendario de
    `nmunoz@gomezyriesco.cl` en solo lectura):
@@ -209,15 +213,32 @@ c2. **Detecta acuerdo alcanzado y pago recibido**, con el mismo contenido que ya
       resumen final.
 
     - Si la causa **ya** tiene `estado_acuerdo: "pendiente_pago"` y algún hilo (el mismo
-      u otro) trae un comprobante de pago/transferencia asociado a ese acuerdo:
-      guárdalo como cualquier adjunto de este paso (mismas reglas de dominio confiable y
-      de-dupe del paso e más abajo — no hace falta un mecanismo nuevo), y luego:
+      u otro) trae un comprobante de pago/transferencia asociado a ese acuerdo, primero
+      revisa si el remitente de ese mensaje puntual es un dominio de la lista de
+      confianza (`@unimarc.cl`, `@super10.cl`, `@alvi.cl`, `@sb.cl`, `@mayorista10.cl`,
+      `@smu.cl`, `@divisionlogistica.cl` — ver nota de dominios más arriba). Esa lista se
+      armó para documentos de prueba de RR.HH./legal, así que un comprobante de pago
+      puede llegar perfectamente de un dominio distinto (tesorería/finanzas, el banco,
+      etc.) — no asumas que siempre calza:
+      - **Si el remitente SÍ es de un dominio de confianza:** guárdalo como cualquier
+        adjunto de este paso (mismas reglas de de-dupe del paso e más abajo — no hace
+        falta un mecanismo nuevo).
+      - **Si el remitente NO es de un dominio de confianza:** el comprobante se detectó
+        pero el adjunto **no** se guarda automáticamente (queda fuera de la lista de
+        confianza) — anótalo igual en el resumen final (ej. "comprobante de pago visto en
+        el hilo pero no descargado automáticamente por venir de un dominio no confiable
+        `<dominio>` — revisar a mano y guardar si corresponde"), para que Nico no asuma
+        que ya quedó guardado.
+
+      En **ambos** casos (se haya podido guardar el adjunto o no), lo relevante es que el
+      pago se confirmó, así que igual actualiza el estado:
       ```
       python -m gestion_causas.cli registrar-causa --rit "<rit>" --datos-json "<json con {\"estado_acuerdo\": \"pago_recibido_pendiente_confirmar\"}>"
       ```
       Anota en la bitácora ("Comprobante de pago recibido, pendiente que Nico confirme
-      el cierre") y destácalo en el resumen final — **no** marques `causa_cerrada`, eso
-      lo decide Nico a mano.
+      el cierre" — si no se pudo guardar el adjunto, dilo también en la bitácora) y
+      destácalo en el resumen final — **no** marques `causa_cerrada`, eso lo decide Nico
+      a mano.
 
 d. Lista lo que ya está guardado en la carpeta destino:
    ```
