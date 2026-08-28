@@ -4,6 +4,7 @@ la API de Calendar, sin red (servicio simulado con stubs).
 """
 
 import inspect
+import json
 from datetime import date
 
 from gestion_causas import calendar_client
@@ -104,6 +105,49 @@ class TestBuscarAudienciaPorRit:
         encontrados = calendar_client.buscar_audiencia_por_rit("M-643-2026", servicio=servicio)
         assert len(encontrados) == 1
         assert encontrados[0]["fecha"] == date(2026, 8, 21)
+
+
+class TestCacheEventos:
+    def test_guardar_cache_eventos_escribe_archivo_con_total_correcto(self, tmp_path):
+        servicio = _ServicioCalendarFalso([
+            {"items": [
+                _evento("Audiencia Unica M-643-2026 Iturriaga con Rendic", date_time="2026-08-21T10:40:00-04:00"),
+                _evento("Reunion equipo semanal", date_time="2026-08-25T09:00:00-04:00"),
+            ]},
+        ])
+        ruta = tmp_path / "cache.json"
+
+        resultado = calendar_client.guardar_cache_eventos(ruta=ruta, servicio=servicio)
+
+        assert resultado == {"total": 2, "ruta": str(ruta)}
+        contenido = json.loads(ruta.read_text(encoding="utf-8"))
+        assert len(contenido["eventos"]) == 2
+        assert contenido["eventos"][0] == {
+            "fecha": "2026-08-21", "resumen": "Audiencia Unica M-643-2026 Iturriaga con Rendic",
+        }
+        assert "generado_en" in contenido
+
+    def test_buscar_audiencia_por_rit_desde_cache_filtra_por_rit(self, tmp_path):
+        ruta = tmp_path / "cache.json"
+        ruta.write_text(json.dumps({
+            "generado_en": "2026-08-28T09:00:00",
+            "eventos": [
+                {"fecha": "2026-08-21", "resumen": "Audiencia Unica M-643-2026 Iturriaga con Rendic"},
+                {"fecha": "2026-08-25", "resumen": "Reunion equipo semanal"},
+            ],
+        }), encoding="utf-8")
+
+        encontrados = calendar_client.buscar_audiencia_por_rit_desde_cache("M-643-2026", ruta=ruta)
+
+        assert len(encontrados) == 1
+        assert encontrados[0]["fecha"] == date(2026, 8, 21)
+
+    def test_buscar_audiencia_por_rit_desde_cache_falla_si_no_existe_el_archivo(self, tmp_path):
+        import pytest
+
+        ruta = tmp_path / "no-existe.json"
+        with pytest.raises(FileNotFoundError):
+            calendar_client.buscar_audiencia_por_rit_desde_cache("M-1-2026", ruta=ruta)
 
 
 class TestDetectarEmpresa:

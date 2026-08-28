@@ -19,6 +19,7 @@ expone ninguna función que cree, modifique o borre eventos — ver el plan del
 proyecto: la automatización solo lee el calendario, nunca lo toca.
 """
 
+import json
 import sys
 import unicodedata
 from datetime import date, datetime, timedelta
@@ -65,6 +66,8 @@ CLIENT_SECRET_PATH = str(
 TOKEN_PATH = str(Path(__file__).parent / "token_calendar_trabajo.json")
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+
+RUTA_CACHE_EVENTOS_CALENDARIO = Path(__file__).parent / "cache_eventos_calendario.json"
 
 
 def log(msg):
@@ -162,6 +165,41 @@ def listar_eventos(desde: date, hasta: date, servicio=None) -> list[dict]:
             break
 
     return eventos
+
+
+def guardar_cache_eventos(
+    ruta: Path = RUTA_CACHE_EVENTOS_CALENDARIO, dias_adelante: int = 200, servicio=None
+) -> dict:
+    """Trae TODOS los eventos del calendario primario en el rango de
+    `dias_adelante` días desde hoy (misma consulta que hace
+    `buscar_audiencia_por_rit` por cada RIT) y los guarda en `ruta` como JSON.
+    Existe para que una corrida que consulta muchas causas seguidas (goteo,
+    agenda) traiga el calendario una sola vez en vez de una vez por causa —
+    ver `buscar_audiencia_por_rit_desde_cache`. Devuelve {"total", "ruta"}."""
+    hoy = date.today()
+    eventos = listar_eventos(hoy, hoy + timedelta(days=dias_adelante), servicio=servicio)
+    contenido = {
+        "generado_en": datetime.now().isoformat(),
+        "eventos": [{"fecha": str(e["fecha"]), "resumen": e["resumen"]} for e in eventos],
+    }
+    ruta = Path(ruta)
+    ruta.write_text(json.dumps(contenido, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"total": len(eventos), "ruta": str(ruta)}
+
+
+def buscar_audiencia_por_rit_desde_cache(rit: str, ruta: Path = RUTA_CACHE_EVENTOS_CALENDARIO) -> list[dict]:
+    """Igual que `buscar_audiencia_por_rit` pero filtrando eventos ya
+    guardados en `ruta` (ver `guardar_cache_eventos`) en vez de llamar a la
+    API — para no repetir la misma consulta de 200 días por cada causa
+    dentro de una misma corrida. Lanza FileNotFoundError si `ruta` no
+    existe (el llamador decide si cae de vuelta a `buscar_audiencia_por_rit`
+    en ese caso)."""
+    contenido = json.loads(Path(ruta).read_text(encoding="utf-8"))
+    eventos = [
+        {"fecha": datetime.strptime(e["fecha"], "%Y-%m-%d").date(), "resumen": e["resumen"]}
+        for e in contenido["eventos"]
+    ]
+    return buscar_eventos_por_rit(eventos, rit)
 
 
 def eventos_empresas_interes(desde: date, hasta: date, servicio=None) -> list[dict]:
