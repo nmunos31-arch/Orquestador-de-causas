@@ -73,10 +73,24 @@ python -m gestion_causas.cli buscar-audiencia-por-rit --rit "<rit>" --desde-cach
 (si el archivo no existe, omití `--desde-cache` y corré el comando tal cual, sin ese
 flag — cae de vuelta al comportamiento de siempre)
 
-Busca en el calendario de `nmunoz@gomezyriesco.cl` (vía API, ventana de 200 días hacia
-adelante desde hoy por defecto — usa `--dias-adelante` si necesitas más rango) los
-eventos que mencionan ese RIT, y devuelve fecha + resumen del título, ordenados por fecha
-ascendente. Quédate con el **primero futuro o de hoy** (si todos son pasados, no hay
+Si el comando con `--desde-cache` falla por algo que **no** es "no encuentra el
+archivo" (por ejemplo un error de formato/JSON — puede pasar si `goteo` quedó
+interrumpido a mitad de generar el cache), tratalo igual que si el archivo no existiera:
+para esa causa puntual, reintenta sin `--desde-cache` (la llamada en vivo de siempre) y
+seguí adelante. No hace falta detener la corrida ni avisar a las demás causas — es un
+fallback por causa, no un fallo general.
+
+Busca en el calendario de `nmunoz@gomezyriesco.cl` (vía API cuando no usás
+`--desde-cache`, ventana de 200 días hacia adelante desde hoy por defecto — usa
+`--dias-adelante` si necesitas más rango) los eventos que mencionan ese RIT, y devuelve
+fecha + resumen del título, ordenados por fecha ascendente. **`--dias-adelante` solo
+tiene efecto en la llamada en vivo (sin `--desde-cache`)**: combinado con `--desde-cache`
+se ignora en silencio, porque la ventana ya quedó fija en el cache cuando `goteo` lo
+generó (también 200 días por defecto). Si una causa puntual necesita más rango que el que
+cubre el cache (raro — solo relevante si la audiencia está agendada a más de ~200 días),
+saltate `--desde-cache` para esa causa y llamá directo a
+`buscar-audiencia-por-rit --rit "<rit>" --dias-adelante <N>` (en vivo).
+Quédate con el **primero futuro o de hoy** (si todos son pasados, no hay
 audiencia próxima — sáltala). **Usa esta fecha como fuente de verdad**, no el campo
 `fecha_audiencia` guardado en el registro (que viene del cuadro del correo y puede quedar
 desactualizado si se reprogramó). Si `total` es 0, sáltala y anótalo en el resumen — nada
