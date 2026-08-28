@@ -464,9 +464,20 @@ def cmd_eventos_calendario(args) -> int:
     return 0
 
 
+def cmd_cache_eventos_calendario(args) -> int:
+    if args.dry_run:
+        _imprimir_json({"simulado": True, "accion": "cache-eventos-calendario", "ruta": args.ruta})
+        return 0
+    resultado = calendar_client.guardar_cache_eventos(ruta=args.ruta, dias_adelante=args.dias_adelante)
+    _imprimir_json(resultado)
+    return 0
+
+
 def cmd_buscar_audiencia_por_rit(args) -> int:
     if args.ics:
         eventos = ics_mod.buscar_audiencia_por_rit(args.ics, args.rit)
+    elif args.desde_cache:
+        eventos = calendar_client.buscar_audiencia_por_rit_desde_cache(args.rit, args.desde_cache)
     else:
         eventos = calendar_client.buscar_audiencia_por_rit(args.rit, dias_adelante=args.dias_adelante)
     _imprimir_json({"rit": args.rit, "eventos": eventos, "total": len(eventos)})
@@ -679,12 +690,21 @@ def construir_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_eventos_calendario)
 
     p = sub.add_parser(
+        "cache-eventos-calendario",
+        help="Trae TODOS los eventos del calendario (rango de 200 dias) UNA vez y los guarda en un archivo, para que buscar-audiencia-por-rit --desde-cache no repita la llamada a la API por cada causa",
+    )
+    p.add_argument("--ruta", default=str(calendar_client.RUTA_CACHE_EVENTOS_CALENDARIO))
+    p.add_argument("--dias-adelante", type=int, default=200)
+    p.set_defaults(func=cmd_cache_eventos_calendario)
+
+    p = sub.add_parser(
         "buscar-audiencia-por-rit",
-        help="Fase 4: busca eventos que mencionan este RIT en el calendario de nmunoz@gomezyriesco.cl (API directa; --ics fuerza el modo antiguo por archivo exportado)",
+        help="Fase 4: busca eventos que mencionan este RIT en el calendario de nmunoz@gomezyriesco.cl (API directa; --desde-cache usa un archivo generado por cache-eventos-calendario; --ics fuerza el modo antiguo por archivo exportado)",
     )
     p.add_argument("--rit", required=True)
     p.add_argument("--dias-adelante", type=int, default=200, help="Ventana de búsqueda hacia adelante desde hoy (API)")
     p.add_argument("--ics", default=None, help="Ruta a un .ics exportado a mano; si se indica, se usa en vez de la API")
+    p.add_argument("--desde-cache", default=None, help="Ruta a un cache generado por cache-eventos-calendario; si se indica, filtra ese archivo en vez de llamar a la API")
     p.set_defaults(func=cmd_buscar_audiencia_por_rit)
 
     p = sub.add_parser(

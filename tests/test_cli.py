@@ -24,6 +24,7 @@ class TestParser:
             "listar-carpeta", "causas-activas", "dias-habiles-antes",
             "dias-corridos-antes", "obtener-causa", "parece-eerr",
             "buscar-audiencia-por-rit", "diagnostico-calendario", "eventos-calendario",
+            "cache-eventos-calendario",
             "verificar-borradores-pendientes",
             "hilos-sin-respuesta", "puede-insistir", "registrar-aviso", "dias-habiles-entre",
             "panel-html", "enviar-panel", "diagnostico-personal",
@@ -54,6 +55,26 @@ class TestSubcomandosSinRed:
         assert codigo == 0
         salida = json.loads(capsys.readouterr().out)
         assert salida["simulado"] is True
+
+    def test_cache_eventos_calendario_dry_run_no_llama_a_la_api(self, capsys):
+        codigo = main(["--dry-run", "cache-eventos-calendario"])
+        assert codigo == 0
+        salida = json.loads(capsys.readouterr().out)
+        assert salida["simulado"] is True
+
+    def test_buscar_audiencia_por_rit_desde_cache_no_llama_a_la_api(self, tmp_path, capsys):
+        ruta = tmp_path / "cache.json"
+        ruta.write_text(json.dumps({
+            "generado_en": "2026-08-28T09:00:00",
+            "eventos": [{"fecha": "2026-08-21", "resumen": "Audiencia Unica M-643-2026 Iturriaga"}],
+        }), encoding="utf-8")
+
+        codigo = main(["buscar-audiencia-por-rit", "--rit", "M-643-2026", "--desde-cache", str(ruta)])
+
+        assert codigo == 0
+        salida = json.loads(capsys.readouterr().out)
+        assert salida["total"] == 1
+        assert salida["eventos"][0]["fecha"] == "2026-08-21"
 
     def test_comando_desconocido_falla_argparse(self):
         import pytest
