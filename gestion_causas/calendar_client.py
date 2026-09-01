@@ -74,7 +74,7 @@ def log(msg):
     print(f"[calendar_client] {msg}", file=sys.stderr)
 
 
-def obtener_credenciales():
+def obtener_credenciales(permitir_login: bool = True):
     """Mismo patrón que gmail_client.obtener_credenciales()."""
     from google.auth.exceptions import RefreshError
     from google.auth.transport.requests import Request
@@ -95,6 +95,16 @@ def obtener_credenciales():
                 log(f"El token guardado ya no sirve ({e}); pidiendo login de nuevo...")
 
         if necesita_login:
+            if not permitir_login:
+                # Corrida desatendida (ver contexto-corrida): el flujo de
+                # InstalledAppFlow abre un navegador y NUNCA vuelve si no hay
+                # nadie para completarlo, asi que se falla rapido en vez de
+                # colgar la tarea programada.
+                raise RuntimeError(
+                    "El token de Calendar de trabajo (nmunoz@gomezyriesco.cl) no existe o ya no sirve, y se pidio "
+                    "no abrir el login interactivo. Corre "
+                    "`python -m gestion_causas.cli diagnostico-calendario` una vez a mano para autorizarlo."
+                )
             if not Path(CLIENT_SECRET_PATH).exists():
                 sys.exit(
                     f"Falta '{CLIENT_SECRET_PATH}'. Descárgalo desde Google Cloud "
@@ -110,19 +120,19 @@ def obtener_credenciales():
     return creds
 
 
-def construir_servicio(credenciales=None):
+def construir_servicio(credenciales=None, permitir_login: bool = True):
     from googleapiclient.discovery import build
 
     if credenciales is None:
-        credenciales = obtener_credenciales()
+        credenciales = obtener_credenciales(permitir_login=permitir_login)
     return build("calendar", "v3", credentials=credenciales)
 
 
-def diagnostico(servicio=None) -> dict:
+def diagnostico(servicio=None, permitir_login: bool = True) -> dict:
     """Devuelve {"email": ..., "scopes": [...]} de la cuenta autenticada, para
     verificar ANTES de operar que el token quedó atado a nmunoz@gomezyriesco.cl."""
     if servicio is None:
-        servicio = construir_servicio()
+        servicio = construir_servicio(permitir_login=permitir_login)
     calendario = servicio.calendarList().get(calendarId="primary").execute()
     return {"email": calendario.get("id"), "scopes": SCOPES}
 
@@ -177,14 +187,39 @@ def guardar_cache_eventos(
     agenda) traiga el calendario una sola vez en vez de una vez por causa —
     ver `buscar_audiencia_por_rit_desde_cache`. Devuelve {"total", "ruta"}."""
     hoy = date.today()
-    eventos = listar_eventos(hoy, hoy + timedelta(days=dias_adelante), servicio=servicio)
+    hasta = hoy + timedelta(days=dias_adelante)
+    eventos = listar_eventos(hoy, hasta, servicio=servicio)
     contenido = {
         "generado_en": datetime.now().isoformat(),
+        # `desde`/`hasta` dejan constancia de que rango cubre este archivo, para
+        # que un consumidor que necesita otro rango (ej. eventos-calendario con
+        # --dias-atras) sepa que el cache no le sirve, en vez de devolver un
+        # resultado parcial en silencio.
+        "desde": str(hoy),
+        "hasta": str(hasta),
         "eventos": [{"fecha": str(e["fecha"]), "resumen": e["resumen"]} for e in eventos],
     }
     ruta = Path(ruta)
     ruta.write_text(json.dumps(contenido, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"total": len(eventos), "ruta": str(ruta)}
+    return {"total": len(eventos), "ruta": str(ruta), "desde": str(hoy), "hasta": str(hasta)}
+
+
+def cargar_cache_eventos(ruta: Path = RUTA_CACHE_EVENTOS_CALENDARIO) -> dict:
+    """Lee un cache generado por `guardar_cache_eventos` y devuelve
+    {"eventos": [{"fecha": date, "resumen": str}], "desde": date|None,
+    "hasta": date|None}. Lanza FileNotFoundError si `ruta` no existe (el
+    llamador decide si cae de vuelta a la API)."""
+    contenido = json.loads(Path(ruta).read_text(encoding="utf-8"))
+    eventos = [
+        {"fecha": datetime.strptime(e["fecha"], "%Y-%m-%d").date(), "resumen": e["resumen"]}
+        for e in contenido["eventos"]
+    ]
+
+    def _fecha(clave):
+        valor = contenido.get(clave)
+        return datetime.strptime(valor, "%Y-%m-%d").date() if valor else None
+
+    return {"eventos": eventos, "desde": _fecha("desde"), "hasta": _fecha("hasta")}
 
 
 def buscar_audiencia_por_rit_desde_cache(rit: str, ruta: Path = RUTA_CACHE_EVENTOS_CALENDARIO) -> list[dict]:
@@ -194,23 +229,17 @@ def buscar_audiencia_por_rit_desde_cache(rit: str, ruta: Path = RUTA_CACHE_EVENT
     dentro de una misma corrida. Lanza FileNotFoundError si `ruta` no
     existe (el llamador decide si cae de vuelta a `buscar_audiencia_por_rit`
     en ese caso)."""
-    contenido = json.loads(Path(ruta).read_text(encoding="utf-8"))
-    eventos = [
-        {"fecha": datetime.strptime(e["fecha"], "%Y-%m-%d").date(), "resumen": e["resumen"]}
-        for e in contenido["eventos"]
-    ]
-    return buscar_eventos_por_rit(eventos, rit)
+    return buscar_eventos_por_rit(cargar_cache_eventos(ruta)["eventos"], rit)
 
 
-def eventos_empresas_interes(desde: date, hasta: date, servicio=None) -> list[dict]:
-    """Fase 0 (barrido de calendario): eventos entre `desde` y `hasta` cuyo
-    resumen menciona alguna de las 6 empresas de interés, cada uno con
-    "empresa_detectada" agregado y "rit_detectado" (o None si el resumen no
-    trae un RIT reconocible — ver registro.extraer_rit). Existe para
-    encontrar causas con audiencia fijada que nunca se registraron por
-    correo (ej. correspondencia anterior a la automatización, o fuera de la
-    ventana de backlog de gestion-causas-smu)."""
-    eventos = listar_eventos(desde, hasta, servicio=servicio)
+def filtrar_empresas_interes(eventos: list[dict]) -> list[dict]:
+    """Se queda con los eventos cuyo resumen menciona alguna de las 6 empresas
+    de interés, agregándoles "empresa_detectada" y "rit_detectado" (o None si
+    el resumen no trae un RIT reconocible — ver registro.extraer_rit).
+
+    Vive aparte de `eventos_empresas_interes` para que la variante que lee el
+    cache en disco aplique exactamente el mismo criterio que la que llama a la
+    API, sin duplicarlo."""
     resultado = []
     for evento in eventos:
         empresa = detectar_empresa(evento["resumen"])
@@ -227,6 +256,43 @@ def eventos_empresas_interes(desde: date, hasta: date, servicio=None) -> list[di
             "rit_detectado": rit,
         })
     return resultado
+
+
+def eventos_empresas_interes(desde: date, hasta: date, servicio=None) -> list[dict]:
+    """Fase 0 (barrido de calendario): eventos entre `desde` y `hasta` cuyo
+    resumen menciona alguna de las 6 empresas de interés. Existe para
+    encontrar causas con audiencia fijada que nunca se registraron por
+    correo (ej. correspondencia anterior a la automatización, o fuera de la
+    ventana de backlog de gestion-causas-smu)."""
+    return filtrar_empresas_interes(listar_eventos(desde, hasta, servicio=servicio))
+
+
+def eventos_empresas_interes_desde_cache(
+    desde: date, hasta: date, ruta: Path = RUTA_CACHE_EVENTOS_CALENDARIO
+) -> list[dict]:
+    """Igual que `eventos_empresas_interes` pero filtrando el cache que dejó
+    `guardar_cache_eventos` al principio de la corrida, en vez de llamar a la
+    API — el rango de la Fase 0 (90 días hacia adelante) está contenido en el
+    de ese cache (200 días), así que la corrida entera necesita una sola
+    llamada a Calendar.
+
+    Lanza FileNotFoundError si el cache no existe y ValueError si no cubre el
+    rango pedido (ej. --dias-atras > 0, o un --dias-adelante mayor al del
+    cache): devolver un resultado parcial en silencio sería peor que caer de
+    vuelta a la API."""
+    cache = cargar_cache_eventos(ruta)
+    if cache["desde"] is None or cache["hasta"] is None:
+        raise ValueError(
+            f"El cache '{ruta}' no declara el rango que cubre (lo generó una versión "
+            "anterior); regeneralo con `cache-eventos-calendario`."
+        )
+    if desde < cache["desde"] or hasta > cache["hasta"]:
+        raise ValueError(
+            f"El cache '{ruta}' cubre {cache['desde']}..{cache['hasta']} y se pidió "
+            f"{desde}..{hasta}; no alcanza."
+        )
+    en_rango = [e for e in cache["eventos"] if desde <= e["fecha"] <= hasta]
+    return filtrar_empresas_interes(en_rango)
 
 
 def buscar_audiencia_por_rit(rit: str, dias_adelante: int = 200, servicio=None) -> list[dict]:

@@ -119,8 +119,13 @@ class TestCacheEventos:
 
         resultado = calendar_client.guardar_cache_eventos(ruta=ruta, servicio=servicio)
 
-        assert resultado == {"total": 2, "ruta": str(ruta)}
+        assert resultado["total"] == 2
+        assert resultado["ruta"] == str(ruta)
         contenido = json.loads(ruta.read_text(encoding="utf-8"))
+        # El cache declara qué rango cubre, para que un consumidor que necesita
+        # otro rango lo sepa en vez de recibir un resultado parcial.
+        assert contenido["desde"] == resultado["desde"] == str(date.today())
+        assert contenido["hasta"] == resultado["hasta"]
         assert len(contenido["eventos"]) == 2
         assert contenido["eventos"][0] == {
             "fecha": "2026-08-21", "resumen": "Audiencia Unica M-643-2026 Iturriaga con Rendic",
@@ -194,3 +199,86 @@ class TestEventosEmpresasInteres:
         eventos = calendar_client.eventos_empresas_interes(date(2026, 8, 1), date(2026, 9, 30), servicio=servicio)
         assert len(eventos) == 1
         assert eventos[0]["rit_detectado"] == "M-637-2026"
+
+
+class TestEventosEmpresasInteresDesdeCache:
+    """Fase 0 (calendario) reusa el mismo cache que dejó contexto-corrida, en
+    vez de hacer su propia llamada a la API sobre un rango ya contenido en él."""
+
+    CACHE = {
+        "generado_en": "2026-09-01T09:00:00",
+        "desde": "2026-09-01",
+        "hasta": "2026-12-01",
+        "eventos": [
+            {"fecha": "2026-09-15", "resumen": 'Audiencia única "Rebolledo con Salcobrand" M-637-2026'},
+            {"fecha": "2026-09-16", "resumen": "Reunion equipo semanal"},
+            {"fecha": "2026-09-17", "resumen": 'Audiencia única "Salcobrand S.A. con IPT Curico" I-38-2026'},
+        ],
+    }
+
+    def _escribir(self, tmp_path, contenido=None):
+        ruta = tmp_path / "cache.json"
+        ruta.write_text(json.dumps(contenido or self.CACHE), encoding="utf-8")
+        return ruta
+
+    def test_aplica_el_mismo_criterio_que_la_version_que_llama_a_la_api(self, tmp_path):
+        ruta = self._escribir(tmp_path)
+        servicio = _ServicioCalendarFalso([
+            {"items": [_evento(e["resumen"], fecha=e["fecha"]) for e in self.CACHE["eventos"]]},
+        ])
+
+        desde_api = calendar_client.eventos_empresas_interes(
+            date(2026, 9, 1), date(2026, 12, 1), servicio=servicio)
+        desde_cache = calendar_client.eventos_empresas_interes_desde_cache(
+            date(2026, 9, 1), date(2026, 12, 1), ruta=ruta)
+
+        assert desde_cache == desde_api
+        assert [e["rit_detectado"] for e in desde_cache] == ["M-637-2026"]
+
+    def test_recorta_al_rango_pedido(self, tmp_path):
+        ruta = self._escribir(tmp_path)
+        eventos = calendar_client.eventos_empresas_interes_desde_cache(
+            date(2026, 9, 1), date(2026, 9, 14), ruta=ruta)
+        assert eventos == []
+
+    def test_falla_si_el_cache_no_cubre_el_rango_pedido(self, tmp_path):
+        import pytest
+
+        ruta = self._escribir(tmp_path)
+        # --dias-atras > 0: el cache arranca hoy, no cubre el pasado.
+        with pytest.raises(ValueError, match="no alcanza"):
+            calendar_client.eventos_empresas_interes_desde_cache(
+                date(2026, 8, 20), date(2026, 12, 1), ruta=ruta)
+        # --dias-adelante mayor al del cache.
+        with pytest.raises(ValueError, match="no alcanza"):
+            calendar_client.eventos_empresas_interes_desde_cache(
+                date(2026, 9, 1), date(2027, 1, 1), ruta=ruta)
+
+    def test_falla_si_el_cache_no_declara_su_rango(self, tmp_path):
+        import pytest
+
+        viejo = {k: v for k, v in self.CACHE.items() if k not in ("desde", "hasta")}
+        ruta = self._escribir(tmp_path, viejo)
+        with pytest.raises(ValueError, match="no declara el rango"):
+            calendar_client.eventos_empresas_interes_desde_cache(
+                date(2026, 9, 1), date(2026, 12, 1), ruta=ruta)
+
+    def test_falla_si_no_existe_el_archivo(self, tmp_path):
+        import pytest
+
+        with pytest.raises(FileNotFoundError):
+            calendar_client.eventos_empresas_interes_desde_cache(
+                date(2026, 9, 1), date(2026, 12, 1), ruta=tmp_path / "no-existe.json")
+
+
+class TestLoginNoInteractivo:
+    """En una corrida desatendida (contexto-corrida) el flujo de OAuth abre un
+    navegador y nunca vuelve. Con permitir_login=False se falla rápido en vez
+    de colgar la tarea programada."""
+
+    def test_sin_token_valido_levanta_en_vez_de_abrir_el_navegador(self, tmp_path, monkeypatch):
+        import pytest
+
+        monkeypatch.setattr(calendar_client, "TOKEN_PATH", str(tmp_path / "no-existe.json"))
+        with pytest.raises(RuntimeError, match="diagnostico-calendario"):
+            calendar_client.obtener_credenciales(permitir_login=False)

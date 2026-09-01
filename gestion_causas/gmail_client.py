@@ -85,7 +85,7 @@ def log(msg):
     print(f"[gmail_client] {msg}", file=sys.stderr)
 
 
-def obtener_credenciales():
+def obtener_credenciales(permitir_login: bool = True):
     """Autentica contra la cuenta del trabajo, reutilizando el token si es
     válido. Mismo patrón que obtener_credenciales_drive() en
     generar_informe_semanal.py (incluye el manejo de refresh token inválido
@@ -109,6 +109,16 @@ def obtener_credenciales():
                 log(f"El token guardado ya no sirve ({e}); pidiendo login de nuevo...")
 
         if necesita_login:
+            if not permitir_login:
+                # Corrida desatendida (ver contexto-corrida): el flujo de
+                # InstalledAppFlow abre un navegador y NUNCA vuelve si no hay
+                # nadie para completarlo, asi que se falla rapido en vez de
+                # colgar la tarea programada.
+                raise RuntimeError(
+                    "El token de Gmail de trabajo (nmunoz@gomezyriesco.cl) no existe o ya no sirve, y se pidio "
+                    "no abrir el login interactivo. Corre "
+                    "`python -m gestion_causas.cli diagnostico` una vez a mano para autorizarlo."
+                )
             if not Path(CLIENT_SECRET_PATH).exists():
                 sys.exit(
                     f"Falta '{CLIENT_SECRET_PATH}'. Descárgalo desde Google Cloud "
@@ -124,20 +134,20 @@ def obtener_credenciales():
     return creds
 
 
-def construir_servicio(credenciales=None):
+def construir_servicio(credenciales=None, permitir_login: bool = True):
     from googleapiclient.discovery import build
 
     if credenciales is None:
-        credenciales = obtener_credenciales()
+        credenciales = obtener_credenciales(permitir_login=permitir_login)
     return build("gmail", "v1", credentials=credenciales)
 
 
-def diagnostico(servicio=None) -> dict:
+def diagnostico(servicio=None, permitir_login: bool = True) -> dict:
     """Devuelve {"email": ..., "scopes": [...]} de la cuenta autenticada, para
     verificar ANTES de operar que el token quedó atado a la cuenta correcta
     (nmunoz@gomezyriesco.cl) y no a la personal."""
     if servicio is None:
-        servicio = construir_servicio()
+        servicio = construir_servicio(permitir_login=permitir_login)
     perfil = servicio.users().getProfile(userId="me").execute()
     return {"email": perfil.get("emailAddress"), "scopes": SCOPES}
 

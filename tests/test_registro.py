@@ -1,6 +1,11 @@
+import os
+import threading
+import time
 from datetime import date
 
 import pytest
+
+from gestion_causas import registro as registro_mod
 
 from gestion_causas.registro import (
     buscar_eerr_reusable,
@@ -264,3 +269,67 @@ class TestPuedeInsistir:
         assert resultado["puede"] is False
         assert resultado["n_aviso"] == 3
         assert "gestion manual" in resultado["motivo"]
+
+
+class TestEscrituraConcurrente:
+    """El orquestador corre los subagentes `goteo` y `agenda` en paralelo y los
+    dos actualizan registro_causas.json (campos distintos, pero el archivo se
+    reescribe entero). Sin el lock de registro._lock, la escritura de uno pisa
+    la del otro."""
+
+    def test_dos_escrituras_simultaneas_conservan_ambas_causas(self, tmp_path, monkeypatch):
+        ruta = tmp_path / "registro_causas.json"
+
+        # Fuerza el entrelazado: sin lock, los dos hilos leen el archivo vacío
+        # antes de que ninguno escriba, y el segundo pisa al primero.
+        original = registro_mod._guardar
+
+        def guardar_lento(destino, datos):
+            time.sleep(0.05)
+            original(destino, datos)
+
+        monkeypatch.setattr(registro_mod, "_guardar", guardar_lento)
+
+        listos = threading.Barrier(2)
+
+        def escribir(rit, campo):
+            listos.wait()
+            registro_mod.registrar_causa(rit, {campo: True}, ruta=ruta)
+
+        hilos = [
+            threading.Thread(target=escribir, args=("M-1-2026", "goteo_ultima_revision")),
+            threading.Thread(target=escribir, args=("M-2-2026", "minuta_ejecutada")),
+        ]
+        for h in hilos:
+            h.start()
+        for h in hilos:
+            h.join(timeout=30)
+
+        registro = registro_mod.cargar_registro_causas(ruta)
+        assert set(registro.keys()) == {"M-1-2026", "M-2-2026"}
+
+    def test_lock_huerfano_viejo_no_bloquea_para_siempre(self, tmp_path):
+        ruta = tmp_path / "registro_causas.json"
+        lock = tmp_path / "registro_causas.json.lock"
+        lock.write_text("", encoding="utf-8")
+        # Un proceso que murió sin liberar el lock hace horas.
+        viejo = time.time() - (registro_mod.LOCK_EDAD_MAXIMA_SEG + 60)
+        os.utime(lock, (viejo, viejo))
+
+        registro_mod.registrar_causa("M-3-2026", {"empresa": "Alvi"}, ruta=ruta)
+
+        assert registro_mod.obtener_causa("M-3-2026", ruta=ruta)["empresa"] == "Alvi"
+        assert not lock.exists()
+
+    def test_lock_reciente_de_otro_proceso_hace_expirar_la_espera(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(registro_mod, "LOCK_TIMEOUT_SEG", 0.2)
+        ruta = tmp_path / "registro_causas.json"
+        (tmp_path / "registro_causas.json.lock").write_text("", encoding="utf-8")
+
+        with pytest.raises(TimeoutError):
+            registro_mod.registrar_causa("M-4-2026", {"empresa": "Alvi"}, ruta=ruta)
+
+    def test_no_deja_archivos_temporales_ni_lock(self, tmp_path):
+        ruta = tmp_path / "registro_causas.json"
+        registro_mod.registrar_causa("M-5-2026", {"empresa": "Alvi"}, ruta=ruta)
+        assert [f.name for f in tmp_path.iterdir()] == ["registro_causas.json"]

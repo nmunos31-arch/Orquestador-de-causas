@@ -38,19 +38,35 @@ Toda la parte mecánica se hace con el CLI `gestion_causas.cli` (paquete en
 Usa `python -m gestion_causas.cli --help` si necesitas recordar los argumentos exactos
 de un subcomando.
 
-## 0. Prerrequisito: token autorizado con la cuenta del trabajo
+## 0. Contexto de la corrida
 
-Este paso **no lo hace la tarea programada** — requiere un login interactivo en el
-navegador que solo puede hacer un humano. Si en cualquier paso de abajo un comando del
-CLI se queda esperando sin responder o falla porque no puede abrir un navegador,
-significa que el token todavía no fue autorizado: **detente de inmediato, no reintentes,
-y deja como resumen final** "La tarea no pudo autenticarse contra
-nmunoz@gomezyriesco.cl — falta correr `python -m gestion_causas.cli diagnostico` una
-vez de forma interactiva para autorizar el token." No hagas nada más en esa corrida.
+El orquestador ya resolvió, antes de despacharte, lo que las 4 fases comparten. Leelo con
+Read una sola vez, al empezar:
+`Actualizador de informes\gestion_causas\_contexto_corrida.json`
 
-Si el diagnóstico responde, valida que el JSON tenga
-`"email": "nmunoz@gomezyriesco.cl"`. Si dice otra cuenta, detente igual y avisa — nunca
-sigas operando sobre la cuenta equivocada.
+De ahí sacás:
+- `fecha_hoy` (AAAA-MM-DD), `dia_semana` y `es_lunes` — usá **esa** fecha en todo este
+  archivo y no vuelvas a calcularla: si la corrida cruza la medianoche, dos fases podrían
+  quedar con fechas distintas.
+- `cache_calendario.ruta` — los eventos del calendario, traídos una sola vez para toda la
+  corrida.
+- `tokens` — el estado de los 3 tokens, ya verificado **sin** abrir ningún login
+  interactivo. Si el orquestador te despachó, es porque los tokens de Gmail de trabajo y de
+  Calendar están OK; no hace falta que los vuelvas a diagnosticar.
+
+Si el archivo no existe (típicamente porque estás corriendo esta fase suelta a mano, fuera
+del orquestador), seguí igual: calculá la fecha de hoy vos mismo y usá las llamadas en vivo
+que se indican como fallback más abajo. Si en ese caso algún comando del CLI se queda
+esperando un login interactivo, detente de inmediato, no reintentes, y deja como resumen
+"La tarea no pudo autenticarse contra nmunoz@gomezyriesco.cl — falta autorizar el token de
+forma interactiva."
+
+El contexto ya verificó que el token está autorizado y atado a
+`nmunoz@gomezyriesco.cl`, así que no hace falta que corras `diagnostico` de nuevo. Si aun
+así un comando del CLI se queda esperando un login interactivo, detente de inmediato, no
+reintentes, y deja como resumen final "La tarea no pudo autenticarse contra
+nmunoz@gomezyriesco.cl — falta correr `python -m gestion_causas.cli diagnostico` una vez de
+forma interactiva para autorizar el token." Nunca sigas operando sobre otra cuenta.
 
 ## 0b. Avisar sobre borradores sin enviar de corridas anteriores
 
@@ -224,7 +240,20 @@ k. **Redacta el borrador de documentos a solicitar (Fase 2)** — solo si guarda
    igual para las 6 empresas, incluidas Preunic y Salcobrand.
 
    1. Lee el PDF de la demanda que acabas de guardar para entender qué se demanda,
-      más allá de lo que ya viene resumido en "Conceptos demandados" del cuadro.
+      más allá de lo que ya viene resumido en "Conceptos demandados" del cuadro. El
+      objetivo es **solo** detectar los ajustes del punto 4 más abajo (base de cálculo,
+      descuentos indebidos, horas extra, etc.) — no resumir la demanda completa.
+      **Acota la lectura:** andá directo a la sección de "Hechos"/"Antecedentes"
+      (normalmente las primeras páginas, después de la identificación de las partes) y a
+      la sección final de "Petitorio"/"Por tanto" (donde están los conceptos y montos
+      exactos) — saltate el cuerpo intermedio de fundamentos de derecho (citas de ley,
+      doctrina, jurisprudencia), que no aporta nada nuevo frente al cuadro-resumen. Si el
+      PDF tiene capa de texto normal, esto es barato y no hace falta cuidarlo más. **Si el
+      PDF es un escaneo** (sin capa de texto, se lee en modo visión página por página): no
+      leas más de ~10-12 páginas salvo que el documento sea evidentemente más largo y el
+      petitorio esté más adelante — en ese caso, leé igual las páginas de Hechos y después
+      andá directo a las últimas 2-3 páginas (ahí casi siempre está el Petitorio), sin
+      recorrer visualmente todo el medio.
    2. Parte de esta lista base, en este orden exacto:
       ```
       1. Contrato de trabajo y anexos

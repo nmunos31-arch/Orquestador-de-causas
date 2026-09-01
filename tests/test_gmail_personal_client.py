@@ -75,3 +75,16 @@ class TestEnvioAcotadoDelPanel:
     def test_enviar_panel_estado_rechaza_html_solo_espacios(self):
         with pytest.raises(ValueError):
             gmail_personal_client.enviar_panel_estado("Asunto de prueba", "   ")
+
+
+class TestLoginNoInteractivo:
+    """En una corrida desatendida (contexto-corrida) el flujo de OAuth abre un
+    navegador y nunca vuelve. Con permitir_login=False se falla rápido en vez
+    de colgar la tarea programada."""
+
+    def test_sin_token_valido_levanta_en_vez_de_abrir_el_navegador(self, tmp_path, monkeypatch):
+        import pytest
+
+        monkeypatch.setattr(gmail_personal_client, "TOKEN_PATH", str(tmp_path / "no-existe.json"))
+        with pytest.raises(RuntimeError, match="diagnostico-personal"):
+            gmail_personal_client.obtener_credenciales(permitir_login=False)

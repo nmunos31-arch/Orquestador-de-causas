@@ -4,8 +4,9 @@ Fase 4 del proyecto "Gestión automática de causas nuevas desde la casilla del 
 ver el diseño completo en `C:\Users\usuario\.claude\plans\1-contrato-de-trabajo-streamed-pizza.md`
 y en `Actualizador de informes\docs\2026-08-27-orquestador-gestion-causas-design.md`. Este
 archivo es el prompt que el orquestador (`gestion-causas-orquestador`) despacha como
-subagente en la Fase "agenda" de cada corrida, siempre al final (después de "calendario",
-"smu" y "goteo"). Depende de que el subagente "smu" ya haya registrado las causas (aplica
+subagente en la Fase "agenda" de cada corrida, al final: después de "calendario" y "smu", y
+**en paralelo con "goteo"** (desde el 2026-09-01 — las dos fases escriben campos distintos
+del registro y ya no dependen una de la otra). Depende de que el subagente "smu" ya haya registrado las causas (aplica
 a las 6 empresas: Rendic Hermanos, Alvi, Super 10, Servicios Logísticos Santiago, Preunic
 y Salcobrand — este subagente no filtra por empresa, trabaja sobre lo que ya está en el
 registro local).
@@ -35,13 +36,30 @@ Toda la parte mecánica de fechas/registro/consulta del calendario se hace con e
 `gestion_causas.cli`, corrido con Bash/PowerShell desde `Actualizador de informes` como
 directorio de trabajo.
 
-## 0. Prerrequisitos
+## 0. Contexto de la corrida
 
-**Token del CLI autorizado**: si algún comando de `gestion_causas.cli` se queda esperando
-un login interactivo (tanto el de Gmail como el de Calendar), detente de inmediato, no
-reintentes, y deja como resumen "La tarea no pudo autenticarse contra
-nmunoz@gomezyriesco.cl — falta autorizar el token de forma interactiva." No hagas nada
-más en esa corrida. Puedes verificar el token de Calendar por separado con:
+El orquestador ya resolvió, antes de despacharte, lo que las 4 fases comparten. Leelo con
+Read una sola vez, al empezar:
+`Actualizador de informes\gestion_causas\_contexto_corrida.json`
+
+De ahí sacás:
+- `fecha_hoy` (AAAA-MM-DD), `dia_semana` y `es_lunes` — usá **esa** fecha en todo este
+  archivo y no vuelvas a calcularla: si la corrida cruza la medianoche, dos fases podrían
+  quedar con fechas distintas.
+- `cache_calendario.ruta` — los eventos del calendario, traídos una sola vez para toda la
+  corrida.
+- `tokens` — el estado de los 3 tokens, ya verificado **sin** abrir ningún login
+  interactivo. Si el orquestador te despachó, es porque los tokens de Gmail de trabajo y de
+  Calendar están OK; no hace falta que los vuelvas a diagnosticar.
+
+Si el archivo no existe (típicamente porque estás corriendo esta fase suelta a mano, fuera
+del orquestador), seguí igual: calculá la fecha de hoy vos mismo y usá las llamadas en vivo
+que se indican como fallback más abajo. Si en ese caso algún comando del CLI se queda
+esperando un login interactivo, detente de inmediato, no reintentes, y deja como resumen
+"La tarea no pudo autenticarse contra nmunoz@gomezyriesco.cl — falta autorizar el token de
+forma interactiva."
+
+Si estás corriendo esta fase suelta y necesitás verificar el token de Calendar por separado:
 ```
 python -m gestion_causas.cli diagnostico-calendario
 ```
@@ -58,14 +76,13 @@ excluyen solas (no hay nada más que agendar). Si `total` es 0, termina con un r
 
 ## 2. Por cada causa activa, busca su audiencia en el calendario
 
-Antes de procesar la primera causa, revisa si existe
-`gestion_causas/cache_eventos_calendario.json` — lo genera el subagente `goteo`, que
-corre justo antes que vos en el orden fijo del orquestador, así que en una corrida normal
-ya está fresco. Si existe, vas a usarlo con `--desde-cache` en vez de golpear la API por
-cada causa; si no existe (ej. goteo falló antes de llegar a ese paso, o estás corriendo
-agenda de forma suelta fuera del orquestador), vas a usar la llamada en vivo de siempre,
-sin `--desde-cache` — el resultado es idéntico en ambos casos, solo cambia si se repite la
-llamada a la API por cada causa o no.
+El cache de eventos del calendario lo dejó el contexto de la corrida (paso 0), en
+`cache_calendario.ruta` — ya no depende de que `goteo` haya llegado a generarlo, que era el
+acoplamiento frágil de antes. Vas a usarlo con `--desde-cache` en vez de golpear la API por
+cada causa. Si no hay contexto o el archivo no existe (ej. estás corriendo agenda de forma
+suelta fuera del orquestador), usá la llamada en vivo de siempre, sin `--desde-cache` — el
+resultado es idéntico en ambos casos, solo cambia si se repite la llamada a la API por cada
+causa o no.
 
 ```
 python -m gestion_causas.cli buscar-audiencia-por-rit --rit "<rit>" --desde-cache "gestion_causas/cache_eventos_calendario.json"
@@ -74,7 +91,7 @@ python -m gestion_causas.cli buscar-audiencia-por-rit --rit "<rit>" --desde-cach
 flag — cae de vuelta al comportamiento de siempre)
 
 Si el comando con `--desde-cache` falla por algo que **no** es "no encuentra el
-archivo" (por ejemplo un error de formato/JSON — puede pasar si `goteo` quedó
+archivo" (por ejemplo un error de formato/JSON — puede pasar si el contexto quedó
 interrumpido a mitad de generar el cache), tratalo igual que si el archivo no existiera:
 para esa causa puntual, reintenta sin `--desde-cache` (la llamada en vivo de siempre) y
 seguí adelante. No hace falta detener la corrida ni avisar a las demás causas — es un
@@ -126,7 +143,7 @@ a. Calcula la fecha del hito:
    ```
    python -m gestion_causas.cli dias-corridos-antes --fecha "<fecha audiencia AAAA-MM-DD>" --n 14
    ```
-b. Si la fecha de hoy es **anterior** a esa fecha, todavía no toca — sigue con la
+b. Si la `fecha_hoy` del contexto es **anterior** a esa fecha, todavía no toca — sigue con la
    siguiente causa. Si es igual o posterior, y la causa **no tiene ya**
    `oferta_borrador_creado: true` en su registro (revísalo con
    `python -m gestion_causas.cli obtener-causa --rit "<rit>"`), continúa:
@@ -219,7 +236,7 @@ a. Calcula la fecha del hito (saltando sábados, domingos y feriados):
    ```
    python -m gestion_causas.cli dias-habiles-antes --fecha "<fecha audiencia AAAA-MM-DD>" --n 4
    ```
-b. Si la fecha de hoy es anterior a esa fecha, sigue con la siguiente causa. Si es
+b. Si la `fecha_hoy` del contexto es anterior a esa fecha, sigue con la siguiente causa. Si es
    igual o posterior, y la causa **no tiene ya** `minuta_ejecutada: true` en su
    registro, continúa:
 

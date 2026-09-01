@@ -275,3 +275,16 @@ class TestEmpresasSinExcel:
             "Preunic", "Salcobrand",
         }
         assert esperadas == set(gmail_client.COLOR_POR_EMPRESA)
+
+
+class TestLoginNoInteractivo:
+    """En una corrida desatendida (contexto-corrida) el flujo de OAuth abre un
+    navegador y nunca vuelve. Con permitir_login=False se falla rápido en vez
+    de colgar la tarea programada."""
+
+    def test_sin_token_valido_levanta_en_vez_de_abrir_el_navegador(self, tmp_path, monkeypatch):
+        import pytest
+
+        monkeypatch.setattr(gmail_client, "TOKEN_PATH", str(tmp_path / "no-existe.json"))
+        with pytest.raises(RuntimeError, match="diagnostico"):
+            gmail_client.obtener_credenciales(permitir_login=False)

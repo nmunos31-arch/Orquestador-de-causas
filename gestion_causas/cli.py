@@ -46,6 +46,15 @@ from . import registro as registro_mod
 from . import seguimiento as seguimiento_mod
 
 
+# Contexto comun de una corrida del orquestador (ver cmd_contexto_corrida):
+# fecha de hoy, estado de los 3 tokens y cache de calendario, resueltos una
+# sola vez para que las 4 fases no los redescubran cada una por su cuenta.
+RUTA_CONTEXTO_CORRIDA = Path(__file__).parent / "_contexto_corrida.json"
+CUENTA_TRABAJO = "nmunoz@gomezyriesco.cl"
+CUENTA_PERSONAL = "nmunos31@gmail.com"
+DIAS_SEMANA = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"]
+
+
 def _imprimir_json(datos) -> None:
     print(json.dumps(datos, ensure_ascii=False, default=str))
 
@@ -459,7 +468,10 @@ def cmd_eventos_calendario(args) -> int:
     hoy = date.today()
     desde = hoy - timedelta(days=args.dias_atras)
     hasta = hoy + timedelta(days=args.dias_adelante)
-    eventos = calendar_client.eventos_empresas_interes(desde, hasta)
+    if args.desde_cache:
+        eventos = calendar_client.eventos_empresas_interes_desde_cache(desde, hasta, args.desde_cache)
+    else:
+        eventos = calendar_client.eventos_empresas_interes(desde, hasta)
     _imprimir_json({"eventos": eventos, "total": len(eventos)})
     return 0
 
@@ -519,6 +531,81 @@ def cmd_diagnostico_personal(args) -> int:
         )
         return 1
     return 0
+
+
+def _diagnosticar_token(diagnostico, email_esperado: str) -> dict:
+    """Corre un `diagnostico()` de cliente sin permitir login interactivo y lo
+    normaliza a {"ok", "email", "error"}. Nunca levanta: un token caido es un
+    dato del contexto, no un crash de la corrida."""
+    try:
+        resultado = diagnostico(permitir_login=False)
+    except Exception as e:  # red, token vencido, scope faltante, etc.
+        return {"ok": False, "email": None, "error": f"{type(e).__name__}: {e}"}
+    email = resultado.get("email")
+    if email != email_esperado:
+        return {
+            "ok": False, "email": email,
+            "error": f"el token esta atado a '{email}', no a '{email_esperado}'",
+        }
+    return {"ok": True, "email": email, "error": None}
+
+
+def cmd_contexto_corrida(args) -> int:
+    """Paso 0 del orquestador: resuelve de una vez lo que las 4 fases
+    comparten, para que ninguna lo redescubra por su cuenta.
+
+    - fecha de hoy / dia de la semana (evita que dos fases de una corrida que
+      cruza la medianoche usen fechas distintas);
+    - estado de los 3 tokens, SIN abrir el login interactivo (que en una tarea
+      desatendida no vuelve nunca — ver obtener_credenciales(permitir_login));
+    - el cache de eventos de calendario, una sola llamada a la API para toda la
+      corrida, que despues consumen `goteo`, `agenda` y `calendario` con
+      --desde-cache.
+
+    Codigo de salida 1 si Gmail de trabajo o Calendar no estan disponibles (el
+    orquestador aborta y manda el panel avisando). Un fallo del token personal
+    no es motivo de salida 1: solo afecta el envio del panel al final.
+    """
+    hoy = date.today()
+    contexto = {
+        "generado_en": datetime.datetime.now().isoformat(),
+        "fecha_hoy": str(hoy),
+        "dia_semana": DIAS_SEMANA[hoy.weekday()],
+        "es_lunes": hoy.weekday() == 0,
+        "tokens": {},
+        "cache_calendario": None,
+    }
+
+    if args.dry_run:
+        _imprimir_json({"simulado": True, "accion": "contexto-corrida", "salida": args.salida})
+        return 0
+
+    contexto["tokens"]["gmail_trabajo"] = _diagnosticar_token(
+        gmail_client.diagnostico, CUENTA_TRABAJO)
+    contexto["tokens"]["calendar"] = _diagnosticar_token(
+        calendar_client.diagnostico, CUENTA_TRABAJO)
+    contexto["tokens"]["personal"] = _diagnosticar_token(
+        gmail_personal_client.diagnostico, CUENTA_PERSONAL)
+
+    if contexto["tokens"]["calendar"]["ok"]:
+        try:
+            contexto["cache_calendario"] = calendar_client.guardar_cache_eventos(
+                ruta=args.ruta_cache, dias_adelante=args.dias_adelante)
+        except Exception as e:
+            contexto["tokens"]["calendar"] = {
+                "ok": False,
+                "email": contexto["tokens"]["calendar"]["email"],
+                "error": f"el token sirve pero fallo al traer los eventos: {type(e).__name__}: {e}",
+            }
+
+    contexto["listo"] = (
+        contexto["tokens"]["gmail_trabajo"]["ok"] and contexto["tokens"]["calendar"]["ok"]
+    )
+
+    Path(args.salida).write_text(
+        json.dumps(contexto, ensure_ascii=False, indent=2), encoding="utf-8")
+    _imprimir_json(contexto)
+    return 0 if contexto["listo"] else 1
 
 
 def construir_parser() -> argparse.ArgumentParser:
@@ -687,6 +774,10 @@ def construir_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--dias-atras", type=int, default=0)
     p.add_argument("--dias-adelante", type=int, default=60)
+    p.add_argument(
+        "--desde-cache", default=None,
+        help="Ruta a un cache generado por cache-eventos-calendario; filtra ese archivo en vez de llamar a la API (falla si el cache no cubre el rango pedido)",
+    )
     p.set_defaults(func=cmd_eventos_calendario)
 
     p = sub.add_parser(
@@ -727,6 +818,15 @@ def construir_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("diagnostico-personal", help="Verifica que el token de la cuenta personal (nmunos31@gmail.com) este autorizado")
     p.set_defaults(func=cmd_diagnostico_personal)
+
+    p = sub.add_parser(
+        "contexto-corrida",
+        help="Paso 0 del orquestador: resuelve fecha de hoy, estado de los 3 tokens (sin login interactivo) y el cache de calendario, una sola vez para toda la corrida",
+    )
+    p.add_argument("--salida", default=str(RUTA_CONTEXTO_CORRIDA))
+    p.add_argument("--ruta-cache", default=str(calendar_client.RUTA_CACHE_EVENTOS_CALENDARIO))
+    p.add_argument("--dias-adelante", type=int, default=200, help="Ventana del cache de calendario")
+    p.set_defaults(func=cmd_contexto_corrida)
 
     return parser
 

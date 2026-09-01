@@ -6,10 +6,33 @@ y en `Actualizador de informes\docs\2026-08-27-orquestador-gestion-causas-design
 archivo es el prompt que el orquestador (`gestion-causas-orquestador`) despacha como
 subagente en la Fase 0 de cada corrida.
 
-## 0. Autoevaluación de turno
+## 0. Contexto de la corrida
 
-Esta fase solo actúa **los lunes**. Antes de hacer nada más, determina la fecha de hoy
-(zona horaria de Chile) y el día de la semana:
+El orquestador ya resolvió, antes de despacharte, lo que las 4 fases comparten. Leelo con
+Read una sola vez, al empezar:
+`Actualizador de informes\gestion_causas\_contexto_corrida.json`
+
+De ahí sacás:
+- `fecha_hoy` (AAAA-MM-DD), `dia_semana` y `es_lunes` — usá **esa** fecha en todo este
+  archivo y no vuelvas a calcularla: si la corrida cruza la medianoche, dos fases podrían
+  quedar con fechas distintas.
+- `cache_calendario.ruta` — los eventos del calendario, traídos una sola vez para toda la
+  corrida.
+- `tokens` — el estado de los 3 tokens, ya verificado **sin** abrir ningún login
+  interactivo. Si el orquestador te despachó, es porque los tokens de Gmail de trabajo y de
+  Calendar están OK; no hace falta que los vuelvas a diagnosticar.
+
+Si el archivo no existe (típicamente porque estás corriendo esta fase suelta a mano, fuera
+del orquestador), seguí igual: calculá la fecha de hoy vos mismo y usá las llamadas en vivo
+que se indican como fallback más abajo. Si en ese caso algún comando del CLI se queda
+esperando un login interactivo, detente de inmediato, no reintentes, y deja como resumen
+"La tarea no pudo autenticarse contra nmunoz@gomezyriesco.cl — falta autorizar el token de
+forma interactiva."
+
+## 0a. Autoevaluación de turno
+
+Esta fase solo actúa **los lunes**, según el campo `es_lunes` del contexto (si no hay
+contexto, determina la fecha de hoy en zona horaria de Chile):
 - Si **no** es lunes: termina de inmediato. Tu único mensaje final debe ser
   "No corresponde hoy (Fase 0 solo corre los lunes)." No ejecutes ningún comando del CLI.
 - Si es lunes: sigue con el resto de este archivo.
@@ -32,18 +55,23 @@ modifica ni borra eventos. Tampoco envía correos ni borra nada.
 Toda la parte mecánica se hace con el CLI `gestion_causas.cli`, corrido con
 Bash/PowerShell desde `Actualizador de informes` como directorio de trabajo.
 
-## 0b. Prerrequisito: tokens autorizados
-
-Si algún comando del CLI (Gmail o Calendar) se queda esperando un login interactivo,
-detente de inmediato, no reintentes, y deja como resumen "La tarea no pudo autenticarse
-contra nmunoz@gomezyriesco.cl — falta autorizar el token de forma interactiva." No hagas
-nada más en esa corrida.
-
 ## 1. Trae los eventos candidatos
+
+Usa el cache que ya trajo el contexto de la corrida, en vez de hacer una segunda llamada a
+la API por tu cuenta (el rango de 90 días que necesitás está contenido en el del cache):
+
+```
+python -m gestion_causas.cli eventos-calendario --dias-adelante 90 --desde-cache "<cache_calendario.ruta del contexto>"
+```
+
+Si no hay contexto, o si el comando falla con `--desde-cache` (el cache no existe, está
+corrupto, o no cubre el rango pedido), corré el mismo comando **sin** ese flag — cae de
+vuelta a la llamada en vivo de siempre y el resultado es idéntico:
 
 ```
 python -m gestion_causas.cli eventos-calendario --dias-adelante 90
 ```
+
 Devuelve los eventos de los próximos 90 días cuyo resumen menciona alguna de las 6
 empresas de interés (Rendic Hermanos, Alvi, Super 10, Servicios Logísticos Santiago,
 Preunic, Salcobrand — detección por alias de texto, no hace falta que el nombre sea

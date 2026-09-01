@@ -5,7 +5,9 @@ ver el diseño completo en `C:\Users\usuario\.claude\plans\1-contrato-de-trabajo
 y en `Actualizador de informes\docs\2026-08-27-orquestador-gestion-causas-design.md`. Este
 archivo es el prompt que el orquestador (`gestion-causas-orquestador`) despacha como
 subagente en la Fase "goteo" de cada corrida, siempre después de "smu" (para poder revisar
-en el mismo lote las causas recién registradas) y antes de "agenda". Depende de que el
+en el mismo lote las causas recién registradas) y **en paralelo con "agenda"** (desde el
+2026-09-01: las dos fases escriben campos distintos del registro y ya no dependen una de la
+otra, porque el cache de calendario lo genera el contexto de la corrida y no vos). Depende de que el
 subagente "smu" ya haya registrado las causas — este subagente NO descubre causas nuevas,
 solo revisa las ya conocidas por si llegaron documentos nuevos en la misma cadena de
 correo. **Nunca** envía correos ni borra nada, y no toca el calendario.
@@ -14,15 +16,28 @@ Razón de que sea una tarea separada de `gestion-causas-smu`: esa tarea excluye 
 ya marcados `Procesado-GestionCausas`, así que nunca volvería a mirarlos — el goteo
 necesita justamente lo contrario, revisar hilos ya procesados por si trajeron algo nuevo
 después. Por eso esta tarea no busca por query/etiqueta, sino por el RIT de cada causa
-(ver paso 2b) — no basta con mirar el `thread_id` original que guardó Fase 1, porque los
+(ver paso 2) — no basta con mirar el `thread_id` original que guardó Fase 1, porque los
 documentos reales muchas veces llegan en una cadena **distinta**, reenviada ("RV: ...")
 por la persona de RR.HH./legal de la empresa, y esa cadena Fase 1 nunca la ve.
 
-**Filtro incremental (2026-08-28):** para no re-escanear correos de causas sin
-novedades en cada una de las 3 corridas diarias, el paso 2b usa `goteo_ultima_revision`
-(fecha `AAAA-MM-DD` guardada en el registro de cada causa) para acotar la búsqueda a
-mail nuevo desde la corrida anterior — ver el paso 2b y 2h más abajo. Los lunes se hace
-igual el escaneo completo de siempre (sin el filtro), como red de seguridad semanal.
+**Filtro incremental (2026-08-28, actualizado 2026-08-31 — sin excepción de lunes):**
+para no re-escanear correos de causas sin novedades en cada una de las 3 corridas
+diarias, el paso 2 usa `goteo_ultima_revision` (fecha `AAAA-MM-DD` guardada en el
+registro de cada causa) para acotar la búsqueda a mail nuevo desde la corrida anterior,
+**todos los días de la semana por igual** — ya no hay un rescan completo especial los
+lunes (se sacó porque duplicaba trabajo sin encontrar nada nuevo: la lógica de "primera
+revisión" de abajo ya le da a cada causa su propio escaneo completo la primera vez que
+el goteo la mira, y el colchón de 1 día en `fecha_corte` ya cubre el margen de la
+búsqueda `after:` de Gmail).
+
+**Búsqueda combinada en vez de una por causa (2026-08-28, misma tarde):** la primera
+versión de este filtro seguía haciendo una llamada `buscar-hilos` **por cada causa
+activa** (aunque acotada por fecha), así que con 27 causas activas eran 27 búsquedas de
+red secuenciales aunque casi todas volvieran vacías — confirmado por Nico el 2026-08-28
+tras ver que una corrida sin novedades tardó ~20 minutos igual. Ahora el paso 2 revisa la
+bandeja de entrada **una sola vez** (o dos, si hay causas de primera revisión) para toda
+la corrida, buscando de una todos los RIT activos a la vez, y solo después separa qué
+hilo pertenece a qué causa — ver el paso 2 más abajo.
 
 **Filtro de remitente confiable (2026-08-13, actualizado 2026-08-17):** de todos los
 adjuntos que aparezcan en cualquier hilo relacionado con la causa, **solo se guardan los
@@ -70,7 +85,7 @@ la carpeta de Obreque con Salcobrand (O-809-2026) **tres veces** (2026-08-18, 20
 2026-08-24) antes de agregarse aquí — Nico confirmó que tampoco debe incluirse en esta
 automatización.
 
-**Antes de procesar los adjuntos de un hilo (paso 2b/2c):**
+**Antes de descartar o quedarte con un hilo (paso 2d):**
 1. Toma el `subject` de cada mensaje del hilo y quítale primero cualquier prefijo de
    respuesta/reenvío (`RE:`, `RV:`, `FWD:`/`FW:`, `ENV:`, repetido, insensible a
    mayúsculas) — de lo contrario un asunto como `"RE: INFORME PROVISIÓN ABRIL 2026"` o
@@ -110,12 +125,28 @@ terminaste y sigue adelante, y el proceso queda huérfano y se mata. Si 27+ caus
 parecen demasiado para un turno, no importa: se procesan igual, una por una — nunca con
 un proceso de fondo que quede corriendo para consultarlo después.
 
-## 0. Prerrequisito: token autorizado
+## 0. Contexto de la corrida
 
-Igual que en `gestion-causas-smu`: si algún comando del CLI se queda esperando un login
-interactivo, detente de inmediato, no reintentes, y deja como resumen "La tarea no pudo
-autenticarse contra nmunoz@gomezyriesco.cl — falta autorizar el token de forma
-interactiva." No hagas nada más en esa corrida.
+El orquestador ya resolvió, antes de despacharte, lo que las 4 fases comparten. Leelo con
+Read una sola vez, al empezar:
+`Actualizador de informes\gestion_causas\_contexto_corrida.json`
+
+De ahí sacás:
+- `fecha_hoy` (AAAA-MM-DD), `dia_semana` y `es_lunes` — usá **esa** fecha en todo este
+  archivo y no vuelvas a calcularla: si la corrida cruza la medianoche, dos fases podrían
+  quedar con fechas distintas.
+- `cache_calendario.ruta` — los eventos del calendario, traídos una sola vez para toda la
+  corrida.
+- `tokens` — el estado de los 3 tokens, ya verificado **sin** abrir ningún login
+  interactivo. Si el orquestador te despachó, es porque los tokens de Gmail de trabajo y de
+  Calendar están OK; no hace falta que los vuelvas a diagnosticar.
+
+Si el archivo no existe (típicamente porque estás corriendo esta fase suelta a mano, fuera
+del orquestador), seguí igual: calculá la fecha de hoy vos mismo y usá las llamadas en vivo
+que se indican como fallback más abajo. Si en ese caso algún comando del CLI se queda
+esperando un login interactivo, detente de inmediato, no reintentes, y deja como resumen
+"La tarea no pudo autenticarse contra nmunoz@gomezyriesco.cl — falta autorizar el token de
+forma interactiva."
 
 ## 1. Trae las causas activas
 
@@ -127,24 +158,105 @@ o cuya audiencia fue hace 60 días o menos (la prueba puede seguir llegando un t
 después de la audiencia, ej. por reprogramación). Si `total` es 0, termina con un resumen
 de "sin causas activas para revisar".
 
-Después, trae el calendario **una sola vez** para toda la corrida (en vez de que cada
-causa dispare su propia llamada a la API en el paso 2a):
-```
-python -m gestion_causas.cli cache-eventos-calendario
-```
-Guarda la `ruta` que devuelve — la vas a pasar como `--desde-cache <ruta>` en el paso 2a
-de **todas** las causas de esta corrida (por defecto ya es
-`gestion_causas/cache_eventos_calendario.json`, así que si no le pasaste `--ruta` propia,
-podés usar esa ruta fija directamente sin necesidad de leerla de la respuesta). Si este
-comando falla (error de red, cuota, etc.), no reintentes ni improvises un fallback: detén
-la corrida en este punto y reporta el error tal cual en el resumen final (mismo criterio
-que la sección 0 para el caso del token colgado).
+El calendario **no** lo traés vos: el contexto de la corrida (paso 0) ya lo trajo una sola
+vez para todas las fases, en `cache_calendario.ruta`. Esa es la ruta que vas a pasar como
+`--desde-cache <ruta>` en el paso 3a de **todas** las causas de esta corrida (por defecto
+`gestion_causas/cache_eventos_calendario.json`).
 
-## 2. Por cada causa activa
+Si no hay contexto (estás corriendo esta fase suelta, a mano), traelo vos una sola vez con
+`python -m gestion_causas.cli cache-eventos-calendario` y usá la `ruta` que devuelve. Si ese
+comando falla (error de red, cuota, etc.), no reintentes ni improvises un fallback: detén la
+corrida en este punto y reporta el error tal cual en el resumen final.
 
-Antes de procesar la primera causa, determina la fecha de hoy (zona horaria de Chile) y
-el día de la semana — la vas a necesitar en los pasos b y h de cada causa (para el check
-de "es lunes" y para la fecha que se guarda en `goteo_ultima_revision`).
+**Recordatorio antes de empezar este paso:** los comandos de acá abajo (`buscar-hilos`,
+`leer-hilo`) son llamadas síncronas al CLI — cada una devuelve su resultado al toque, sin
+importar cuántas causas o hilos haya. **Nunca** hace falta lanzarlas en segundo plano ni
+"esperar" nada. Si sentís que esto va a tardar, igual se hace secuencial, una llamada
+después de la otra, dentro de tu propio turno (ver la regla completa más arriba,
+"Regla de ejecución obligatoria").
+
+## 2. Trae de una sola vez los hilos con novedades
+
+La fecha de hoy que vas a usar en el paso 2b y en el paso 3h de cada causa es la
+`fecha_hoy` del contexto (paso 0) — no la recalcules.
+
+En vez de preguntarle a Gmail causa por causa, arma un mapa `RIT -> [hilos]` con como
+máximo dos búsquedas para toda la corrida:
+
+a. Junta el RIT de **todas** las causas activas del paso 1 en un solo operador `OR` de
+   Gmail, con cada RIT entre comillas (evita que Gmail interprete el guion del RIT como
+   operador de exclusión), ej. `("M-1321-2026" OR "M-164-2026" OR "M-26-2026" OR ...)`.
+
+   **Importante — detecta truncamiento:** el CLI corta los resultados exactamente en el
+   `--max-resultados` que le pases, sin avisar que había más (confirmado el 2026-08-28:
+   la búsqueda sin filtro de fecha de las 27 causas activas de ese día tenía 236 hilos
+   reales, y con `--max-resultados 200` se cortaban 36 en silencio). Por eso, en **cada
+   una** de las dos búsquedas del paso b de abajo (grupo "ya revisadas" y grupo "primera
+   revisión"): si el `total` que devuelve el CLI es **igual** al
+   `--max-resultados` que pediste, no asumas que ya tenés todos los resultados — repite la
+   misma búsqueda duplicando `--max-resultados` (500 → 1000 → 2000) hasta que el `total`
+   devuelto sea **estrictamente menor** al pedido. Si después de 3 intentos sigue
+   exactamente en el tope, detente ahí, no seas más agresivo, y anota en el resumen final
+   que esa búsqueda quedó sin confirmar completa (con el `total` y el tope alcanzado) para
+   que Nico decida si hay que investigar.
+
+b. Para cada causa activa, revisa con `obtener-causa --rit "<rit>"` si ya tiene
+   `goteo_ultima_revision` registrada, y separa en dos grupos (esto se hace **todos los
+   días de la semana por igual**, incluidos los lunes — no hay rescan completo especial):
+
+   - **Grupo "ya revisadas"** (con `goteo_ultima_revision`): calcula `fecha_corte` = la
+     fecha `goteo_ultima_revision` **más antigua** de este grupo, menos 1 día de colchón
+     (el operador `after:` de Gmail filtra por día completo, no por hora, así que sin el
+     colchón se podría perder algo llegado el mismo día después de que goteo ya pasó en
+     una corrida anterior). Una sola búsqueda para todo el grupo:
+     ```
+     python -m gestion_causas.cli buscar-hilos --query "after:<fecha_corte AAAA/MM/DD> (<OR de los RIT de este grupo>)" --max-resultados 500
+     ```
+   - **Grupo "primera revisión"** (sin `goteo_ultima_revision` — primera vez que el goteo
+     la revisa; si el grupo no está vacío): una búsqueda aparte, sin filtro de fecha, solo
+     con los RIT de este grupo (mismo criterio de "escaneo completo, igual que siempre"
+     que tenía antes cada causa nueva):
+     ```
+     python -m gestion_causas.cli buscar-hilos --query "(<OR de los RIT de este grupo>)" --max-resultados 500
+     ```
+
+c. Junta los `thread_id` de la(s) búsqueda(s) anteriores (sin duplicados) y trae los
+   mensajes de cada uno — esto sigue siendo una llamada por hilo, pero ahora solo para los
+   hilos que de verdad tuvieron actividad, no una búsqueda vacía repetida por cada causa
+   sin novedades:
+   ```
+   python -m gestion_causas.cli leer-hilo --thread-id <thread_id>
+   ```
+
+d. Para cada hilo leído, revisa el `subject` de sus mensajes (quitándole primero
+   cualquier prefijo `RE:`/`RV:`/`FWD:`/`FW:`/`ENV:`, igual que siempre) para determinar a
+   qué RIT(s) corresponde — el RIT queda en el asunto de toda la cadena, incluidas las
+   respuestas. Arma con esto el mapa `RIT -> [hilos]` que vas a usar en el paso 3. Si un
+   hilo encontrado claramente no tiene que ver con ninguna causa (coincidencia de texto
+   casual), descártalo del mapa — usa criterio, no lo proceses a ciegas. Esto incluye los
+   hilos "Provisiones demanda laborales [mes]", "Informe de provisión [mes]" / "INFORME
+   PROVISIÓN [mes]" y "Risgo causas estado sentencias" / "Riesgo causas estado sentencias"
+   (ver nota de filtro de asunto más arriba) y cualquier otro reporte/consolidado interno
+   que solo mencione el RIT de pasada.
+
+e. Para las causas del grupo "primera revisión" (paso b), agrega también su `thread_id`
+   original guardado en el registro al mapa del RIT correspondiente, aunque no haya
+   aparecido en la búsqueda (mismo colchón de seguridad que tenía antes cada causa nueva,
+   por si el `thread_id` guardado por Fase 1 no calza con el `OR` de este paso).
+
+Si alguna de las búsquedas de este paso falla (error de red, cuota, límite de longitud de
+`query`, etc.), no reintentes ni improvises un fallback: detén la corrida en este punto y
+reporta el error tal cual en el resumen final (mismo criterio que la sección 0 y que el
+cache de calendario del paso 1).
+
+**Por qué esta búsqueda NO se restringe a los 7 dominios de confianza:** aunque los
+documentos de prueba solo se guardan si vienen de esos dominios (paso 3e), la detección de
+acuerdo/pago (paso 3c2) necesita leer avisos y comprobantes que pueden llegar de
+**cualquier** remitente — confirmado el 2026-08-28 con M-637-2026 (`jualmosa@gmail.com`) y
+M-643-2026 (`cajbiobio.cl`), ninguno de los dos en la lista de dominios confiables.
+Restringir esta búsqueda por dominio haría que el goteo dejara de detectar esos avisos.
+
+## 3. Por cada causa activa
 
 a. **Determina la carpeta destino de los documentos**, según el tipo de la próxima
    audiencia (mismo mecanismo que usa `gestion-causas-agenda` paso 2 — calendario de
@@ -171,47 +283,14 @@ a. **Determina la carpeta destino de los documentos**, según el tipo de la pró
    Usa esta carpeta destino (llámala `<carpeta destino>` de aquí en adelante) en los
    pasos d y e.
 
-b. **Busca todos los hilos relacionados con el RIT**, no solo el `thread_id` original que
-   guardó Fase 1 (los documentos reales suelen llegar en una cadena "RV:" aparte, abierta
-   por RR.HH./legal de la empresa — ver nota de dominios más arriba).
+b. **Toma del mapa armado en el paso 2** los hilos que correspondan al RIT de esta causa
+   (puede ser una lista vacía si no hubo novedades — en ese caso salta directo al paso h).
 
-   **Si hoy es lunes, o la causa no tiene `goteo_ultima_revision` en su registro**
-   (revísalo con `obtener-causa --rit "<rit>"` — primera vez que el goteo la revisa):
-   escaneo completo, igual que siempre:
-   ```
-   python -m gestion_causas.cli buscar-hilos --query "<rit>"
-   ```
-   Incluye también el `thread_id` guardado en el registro de la causa aunque no aparezca
-   en esta búsqueda (por si acaso).
-
-   **Cualquier otro día**, con `goteo_ultima_revision` ya registrada: acota la búsqueda a
-   mail nuevo desde la corrida anterior, restando 1 día a `goteo_ultima_revision` como
-   colchón (el operador `after:` de Gmail filtra por día completo, no por hora, así que
-   sin el colchón se podría perder algo llegado el mismo día después de que goteo ya
-   pasó):
-   ```
-   python -m gestion_causas.cli buscar-hilos --query "<rit> after:<goteo_ultima_revision menos 1 día, formato AAAA/MM/DD>"
-   ```
-   No hace falta forzar además la inclusión del `thread_id` original en este caso — si
-   llegó mail nuevo ahí, el mismo filtro `after:` ya lo encuentra (el RIT queda en el
-   asunto de todos los mensajes de esa cadena, incluidas las réplicas).
-
-   En ambos casos: si un hilo encontrado claramente no tiene que ver con la causa
-   (coincidencia de texto casual), descártalo — usa criterio, no proceses todo a ciegas.
-   Esto incluye los hilos "Provisiones demanda laborales [mes]", "Informe de provisión
-   [mes]" / "INFORME PROVISIÓN [mes]" y "Risgo causas estado sentencias" / "Riesgo causas
-   estado sentencias" (quitando primero cualquier prefijo "RE:"/"RV:"/"FWD:"/"ENV:" del
-   subject — ver nota de filtro de asunto más arriba) y cualquier otro reporte/consolidado
-   interno que solo mencione el RIT de pasada.
-
-c. Para cada hilo relevante (el original + los que encontraste en 2b), trae todos sus
-   mensajes:
-   ```
-   python -m gestion_causas.cli leer-hilo --thread-id <thread_id>
-   ```
+c. Ya tenés los mensajes de cada hilo relevante (los trajiste en el paso 2c) — no vuelvas
+   a llamar a `leer-hilo`.
 
 c2. **Detecta acuerdo alcanzado y pago recibido**, con el mismo contenido que ya
-    trajiste en el paso c (no es una lectura adicional, es criterio sobre lo que ya
+    trajiste en el paso 2c (no es una lectura adicional, es criterio sobre lo que ya
     leíste):
 
     - Si la causa **no** tiene todavía `estado_acuerdo` en su registro (revísalo con
@@ -267,7 +346,7 @@ e. Para cada adjunto de cada mensaje de cada hilo (de **todos** los mensajes, no
      `@mayorista10.cl`, `@smu.cl` o `@divisionlogistica.cl` (ver nota de dominios más
      arriba);
    - su nombre (una vez saneado — mismo criterio que usa el comando: sin caracteres
-     `\ / : * ? " < > |`, espacios colapsados) **no** está ya en la lista del paso 2d;
+     `\ / : * ? " < > |`, espacios colapsados) **no** está ya en la lista del paso 3d;
    - su nombre saneado **no** es exactamente `invite.ics` (ver nota más arriba — es solo
      el evento de Calendar, nunca prueba del caso);
 
@@ -283,7 +362,7 @@ e. Para cada adjunto de cada mensaje de cada hilo (de **todos** los mensajes, no
    la demanda se guarda como "demanda.pdf" en Fase 1/0, y como `@sb.cl` es a la vez el
    origen de la demanda de Salcobrand y un dominio de confianza del goteo, ese mismo
    adjunto podría reaparecer aquí con su nombre original; el comando lo reconoce por
-   tamaño y no lo duplica. Aun así, hacer el diff del paso 2d primero evita descargas de
+   tamaño y no lo duplica. Aun así, hacer el diff del paso 3d primero evita descargas de
    más).
 
 f. Para cada documento que **sí** se guardó en este paso (campo `guardado: true`),
@@ -307,17 +386,19 @@ g. Si guardaste al menos un documento nuevo, anota en la bitácora (menciona si 
    Si no había nada nuevo, no hace falta anotar nada para esa causa (evita ruido en la
    bitácora en cada corrida sin novedades).
 
-h. **Guarda la fecha de esta revisión**, siempre (haya habido novedades o no) — es lo
-   que permite que la próxima corrida use el filtro incremental del paso 2b:
+h. **Guarda la fecha de esta revisión**, siempre (haya habido novedades o no, incluso si
+   el paso 3b te dio una lista vacía) — es lo que permite que la próxima corrida calcule
+   bien `fecha_corte` en el paso 2b:
    ```
    python -m gestion_causas.cli registrar-causa --rit "<rit>" --datos-json "<json con {\"goteo_ultima_revision\": \"<fecha de hoy AAAA-MM-DD>\"}>"
    ```
 
-## 3. Resumen final
+## 4. Resumen final
 
 Tu **último mensaje** de esta ejecución es el resumen que el orquestador va a copiar tal
 cual a la sección "Fase goteo" del panel de estado. Entrega un resumen breve: cuántas
-causas se revisaron (y si hoy fue rescan completo de lunes o revisión incremental),
+causas se revisaron (indicando cuántas fueron "primera revisión", sin
+`goteo_ultima_revision` previo, y cuántas incrementales desde la última corrida),
 cuántas tenían documentos nuevos (con el RIT y los nombres de los documentos, indicando
 cuáles se guardaron en la subcarpeta "Exhibición de documentos" por tener audiencia de
 juicio próxima), cuántos de esos documentos se identificaron como EERR y quedaron

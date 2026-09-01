@@ -14,7 +14,10 @@ y el plan en C:\\Users\\usuario\\.claude\\plans\\1-contrato-de-trabajo-streamed-
 """
 
 import json
+import os
 import re
+import time
+from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
 
@@ -54,6 +57,64 @@ def extraer_rit(texto: str) -> str | None:
     return f"{letra.upper()}-{numero}-{anio}"
 
 
+# Segundos que se espera por el lock antes de rendirse, y edad a partir de la
+# cual un .lock se considera huerfano (un proceso que murio sin liberarlo).
+LOCK_TIMEOUT_SEG = 30.0
+LOCK_EDAD_MAXIMA_SEG = 120.0
+
+
+@contextmanager
+def _lock(ruta: Path):
+    """Serializa el ciclo leer-modificar-escribir de un registro entre
+    procesos distintos.
+
+    Existe porque el orquestador corre los subagentes `goteo` y `agenda` en
+    paralelo y los dos actualizan `registro_causas.json` (campos distintos,
+    pero el archivo se reescribe entero en cada `registrar_causa`, asi que sin
+    esto una escritura pisa a la otra). Cada llamada del CLI es un proceso
+    corto y separado, asi que el lock es un archivo centinela creado con
+    O_EXCL — no sirve un lock en memoria.
+
+    Un `.lock` mas viejo que LOCK_EDAD_MAXIMA_SEG se considera huerfano y se
+    borra, para que un proceso muerto no bloquee para siempre las corridas
+    siguientes.
+    """
+    ruta_lock = Path(str(ruta) + ".lock")
+    limite = time.monotonic() + LOCK_TIMEOUT_SEG
+    descriptor = None
+    while True:
+        try:
+            descriptor = os.open(str(ruta_lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            try:
+                edad = time.time() - ruta_lock.stat().st_mtime
+            except FileNotFoundError:
+                continue  # lo liberaron entre el open y el stat: reintenta ya
+            if edad > LOCK_EDAD_MAXIMA_SEG:
+                try:
+                    ruta_lock.unlink()
+                except FileNotFoundError:
+                    pass
+                continue
+            if time.monotonic() >= limite:
+                raise TimeoutError(
+                    f"No se pudo tomar el lock de '{ruta}' en {LOCK_TIMEOUT_SEG}s "
+                    f"(existe '{ruta_lock}'). Si ningun proceso lo esta usando, borralo."
+                )
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        try:
+            os.close(descriptor)
+        finally:
+            try:
+                ruta_lock.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def _cargar(ruta: Path) -> dict:
     if not ruta.exists():
         return {}
@@ -62,8 +123,13 @@ def _cargar(ruta: Path) -> dict:
 
 
 def _guardar(ruta: Path, datos: dict) -> None:
-    with open(ruta, "w", encoding="utf-8") as f:
+    """Escritura atomica: se escribe a un temporal al lado y se reemplaza de
+    una sola vez, para que un corte a mitad no deje el registro truncado."""
+    ruta = Path(ruta)
+    temporal = Path(str(ruta) + ".tmp")
+    with open(temporal, "w", encoding="utf-8") as f:
         json.dump(datos, f, ensure_ascii=False, indent=2, sort_keys=True)
+    os.replace(temporal, ruta)
 
 
 # ── Registro de causas ────────────────────────────────────────────────────
@@ -88,15 +154,16 @@ def registrar_causa(rit: str, datos: dict, ruta: Path = RUTA_REGISTRO_CAUSAS) ->
 
     Devuelve la entrada final guardada.
     """
-    registro = cargar_registro_causas(ruta)
-    clave = normalizar_rit(rit)
-    existente = registro.get(clave, {})
-    fusionada = {**existente, **datos}
-    fusionada["rit"] = rit
-    fusionada.setdefault("primera_vez_registrada", datetime.now().isoformat())
-    fusionada["ultima_actualizacion"] = datetime.now().isoformat()
-    registro[clave] = fusionada
-    _guardar(ruta, registro)
+    with _lock(ruta):
+        registro = cargar_registro_causas(ruta)
+        clave = normalizar_rit(rit)
+        existente = registro.get(clave, {})
+        fusionada = {**existente, **datos}
+        fusionada["rit"] = rit
+        fusionada.setdefault("primera_vez_registrada", datetime.now().isoformat())
+        fusionada["ultima_actualizacion"] = datetime.now().isoformat()
+        registro[clave] = fusionada
+        _guardar(ruta, registro)
     return fusionada
 
 
@@ -174,14 +241,15 @@ def registrar_eerr_recibido(
 ) -> None:
     """Anota que se recibió el EERR del local `ceco` con motivo del despido de
     fecha `fecha_despido` (para la causa `rit_causa`)."""
-    registro = cargar_registro_ceco(ruta)
-    ceco_norm = str(ceco).strip().upper()
-    entradas = registro.setdefault(ceco_norm, [])
-    entradas.append({
-        "fecha_despido": str(_parsear_fecha(fecha_despido)),
-        "rit_causa": rit_causa,
-    })
-    _guardar(ruta, registro)
+    with _lock(ruta):
+        registro = cargar_registro_ceco(ruta)
+        ceco_norm = str(ceco).strip().upper()
+        entradas = registro.setdefault(ceco_norm, [])
+        entradas.append({
+            "fecha_despido": str(_parsear_fecha(fecha_despido)),
+            "rit_causa": rit_causa,
+        })
+        _guardar(ruta, registro)
 
 
 def buscar_eerr_reusable(
@@ -236,19 +304,20 @@ def registrar_aviso(
     `thread_id` en `fecha` (AAAA-MM-DD). `tipo` es uno de "acuerdo-daniela",
     "causa-laboral" o "documentos" — solo informativo, no cambia la lógica de
     cadencia. Devuelve la entrada final guardada."""
-    registro = cargar_registro_seguimiento(ruta)
-    entrada = registro.setdefault(thread_id, {"tipo": tipo, "rit": rit, "avisos": []})
-    entrada["tipo"] = tipo
-    if rit:
-        entrada["rit"] = rit
-    entrada["avisos"].append({
-        "n": len(entrada["avisos"]) + 1,
-        "fecha": str(_parsear_fecha(fecha)),
-        "draft_id": draft_id,
-    })
-    entrada["ultima_revision"] = datetime.now().isoformat()
-    registro[thread_id] = entrada
-    _guardar(ruta, registro)
+    with _lock(ruta):
+        registro = cargar_registro_seguimiento(ruta)
+        entrada = registro.setdefault(thread_id, {"tipo": tipo, "rit": rit, "avisos": []})
+        entrada["tipo"] = tipo
+        if rit:
+            entrada["rit"] = rit
+        entrada["avisos"].append({
+            "n": len(entrada["avisos"]) + 1,
+            "fecha": str(_parsear_fecha(fecha)),
+            "draft_id": draft_id,
+        })
+        entrada["ultima_revision"] = datetime.now().isoformat()
+        registro[thread_id] = entrada
+        _guardar(ruta, registro)
     return entrada
 
 

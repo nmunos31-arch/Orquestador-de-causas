@@ -5,6 +5,7 @@ registro) funcionen de punta a punta."""
 import html
 import json
 
+from gestion_causas import calendar_client, gmail_client, gmail_personal_client
 from gestion_causas.cli import _cuerpo_con_lista, _texto_a_lista_html, _texto_plano_a_html, construir_parser, main
 
 
@@ -28,6 +29,7 @@ class TestParser:
             "verificar-borradores-pendientes",
             "hilos-sin-respuesta", "puede-insistir", "registrar-aviso", "dias-habiles-entre",
             "panel-html", "enviar-panel", "diagnostico-personal",
+            "contexto-corrida",
         }
         assert esperados.issubset(set(accion_sub.choices.keys()))
 
@@ -257,3 +259,103 @@ class TestPanel:
         assert codigo == 0
         salida = json.loads(capsys.readouterr().out)
         assert salida["simulado"] is True
+
+
+class TestContextoCorrida:
+    """Paso 0 del orquestador: resuelve una sola vez lo que las 4 fases
+    comparten (fecha, tokens, cache de calendario). Sin red: los tres
+    diagnósticos y el cache se simulan."""
+
+    def _preparar(self, monkeypatch, *, gmail=True, calendar=True, personal=True):
+        def diagnostico(email):
+            def _fn(permitir_login=True, **_):
+                return {"email": email, "scopes": []}
+            return _fn
+
+        def caido(permitir_login=True, **_):
+            raise RuntimeError("token vencido; requiere login interactivo")
+
+        monkeypatch.setattr(
+            gmail_client, "diagnostico",
+            diagnostico("nmunoz@gomezyriesco.cl") if gmail else caido)
+        monkeypatch.setattr(
+            calendar_client, "diagnostico",
+            diagnostico("nmunoz@gomezyriesco.cl") if calendar else caido)
+        monkeypatch.setattr(
+            gmail_personal_client, "diagnostico",
+            diagnostico("nmunos31@gmail.com") if personal else caido)
+        monkeypatch.setattr(
+            calendar_client, "guardar_cache_eventos",
+            lambda ruta, dias_adelante: {
+                "total": 12, "ruta": str(ruta),
+                "desde": "2026-09-01", "hasta": "2027-03-20",
+            })
+
+    def test_con_todo_ok_escribe_el_contexto_y_sale_cero(self, tmp_path, monkeypatch, capsys):
+        self._preparar(monkeypatch)
+        salida = tmp_path / "_contexto_corrida.json"
+
+        codigo = main(["contexto-corrida", "--salida", str(salida),
+                       "--ruta-cache", str(tmp_path / "cache.json")])
+
+        assert codigo == 0
+        contexto = json.loads(salida.read_text(encoding="utf-8"))
+        assert contexto["listo"] is True
+        assert contexto["fecha_hoy"] and contexto["dia_semana"]
+        assert contexto["es_lunes"] == (contexto["dia_semana"] == "lunes")
+        assert all(contexto["tokens"][t]["ok"] for t in ("gmail_trabajo", "calendar", "personal"))
+        assert contexto["cache_calendario"]["total"] == 12
+        # También lo imprime a stdout, para que el orquestador no tenga que leer el archivo.
+        assert json.loads(capsys.readouterr().out)["listo"] is True
+
+    def test_calendar_caido_sale_uno_y_no_deja_cache(self, tmp_path, monkeypatch, capsys):
+        self._preparar(monkeypatch, calendar=False)
+        salida = tmp_path / "_contexto_corrida.json"
+
+        codigo = main(["contexto-corrida", "--salida", str(salida),
+                       "--ruta-cache", str(tmp_path / "cache.json")])
+
+        assert codigo == 1
+        contexto = json.loads(salida.read_text(encoding="utf-8"))
+        assert contexto["listo"] is False
+        assert contexto["cache_calendario"] is None
+        assert "login interactivo" in contexto["tokens"]["calendar"]["error"]
+        capsys.readouterr()
+
+    def test_solo_el_token_personal_caido_no_aborta_la_corrida(self, tmp_path, monkeypatch, capsys):
+        # El token personal solo se usa para enviar el panel al final; que falte
+        # no es motivo para no correr las 4 fases.
+        self._preparar(monkeypatch, personal=False)
+        salida = tmp_path / "_contexto_corrida.json"
+
+        codigo = main(["contexto-corrida", "--salida", str(salida),
+                       "--ruta-cache", str(tmp_path / "cache.json")])
+
+        assert codigo == 0
+        contexto = json.loads(salida.read_text(encoding="utf-8"))
+        assert contexto["listo"] is True
+        assert contexto["tokens"]["personal"]["ok"] is False
+        capsys.readouterr()
+
+    def test_token_atado_a_la_cuenta_equivocada_no_esta_ok(self, tmp_path, monkeypatch, capsys):
+        self._preparar(monkeypatch)
+        monkeypatch.setattr(
+            gmail_client, "diagnostico",
+            lambda permitir_login=True, **_: {"email": "otra@cuenta.cl", "scopes": []})
+        salida = tmp_path / "_contexto_corrida.json"
+
+        codigo = main(["contexto-corrida", "--salida", str(salida),
+                       "--ruta-cache", str(tmp_path / "cache.json")])
+
+        assert codigo == 1
+        contexto = json.loads(salida.read_text(encoding="utf-8"))
+        assert contexto["tokens"]["gmail_trabajo"]["ok"] is False
+        assert "otra@cuenta.cl" in contexto["tokens"]["gmail_trabajo"]["error"]
+        capsys.readouterr()
+
+    def test_dry_run_no_escribe_nada(self, tmp_path, capsys):
+        salida = tmp_path / "_contexto_corrida.json"
+        codigo = main(["--dry-run", "contexto-corrida", "--salida", str(salida)])
+        assert codigo == 0
+        assert not salida.exists()
+        assert json.loads(capsys.readouterr().out)["simulado"] is True
