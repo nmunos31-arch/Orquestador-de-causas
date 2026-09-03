@@ -302,6 +302,26 @@ class TestClasificarTipoAudiencia:
         assert calendar_client.clasificar_tipo_audiencia("Audiencia de Juicio M-1-2026") != "Unica"
 
 
+class TestEsEventoNoAudiencia:
+    # Confirmado 2026-09-03: Nico corrigió que estos títulos no son
+    # audiencias (un plazo procesal o una reunión meramente informativa),
+    # así que no deben forzarse a Única/Preparatoria/Juicio ni reportarse
+    # como "audiencia ambigua".
+    def test_vence_plazo_no_es_audiencia(self):
+        assert calendar_client.es_evento_no_audiencia("Vence plazo para contestar demanda Obreque con Salcobrand") is True
+
+    def test_reunion_informativa_no_es_audiencia(self):
+        assert calendar_client.es_evento_no_audiencia("Reunión informativa Sáez con Preunic") is True
+
+    def test_reunion_preparatoria_si_es_audiencia(self):
+        # No confundir con "reunión informativa": "reunión preparatoria" es
+        # alias real de la audiencia preparatoria (ver clasificar_tipo_audiencia).
+        assert calendar_client.es_evento_no_audiencia('Reunión preparatoria "Tiznado con Salcobrand" M-744-2026') is False
+
+    def test_audiencia_unica_si_es_audiencia(self):
+        assert calendar_client.es_evento_no_audiencia("Audiencia Unica M-643-2026") is False
+
+
 class TestPrimerEventoFuturo:
     def test_se_queda_con_el_mas_proximo_de_hoy_en_adelante(self):
         eventos = [
@@ -346,6 +366,24 @@ class TestMapaAudienciasPorRit:
 
     def test_rit_sin_audiencia_proxima_no_aparece(self):
         mapa = calendar_client.mapa_audiencias_por_rit(["M-999-2026"], self.EVENTOS, hoy=date(2026, 9, 1))
+        assert mapa == {}
+
+    def test_descarta_vence_plazo_y_usa_la_audiencia_real_posterior(self):
+        # Confirmado 2026-09-03 con O-809-2026: el evento "vence plazo" no debe
+        # taparse la audiencia preparatoria real que viene después.
+        eventos = [
+            {"fecha": date(2026, 9, 5), "resumen": "Vence plazo para contestar demanda O-809-2026"},
+            {"fecha": date(2026, 9, 20), "resumen": "Audiencia Preparatoria O-809-2026"},
+        ]
+        mapa = calendar_client.mapa_audiencias_por_rit(["O-809-2026"], eventos, hoy=date(2026, 9, 3))
+        assert mapa["O-809-2026"]["fecha"] == "2026-09-20"
+        assert mapa["O-809-2026"]["tipo"] == "Preparatoria"
+
+    def test_rit_solo_con_vence_plazo_no_aparece_en_el_mapa(self):
+        # Sin ninguna audiencia real todavía, el RIT se salta igual que si no
+        # tuviera ningún evento — no se reporta como "audiencia ambigua".
+        eventos = [{"fecha": date(2026, 9, 5), "resumen": "Vence plazo para contestar demanda T-995-2026"}]
+        mapa = calendar_client.mapa_audiencias_por_rit(["T-995-2026"], eventos, hoy=date(2026, 9, 3))
         assert mapa == {}
 
 

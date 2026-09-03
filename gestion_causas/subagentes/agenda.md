@@ -109,12 +109,16 @@ existiera: para esa causa puntual, reintenta sin `--desde-cache` (la llamada en 
 siempre) y seguí adelante. No hace falta detener la corrida ni avisar a las demás causas —
 es un fallback por causa, no un fallo general.
 
-Quédate con el **primero futuro o de hoy** (si todos son pasados, no hay audiencia
+Antes de elegir el evento, **descartá los que no son audiencias**: "vence plazo para
+[contestar/...]" (un plazo procesal) y "reunión informativa" (a secas, sin "preparatoria")
+no son audiencias — ignoralos como si el RIT no tuviera ese evento. Quédate con el
+**primero futuro o de hoy** de los que queden (si no queda ninguno, no hay audiencia
 próxima — sáltala). Del `resumen` del evento, determina el tipo con el mismo criterio del
 mapa: "audiencia única" (o "aud. única") → Única; "audiencia preparatoria" (o "reunión
 preparatoria" — así la agenda el tribunal casi siempre en la práctica) → Preparatoria;
-"audiencia de juicio" (o "aud. de juicio") → Juicio; si no queda claro, es Ambiguo — sáltate
-los pasos 3 y 4 y anótalo en el resumen.
+"audiencia de juicio" (o "aud. de juicio") → Juicio; si no queda claro pero sí parece ser
+una audiencia (no un plazo ni una reunión informativa), es Ambiguo — sáltate los pasos 3 y
+4 y anótalo en el resumen.
 
 **Causas que no son una demanda laboral contra la empresa** (ej. una demanda de
 desafuero, donde la empresa es la demandante y no la demandada — ver

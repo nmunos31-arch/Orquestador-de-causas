@@ -232,13 +232,35 @@ def buscar_audiencia_por_rit_desde_cache(rit: str, ruta: Path = RUTA_CACHE_EVENT
     return buscar_eventos_por_rit(cargar_cache_eventos(ruta)["eventos"], rit)
 
 
+def es_evento_no_audiencia(resumen: str) -> bool:
+    """True si el título del evento deja claro que NO es una audiencia —
+    p. ej. un plazo procesal o una reunión meramente informativa — así se
+    distingue de una audiencia real cuyo tipo específico no se pudo
+    determinar (eso sigue siendo "Ambiguo", ver clasificar_tipo_audiencia).
+
+    Confirmado 2026-09-03: Nico corrigió que O-809-2026 ("Vence plazo para
+    contestar"), T-186-2026 (idem), T-995-2026 (idem) y T-26-2026 ("Reunión
+    informativa") no son audiencias — no hay que forzarlas a
+    Única/Preparatoria/Juicio ni reportarlas como "audiencia ambigua"."""
+    texto = _normalizar_texto(resumen).replace(".", "")
+    if "vence plazo" in texto:
+        return True
+    if "reunion informativa" in texto:
+        return True
+    return False
+
+
 def clasificar_tipo_audiencia(resumen: str) -> str:
     """Determina el tipo de audiencia a partir del título del evento de
     calendario — mismo criterio que usaban por separado goteo.md (paso 3a) y
     agenda.md (paso 2), unificado acá para que no vuelvan a divergir. "Única"
     y "Juicio" comparten palabra ("audiencia de juicio" contiene "audiencia"),
     así que el orden de los chequeos importa: Juicio primero. Si el título no
-    menciona ninguno de los tres, devuelve "Ambiguo" — nunca se adivina."""
+    menciona ninguno de los tres, devuelve "Ambiguo" — nunca se adivina.
+
+    Asume que ya se descartó con `es_evento_no_audiencia` que el evento sea
+    directamente un plazo procesal o una reunión informativa (esos ni
+    siquiera cuentan como audiencia candidata — ver mapa_audiencias_por_rit)."""
     texto = _normalizar_texto(resumen).replace(".", "")
     if "audiencia de juicio" in texto or "aud de juicio" in texto:
         return "Juicio"
@@ -275,11 +297,17 @@ def mapa_audiencias_por_rit(rits: list[str], eventos: list[dict], hoy: date | No
     agenda distinguía las 3 variantes).
 
     Los RIT sin audiencia próxima no aparecen en el resultado — mismo
-    criterio de "sáltala" que usaban ambas fases. Devuelve
+    criterio de "sáltala" que usaban ambas fases. Un evento que
+    `es_evento_no_audiencia` marca como plazo procesal/reunión informativa
+    (no una audiencia) se descarta antes de elegir "el primero futuro", para
+    no confundirlo con una audiencia real de tipo ambiguo — si el RIT no
+    tiene ningún otro evento futuro, queda sin audiencia próxima (se salta),
+    igual que si no tuviera ningún evento. Devuelve
     `{rit: {"fecha": "YYYY-MM-DD", "resumen": str, "tipo": str}}`."""
     resultado = {}
     for rit in rits:
-        evento = primer_evento_futuro(buscar_eventos_por_rit(eventos, rit), hoy=hoy)
+        candidatos = [e for e in buscar_eventos_por_rit(eventos, rit) if not es_evento_no_audiencia(e["resumen"])]
+        evento = primer_evento_futuro(candidatos, hoy=hoy)
         if evento is None:
             continue
         resultado[rit] = {

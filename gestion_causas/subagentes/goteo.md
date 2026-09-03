@@ -280,7 +280,12 @@ c2. **Detecta acuerdo alcanzado y pago recibido**, con el mismo contenido que ya
       **alcanzó y aprobó** un avenimiento/conciliación/acuerdo — no una negociación en
       curso ni una oferta, hace falta confirmación de que el acuerdo ya se cerró (ej.
       "acta de conciliación", "avenimiento aprobado", "se aprobó el acuerdo por $X",
-      "conciliación total"):
+      "conciliación total"). En particular, que un hilo mencione que **el tribunal
+      propuso bases** de conciliación (p. ej. en el acta de una audiencia) **no** es un
+      acuerdo alcanzado — nadie preguntó por acuerdo ni las partes lo negociaron todavía;
+      no actualices `estado_acuerdo` solo por eso (confirmado 2026-09-03 con O-173-2026,
+      O-192-2026 y O-348-2026: los tres solo informaban las bases que propuso el
+      tribunal):
       ```
       python -m gestion_causas.cli registrar-causa --rit "<rit>" --datos-json "<json con {\"estado_acuerdo\": \"pendiente_pago\"}>"
       ```
