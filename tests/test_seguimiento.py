@@ -173,3 +173,104 @@ class TestAnalizarHilo:
         ahora = self._ahora("Mon, 10 Aug 2026 10:00:00 -0400", 1)
         analisis = seguimiento.analizar_hilo(mensajes, ahora, NICO)
         assert analisis["iniciado_por"] == DANIELA
+
+
+class TestEsReporteConsolidado:
+    def test_provisiones_demanda_laborales(self):
+        assert seguimiento.es_reporte_consolidado("Provisiones demanda laborales Abril 2026")
+
+    def test_informe_de_provision_con_tilde_y_mayusculas(self):
+        assert seguimiento.es_reporte_consolidado("INFORME PROVISIÓN ABRIL 2026")
+
+    def test_informe_de_provision_sin_tilde(self):
+        assert seguimiento.es_reporte_consolidado("Informe de provision Marzo 2026")
+
+    def test_risgo_causas_estado_sentencias_con_typo(self):
+        assert seguimiento.es_reporte_consolidado("Risgo causas estado sentencias")
+
+    def test_riesgo_causas_estado_sentencias_bien_escrito(self):
+        assert seguimiento.es_reporte_consolidado("Riesgo causas estado sentencias")
+
+    def test_ignora_prefijo_re_y_rv(self):
+        # Bug de raiz confirmado el 2026-08-21: sin quitar el prefijo esto no calzaba.
+        assert seguimiento.es_reporte_consolidado("RE: Risgo causas estado sentencias")
+        assert seguimiento.es_reporte_consolidado("Re: RV: INFORME PROVISIÓN ABRIL 2026")
+
+    def test_asunto_normal_no_es_reporte(self):
+        assert not seguimiento.es_reporte_consolidado("Causa laboral Soto con Alvi M-1-2026")
+
+    def test_hilo_es_reporte_consolidado_si_cualquier_mensaje_matchea(self):
+        mensajes = [
+            _mensaje("a@sb.cl", "2026-08-14"),
+            {**_mensaje("b@sb.cl", "2026-08-15"), "subject": "Provisiones demanda laborales Agosto 2026"},
+        ]
+        assert seguimiento.hilo_es_reporte_consolidado(mensajes)
+
+    def test_hilo_normal_no_es_reporte(self):
+        mensajes = [_mensaje("a@sb.cl", "2026-08-14"), _mensaje("b@sb.cl", "2026-08-15")]
+        assert not seguimiento.hilo_es_reporte_consolidado(mensajes)
+
+
+class TestAgruparCausasParaBarrido:
+    def test_separa_ya_revisadas_de_primera_revision(self):
+        causas = [
+            {"rit": "M-1-2026", "goteo_ultima_revision": "2026-08-28"},
+            {"rit": "M-2-2026", "goteo_ultima_revision": "2026-08-30"},
+            {"rit": "M-3-2026", "thread_id": "t3"},
+        ]
+        grupos = seguimiento.agrupar_causas_para_barrido(causas)
+        assert grupos["ya_revisadas"]["rits"] == ["M-1-2026", "M-2-2026"]
+        assert grupos["ya_revisadas"]["fecha_corte"] == "2026-08-27"  # min - 1 dia colchon
+        assert grupos["primera_revision"]["rits"] == ["M-3-2026"]
+        assert grupos["thread_por_rit"] == {"M-3-2026": "t3"}
+
+    def test_thread_por_rit_incluye_causas_ya_revisadas_no_solo_primera_revision(self):
+        # Bug confirmado el 2026-09-03 con T-26-2026: una causa ya revisada
+        # (con goteo_ultima_revision) tambien puede tener thread_id
+        # registrado, y antes esa red de seguridad solo cubria
+        # "primera_revision" — quedaba fuera para siempre si su hilo
+        # original nunca mencionaba el RIT como texto.
+        causas = [
+            {"rit": "T-26-2026", "goteo_ultima_revision": "2026-08-13", "thread_id": "torig"},
+            {"rit": "M-3-2026", "thread_id": "t3"},
+        ]
+        grupos = seguimiento.agrupar_causas_para_barrido(causas)
+        assert grupos["thread_por_rit"] == {"T-26-2026": "torig", "M-3-2026": "t3"}
+
+    def test_grupo_vacio_si_no_hay_causas_de_ese_tipo(self):
+        grupos = seguimiento.agrupar_causas_para_barrido([{"rit": "M-1-2026", "goteo_ultima_revision": "2026-08-28"}])
+        assert grupos["primera_revision"]["rits"] == []
+        assert grupos["thread_por_rit"] == {}
+
+    def test_causa_sin_rit_se_ignora(self):
+        grupos = seguimiento.agrupar_causas_para_barrido([{"rit": None, "thread_id": "t1"}])
+        assert grupos["ya_revisadas"]["rits"] == []
+        assert grupos["primera_revision"]["rits"] == []
+        assert grupos["thread_por_rit"] == {}
+
+
+class TestConstruirQueryOrRits:
+    def test_sin_fecha_corte(self):
+        query = seguimiento.construir_query_or_rits(["M-1-2026", "O-2-2026"])
+        assert query == '("M-1-2026" OR "O-2-2026")'
+
+    def test_con_fecha_corte_convierte_guiones_a_barras(self):
+        query = seguimiento.construir_query_or_rits(["M-1-2026"], fecha_corte="2026-08-27")
+        assert query == 'after:2026/08/27 ("M-1-2026")'
+
+
+class TestClasificarRitsDeHilo:
+    def test_encuentra_rit_en_asunto_normalizado(self):
+        mensajes = [_mensaje("a@sb.cl", "2026-08-14", subject="RE: Causa laboral Soto con Alvi M-1-2026")]
+        assert seguimiento.clasificar_rits_de_hilo(["M-1-2026", "M-2-2026"], mensajes) == ["M-1-2026"]
+
+    def test_no_matchea_rit_ausente(self):
+        mensajes = [_mensaje("a@sb.cl", "2026-08-14", subject="Causa laboral Soto con Alvi M-1-2026")]
+        assert seguimiento.clasificar_rits_de_hilo(["M-9-2026"], mensajes) == []
+
+    def test_matchea_por_cualquier_mensaje_del_hilo(self):
+        mensajes = [
+            _mensaje("a@sb.cl", "2026-08-14", subject="Antecedentes"),
+            _mensaje("b@sb.cl", "2026-08-15", subject="RV: Causa laboral Soto con Alvi M-1-2026"),
+        ]
+        assert seguimiento.clasificar_rits_de_hilo(["M-1-2026"], mensajes) == ["M-1-2026"]

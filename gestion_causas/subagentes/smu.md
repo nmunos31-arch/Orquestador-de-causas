@@ -68,20 +68,10 @@ reintentes, y deja como resumen final "La tarea no pudo autenticarse contra
 nmunoz@gomezyriesco.cl — falta correr `python -m gestion_causas.cli diagnostico` una vez de
 forma interactiva para autorizar el token." Nunca sigas operando sobre otra cuenta.
 
-## 0b. Avisar sobre borradores sin enviar de corridas anteriores
-
-Esta tarea nunca envía correos — cada borrador de documentos que crea (paso 2k.5) queda
-esperando a que Nico lo revise y lo envíe a mano. Como es fácil que se acumulen sin que
-Nico se dé cuenta, **antes de buscar correos nuevos** corre:
-```
-python -m gestion_causas.cli verificar-borradores-pendientes
-```
-Esto revisa, para cada causa del registro que tiene un `borrador_documentos_draft_id`
-guardado (ver paso 2k.5), si ese borrador todavía existe en Gmail. Devuelve:
-- `pendientes`: causas cuyo borrador sigue ahí sin enviar — **guarda esta lista**, va en el
-  resumen final (paso 3) como aviso explícito, con RIT, empresa y demandante de cada una.
-- `limpiados`: causas cuyo borrador ya no existe (Nico lo envió o lo borró) — el comando ya
-  limpió el campo solo, no hace falta hacer nada con esto salvo mencionarlo si es útil.
+**Nota (2026-09-02):** el aviso sobre borradores de documentos sin enviar (que antes era
+un paso 0b de esta fase) ahora lo hace el orquestador una sola vez por corrida, en su
+paso 4, para armar la bandeja de acciones del panel — no hace falta que esta fase lo
+repita.
 
 ## 1. Buscar correos candidatos
 
@@ -303,10 +293,14 @@ k. **Redacta el borrador de documentos a solicitar (Fase 2)** — solo si guarda
       ```
       El comando ya evita duplicar el borrador si la cadena ya tiene uno — no te
       preocupes por eso, pero revisa `creado` en la respuesta para el resumen final.
-      Si `creado` es true, guarda el `draft_id` devuelto en el registro de la causa (para
-      que la próxima corrida pueda avisar si Nico todavía no lo envió — ver paso 0b):
+      Si `creado` es true, guarda el `draft_id` devuelto **junto con la lista de
+      documentos pedidos** (uno por línea, sin numeración) en el registro de la causa —
+      el `draft_id` es para que `verificar-borradores-pendientes` (que ahora corre el
+      orquestador, paso 4) pueda avisar si Nico todavía no lo envió; la lista es para
+      que, cuando el subagente "seguimiento" note que Nico lo envió, sepa qué se pidió
+      sin tener que releer el correo:
       ```
-      python -m gestion_causas.cli registrar-causa --rit "<rit>" --datos-json "<json con solo {\"borrador_documentos_draft_id\": \"<draft_id>\"}>"
+      python -m gestion_causas.cli registrar-causa --rit "<rit>" --datos-json "<json con {\"borrador_documentos_draft_id\": \"<draft_id>\", \"documentos_solicitados\": [\"Contrato de trabajo\", \"Carta de despido\", ...]}>"
       ```
 
 l. **Etiqueta el hilo con el color de la empresa:**
@@ -331,23 +325,43 @@ n. **Marca el hilo como procesado** — solo si no hubo error de Excel bloqueado
 
 ## 3. Resumen final
 
-Tu **último mensaje** de esta ejecución es el resumen que el orquestador va a copiar tal
-cual a la sección "Fase smu" del panel de estado — que sea breve y legible, con:
-- **Primero, si el paso 0b encontró `pendientes`:** avisa explícitamente cuáles borradores
-  de documentos siguen sin enviar de corridas anteriores (RIT, empresa, demandante) — esto
-  va destacado, no mezclado con el resto, porque es lo que más fácil se le puede pasar a
-  Nico.
-- Cuántas causas nuevas se registraron (RIT, empresa, si la demanda se guardó o
-  falta, si el CECO se guardó o falta, si aplicaba o no al Excel).
-- Cuántos borradores de documentos se crearon (Fase 2), cuántos se saltaron por no
-  tener demanda, y en cuántos se reusó el EERR de una causa anterior (con el RIT de
-  esa causa).
-- Cuántas cadenas internas (`@gomezyriesco.cl`) se encontraron y se dejaron sin
-  procesar (solo el conteo, no hace falta detallarlas — las usa `gestion-causas-agenda`).
-- Cuántos hilos eran de otra empresa (fuera del filtro de 6) y se ignoraron.
-- Cuántos eran RIT duplicado.
-- Cuántos quedaron pendientes por error (Excel bloqueado) — se reintentan solos en
-  la próxima corrida.
-- Si hubo el problema de autenticación del paso 0, dilo primero y no sigas.
+Tu **último mensaje** de esta ejecución debe ser **un único objeto JSON**, sin texto antes
+ni después y sin envolverlo en \`\`\` — el orquestador lo copia tal cual a la sección "Fase
+smu" del panel de estado. Formato:
+
+```json
+{
+  "fase": "smu",
+  "titular": "<una frase: ej. \"2 causas nuevas registradas, 2 borradores de documentos creados\">",
+  "metricas": [
+    {"etiqueta": "Causas nuevas", "valor": N},
+    {"etiqueta": "Borradores de documentos creados", "valor": N},
+    {"etiqueta": "EERR reusado", "valor": N},
+    {"etiqueta": "Cadenas internas encontradas", "valor": N},
+    {"etiqueta": "Otra empresa (ignorados)", "valor": N},
+    {"etiqueta": "RIT duplicado", "valor": N},
+    {"etiqueta": "Pendientes por error de Excel", "valor": N}
+  ],
+  "items": [
+    {"rit": "<rit>", "titulo": "<empresa> - <demandante>",
+     "detalle": "<demanda guardada o falta; CECO guardado o falta; aplica o no al Excel; EERR reusado del RIT X si corresponde>"}
+  ],
+  "acciones": [],
+  "notas": []
+}
+```
+
+- `items`: una entrada por cada causa **nueva** registrada en esta corrida (no repitas las
+  que ya estaban y solo se etiquetaron/marcaron de nuevo).
+- `acciones`: solo si algo requiere que Nico decida algo **ahora** (ej. un hilo con RIT
+  ambiguo que no pudiste resolver solo, o un patrón de asunto nuevo que no calza con nada
+  conocido) — formato `{"rit": "<rit o null>", "que": "<qué necesita revisar>", "urgencia":
+  "alta"|"media"|"baja"}`. Las causas pendientes por Excel bloqueado **no** van acá — se
+  reintentan solas en la próxima corrida, no requieren que Nico haga nada.
+- `notas`: observaciones de criterio que quieras dejarle a Nico sin que sean urgentes (ej.
+  un dominio nuevo visto en un remitente).
+- Si hubo el problema de autenticación del paso 0, tu resumen es en cambio
+  `{"fase": "smu", "error": "La tarea no pudo autenticarse contra nmunoz@gomezyriesco.cl — falta autorizar el token de forma interactiva."}`
+  y no sigas con el resto.
 
 No hace falta ser extenso si no hubo novedades.

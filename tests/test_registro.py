@@ -333,3 +333,104 @@ class TestEscrituraConcurrente:
         ruta = tmp_path / "registro_causas.json"
         registro_mod.registrar_causa("M-5-2026", {"empresa": "Alvi"}, ruta=ruta)
         assert [f.name for f in tmp_path.iterdir()] == ["registro_causas.json"]
+
+
+class TestRegistroPedidos:
+    def test_registrar_pedido_nuevo_aplica_defaults(self, tmp_path):
+        ruta = tmp_path / "registro_pedidos.json"
+        entrada = registro_mod.registrar_pedido(
+            "t1", {"rit": "M-1-2026", "tipo": "documentos", "fecha_envio": "2026-08-19"}, ruta=ruta
+        )
+        assert entrada["thread_id"] == "t1"
+        assert entrada["estado"] == "esperando"
+        assert entrada["items_recibidos"] == []
+        assert entrada["primera_vez_registrado"]
+        assert entrada["ultima_revision"]
+
+    def test_registrar_pedido_existente_hace_merge_sin_perder_campos(self, tmp_path):
+        ruta = tmp_path / "registro_pedidos.json"
+        registro_mod.registrar_pedido(
+            "t1",
+            {"rit": "M-1-2026", "tipo": "documentos", "items_pedidos": ["Contrato", "Finiquito"]},
+            ruta=ruta,
+        )
+        entrada = registro_mod.registrar_pedido(
+            "t1", {"items_recibidos": ["Contrato"], "estado": "parcial"}, ruta=ruta
+        )
+        assert entrada["rit"] == "M-1-2026"
+        assert entrada["items_pedidos"] == ["Contrato", "Finiquito"]
+        assert entrada["items_recibidos"] == ["Contrato"]
+        assert entrada["estado"] == "parcial"
+
+    def test_obtener_pedido_inexistente_es_none(self, tmp_path):
+        ruta = tmp_path / "registro_pedidos.json"
+        assert registro_mod.obtener_pedido("no-existe", ruta=ruta) is None
+
+    def test_pedidos_abiertos_excluye_completos_y_pendientes_de_envio(self, tmp_path):
+        ruta = tmp_path / "registro_pedidos.json"
+        ruta_causas = tmp_path / "registro_causas.json"
+        registro_mod.registrar_pedido("t1", {"rit": "M-1-2026", "estado": "esperando"}, ruta=ruta)
+        registro_mod.registrar_pedido("t2", {"rit": "M-2-2026", "estado": "parcial"}, ruta=ruta)
+        registro_mod.registrar_pedido("t3", {"rit": "M-3-2026", "estado": "gestion_manual"}, ruta=ruta)
+        registro_mod.registrar_pedido("t4", {"rit": "M-4-2026", "estado": "completo"}, ruta=ruta)
+        registro_mod.registrar_pedido("t5", {"rit": "M-5-2026", "estado": "pendiente_envio"}, ruta=ruta)
+
+        abiertos = {p["thread_id"] for p in registro_mod.pedidos_abiertos(ruta=ruta, ruta_causas=ruta_causas)}
+        assert abiertos == {"t1", "t2", "t3"}
+
+    def test_pedidos_abiertos_excluye_causa_cerrada(self, tmp_path):
+        ruta = tmp_path / "registro_pedidos.json"
+        ruta_causas = tmp_path / "registro_causas.json"
+        registro_mod.registrar_pedido("t1", {"rit": "M-1-2026", "estado": "esperando"}, ruta=ruta)
+        registro_mod.registrar_pedido("t2", {"rit": "M-2-2026", "estado": "esperando"}, ruta=ruta)
+        registro_mod.registrar_causa("M-1-2026", {"causa_cerrada": True}, ruta=ruta_causas)
+
+        abiertos = {p["thread_id"] for p in registro_mod.pedidos_abiertos(ruta=ruta, ruta_causas=ruta_causas)}
+        assert abiertos == {"t2"}
+
+
+class TestMigrarPedidosBootstrap:
+    def test_siembra_desde_seguimiento_y_borradores(self, tmp_path):
+        ruta_pedidos = tmp_path / "registro_pedidos.json"
+        ruta_seguimiento = tmp_path / "registro_seguimiento.json"
+        ruta_causas = tmp_path / "registro_causas.json"
+
+        registro_mod.registrar_aviso("t1", "documentos", "2026-08-19", rit="M-744-2026", ruta=ruta_seguimiento)
+        registro_mod.registrar_aviso("t2", "acuerdo-daniela", "2026-08-19", rit="O-348-2026", ruta=ruta_seguimiento)
+        registro_mod.registrar_causa(
+            "M-556-2026",
+            {"borrador_documentos_draft_id": "d1", "thread_id": "t3"},
+            ruta=ruta_causas,
+        )
+        registro_mod.registrar_causa("M-699-2026", {}, ruta=ruta_causas)  # sin borrador, no se siembra
+
+        resultado = registro_mod.migrar_pedidos_bootstrap(
+            ruta_pedidos=ruta_pedidos, ruta_seguimiento=ruta_seguimiento, ruta_causas=ruta_causas
+        )
+        assert len(resultado["creados"]) == 3
+        assert resultado["ya_existian"] == []
+
+        pedidos = registro_mod.cargar_registro_pedidos(ruta_pedidos)
+        assert pedidos["t1"]["rit"] == "M-744-2026"
+        assert pedidos["t1"]["tipo"] == "documentos"
+        assert pedidos["t1"]["estado"] == "esperando"
+        assert pedidos["t1"]["fecha_envio"] == "2026-08-19"
+        assert pedidos["t2"]["tipo"] == "acuerdo"
+        assert pedidos["borrador:d1"]["rit"] == "M-556-2026"
+        assert pedidos["borrador:d1"]["estado"] == "pendiente_envio"
+
+    def test_correr_dos_veces_no_duplica(self, tmp_path):
+        ruta_pedidos = tmp_path / "registro_pedidos.json"
+        ruta_seguimiento = tmp_path / "registro_seguimiento.json"
+        ruta_causas = tmp_path / "registro_causas.json"
+        registro_mod.registrar_aviso("t1", "documentos", "2026-08-19", rit="M-744-2026", ruta=ruta_seguimiento)
+
+        registro_mod.migrar_pedidos_bootstrap(
+            ruta_pedidos=ruta_pedidos, ruta_seguimiento=ruta_seguimiento, ruta_causas=ruta_causas
+        )
+        resultado = registro_mod.migrar_pedidos_bootstrap(
+            ruta_pedidos=ruta_pedidos, ruta_seguimiento=ruta_seguimiento, ruta_causas=ruta_causas
+        )
+        assert resultado["creados"] == []
+        assert resultado["ya_existian"] == ["t1"]
+        assert len(registro_mod.cargar_registro_pedidos(ruta_pedidos)) == 1

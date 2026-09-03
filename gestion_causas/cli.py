@@ -50,6 +50,8 @@ from . import seguimiento as seguimiento_mod
 # fecha de hoy, estado de los 3 tokens y cache de calendario, resueltos una
 # sola vez para que las 4 fases no los redescubran cada una por su cuenta.
 RUTA_CONTEXTO_CORRIDA = Path(__file__).parent / "_contexto_corrida.json"
+RUTA_MAPA_HILOS_CORRIDA = Path(__file__).parent / "_hilos_corrida.json"
+RUTA_MAPA_AUDIENCIAS_CORRIDA = Path(__file__).parent / "_audiencias_corrida.json"
 CUENTA_TRABAJO = "nmunoz@gomezyriesco.cl"
 CUENTA_PERSONAL = "nmunos31@gmail.com"
 DIAS_SEMANA = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"]
@@ -269,27 +271,66 @@ def cmd_verificar_borradores_pendientes(args) -> int:
     """Para cada causa con un borrador de documentos registrado (campo
     borrador_documentos_draft_id), consulta si ese borrador sigue existiendo
     en Gmail. Los que siguen ahí son borradores que Nico todavía no revisó ni
-    envió — se devuelven en 'pendientes'. Los que ya no existen (Nico los
-    envió o los borró a mano) se limpian del registro para no volver a
-    chequearlos ('limpiados')."""
+    envió — se devuelven en 'pendientes'.
+
+    Los que ya no existen tienen dos casos posibles:
+    - Nico lo ENVIÓ: el hilo tiene un mensaje propio (nmunoz@gomezyriesco.cl)
+      más nuevo que la fecha en que se creó el registro de la causa — se da
+      de alta un pedido en registro_pedidos.json (estado "esperando", con los
+      documentos pedidos que Fase 2 haya guardado en
+      `documentos_solicitados`), para que la fase "seguimiento" lo seleccione
+      sin tener que volver a buscarlo en Gmail. Se reporta en 'enviados'.
+    - Nico lo BORRÓ a mano sin enviarlo: no hay mensaje propio nuevo que
+      registrar como pedido — se reporta en 'descartados'.
+
+    En ambos casos se limpia `borrador_documentos_draft_id` del registro de
+    causas para no volver a chequearlo."""
     causas = registro_mod.causas_con_borrador_pendiente()
     pendientes = []
-    limpiados = []
+    enviados = []
+    descartados = []
     for causa in causas:
         draft_id = causa["borrador_documentos_draft_id"]
+        rit = causa.get("rit")
         if gmail_client.borrador_existe(draft_id):
             pendientes.append({
-                "rit": causa.get("rit"),
+                "rit": rit,
                 "empresa": causa.get("empresa"),
                 "demandante": causa.get("demandante"),
                 "draft_id": draft_id,
                 "thread_id": causa.get("thread_id"),
             })
-        else:
-            limpiados.append(causa.get("rit"))
+            continue
+
+        thread_id = causa.get("thread_id")
+        ultimo_propio = None
+        if thread_id:
+            mensajes = _mensajes_de_hilo(thread_id)
+            for m in mensajes:
+                if seguimiento_mod.extraer_direccion(m.get("sender", "")) == CUENTA_TRABAJO:
+                    ultimo_propio = m
+
+        if ultimo_propio is not None:
+            destinatarios = seguimiento_mod.destinatarios_de_ultimo_propio(ultimo_propio, CUENTA_TRABAJO)
+            fecha_envio = str(seguimiento_mod.parsear_fecha(ultimo_propio["date"]).date())
             if not args.dry_run:
-                registro_mod.registrar_causa(causa["rit"], {"borrador_documentos_draft_id": None})
-    _imprimir_json({"pendientes": pendientes, "limpiados": limpiados})
+                registro_mod.registrar_pedido(thread_id, {
+                    "rit": rit,
+                    "tipo": "documentos",
+                    "message_id": ultimo_propio["id"],
+                    "fecha_envio": fecha_envio,
+                    "destinatario": destinatarios["para"],
+                    "items_pedidos": causa.get("documentos_solicitados") or [],
+                    "estado": "esperando",
+                    "origen": "borrador_enviado",
+                })
+            enviados.append({"rit": rit, "thread_id": thread_id, "fecha_envio": fecha_envio})
+        else:
+            descartados.append(rit)
+
+        if not args.dry_run:
+            registro_mod.registrar_causa(rit, {"borrador_documentos_draft_id": None})
+    _imprimir_json({"pendientes": pendientes, "enviados": enviados, "descartados": descartados})
     return 0
 
 
@@ -309,6 +350,7 @@ def _mensajes_de_hilo(thread_id: str) -> list:
             "cc": headers.get("cc", ""),
             "date": headers.get("date", ""),
             "cuerpo_texto": gmail_client._extraer_texto_plano(mensaje_crudo["payload"]),
+            "adjuntos": gmail_client._listar_adjuntos(mensaje_crudo["payload"]),
         })
     return mensajes
 
@@ -387,6 +429,104 @@ def cmd_registrar_aviso(args) -> int:
         args.thread_id, args.tipo, hoy, rit=args.rit, draft_id=args.draft_id
     )
     _imprimir_json(entrada)
+    return 0
+
+
+def cmd_registrar_pedido(args) -> int:
+    """Da de alta o actualiza (merge) un pedido en registro_pedidos.json —
+    ver seguimiento.md paso 2. Uso tipico: dar de alta a mano un pedido
+    puntual sin pasar por un borrador ni por la etiqueta Esperando-Respuesta."""
+    if args.dry_run:
+        _imprimir_json({"simulado": True, "accion": "registrar-pedido", "thread_id": args.thread_id})
+        return 0
+    datos = {"rit": args.rit, "tipo": args.tipo, "origen": args.origen}
+    if args.fecha_envio:
+        datos["fecha_envio"] = args.fecha_envio
+    if args.destinatario:
+        datos["destinatario"] = args.destinatario
+    if args.items_json:
+        with open(args.items_json, "r", encoding="utf-8") as f:
+            datos["items_pedidos"] = json.load(f)
+    if args.estado:
+        datos["estado"] = args.estado
+    entrada = registro_mod.registrar_pedido(args.thread_id, datos)
+    _imprimir_json(entrada)
+    return 0
+
+
+def cmd_pedidos_abiertos(args) -> int:
+    """Fase 'seguimiento': pedidos que siguen requiriendo revision (no salio
+    de Gmail, se lee del registro local)."""
+    _imprimir_json({"pedidos": registro_mod.pedidos_abiertos()})
+    return 0
+
+
+def cmd_pedidos_desde_etiqueta(args) -> int:
+    """Fase 'seguimiento', via etiqueta de Gmail: busca los hilos que Nico
+    etiqueto a mano con Esperando-Respuesta (pedido de documentos o
+    propuesta de acuerdo enviado sin pasar por un borrador automatico) y da
+    de alta en registro_pedidos.json los que todavia no estaban ('creados').
+    Los que ya estaban registrados se listan en 'ya_registrados', sin
+    tocarlos (para no pisar items_recibidos/estado que el seguimiento ya
+    haya actualizado)."""
+    label_id = gmail_client.obtener_o_crear_etiqueta(gmail_client.ETIQUETA_ESPERANDO_RESPUESTA)
+    hilos = gmail_client.buscar_hilos(f"label:{gmail_client.ETIQUETA_ESPERANDO_RESPUESTA}", max_resultados=args.max_hilos)
+
+    creados = []
+    ya_registrados = []
+    for hilo in hilos:
+        thread_id = hilo["id"]
+        if registro_mod.obtener_pedido(thread_id) is not None:
+            ya_registrados.append(thread_id)
+            continue
+        mensajes = _mensajes_de_hilo(thread_id)
+        propios = [m for m in mensajes if seguimiento_mod.extraer_direccion(m.get("sender", "")) == CUENTA_TRABAJO]
+        if not propios:
+            continue  # etiqueta puesta sobre un hilo sin mensaje propio: nada que seguir
+        ultimo_propio = propios[-1]
+        destinatarios = seguimiento_mod.destinatarios_de_ultimo_propio(ultimo_propio, CUENTA_TRABAJO)
+        asunto_normalizado = seguimiento_mod.normalizar_asunto(ultimo_propio["subject"])
+        tiene_lista = bool(re.search(r"^\s*(\d+[.)]|[-*])\s+\S", ultimo_propio["cuerpo_texto"], re.MULTILINE))
+        datos = {
+            "rit": registro_mod.extraer_rit(asunto_normalizado + " " + ultimo_propio["cuerpo_texto"]),
+            "tipo": "documentos" if tiene_lista else "acuerdo",
+            "message_id": ultimo_propio["id"],
+            "fecha_envio": str(seguimiento_mod.parsear_fecha(ultimo_propio["date"]).date()),
+            "destinatario": destinatarios["para"],
+            "estado": "esperando",
+            "origen": "etiqueta",
+            "label_id": label_id,
+        }
+        if not args.dry_run:
+            registro_mod.registrar_pedido(thread_id, datos)
+        creados.append({"thread_id": thread_id, **datos})
+    _imprimir_json({"creados": creados, "ya_registrados": ya_registrados, "total_etiquetados": len(hilos)})
+    return 0
+
+
+def cmd_cerrar_pedido(args) -> int:
+    """Marca un pedido como completo (o gestion_manual) y, si vino por
+    etiqueta, le quita Esperando-Respuesta en Gmail para que la bandeja
+    etiquetada refleje siempre lo que sigue abierto."""
+    if args.dry_run:
+        _imprimir_json({"simulado": True, "accion": "cerrar-pedido", "thread_id": args.thread_id, "estado": args.estado})
+        return 0
+    pedido = registro_mod.obtener_pedido(args.thread_id)
+    entrada = registro_mod.registrar_pedido(args.thread_id, {"estado": args.estado})
+    if pedido and pedido.get("label_id") and args.estado == "completo":
+        gmail_client.quitar_etiqueta_de_hilo(args.thread_id, pedido["label_id"])
+    _imprimir_json(entrada)
+    return 0
+
+
+def cmd_migrar_pedidos_bootstrap(args) -> int:
+    """Siembra registro_pedidos.json una sola vez con el backlog que ya
+    existia antes de que este registro existiera (ver diseno, Etapa 1.3).
+    Seguro de correr mas de una vez: no duplica lo que ya sembro."""
+    if args.dry_run:
+        _imprimir_json({"simulado": True, "accion": "migrar-pedidos-bootstrap"})
+        return 0
+    _imprimir_json(registro_mod.migrar_pedidos_bootstrap())
     return 0
 
 
@@ -485,6 +625,164 @@ def cmd_cache_eventos_calendario(args) -> int:
     return 0
 
 
+def _buscar_con_reintento_truncamiento(
+    query: str, servicio=None, max_inicial: int = 500, tope_maximo: int = 2000, intentos_max: int = 3
+) -> dict:
+    """Corre `gmail_client.buscar_hilos` duplicando `max_resultados`
+    (500 -> 1000 -> 2000) mientras el total devuelto siga pegado al tope
+    pedido — la API de Gmail corta en silencio, sin avisar que había más
+    (confirmado el 2026-08-28, ver subagentes/goteo.md paso 2a). Se detiene
+    a los `intentos_max` intentos o al llegar a `tope_maximo`."""
+    max_resultados = max_inicial
+    hilos = []
+    for intento in range(1, intentos_max + 1):
+        hilos = gmail_client.buscar_hilos(query, servicio=servicio, max_resultados=max_resultados)
+        truncado = len(hilos) == max_resultados
+        if not truncado or max_resultados >= tope_maximo or intento == intentos_max:
+            return {
+                "hilos": hilos, "truncado": truncado,
+                "max_resultados_usado": max_resultados, "total": len(hilos),
+            }
+        max_resultados = min(max_resultados * 2, tope_maximo)
+    return {"hilos": hilos, "truncado": True, "max_resultados_usado": max_resultados, "total": len(hilos)}
+
+
+def _generar_mapa_hilos_por_rit(ruta_salida) -> dict:
+    """Barrido combinado de Gmail para toda la corrida (ver goteo.md paso 2 y
+    seguimiento.md paso 3b): en vez de buscar hilo por hilo o causa por
+    causa, arma como mucho 2 búsquedas (causas "ya revisadas" con
+    `after:<fecha_corte>`, causas de "primera revisión" sin filtro de
+    fecha), trae los mensajes de los hilos encontrados, descarta los
+    reportes/consolidados internos y arma el mapa RIT -> hilos. Además,
+    para toda causa activa con `thread_id` registrado, ese hilo se revisa
+    siempre y se atribuye directo a su RIT sin depender de que el RIT
+    aparezca como texto en la búsqueda de Gmail (ver `thread_por_rit` en
+    `seguimiento.agrupar_causas_para_barrido`).
+
+    Escribe `{"generado_en", "rit_a_hilos", "hilos", "truncado",
+    "descartados"}` en `ruta_salida`, para que `goteo` y `seguimiento` lo
+    lean en vez de volver a golpear Gmail cada una por su cuenta. Usada
+    tanto por el comando suelto `mapa-hilos-por-rit` como por
+    `contexto-corrida` (paso 1 del orquestador, para generarlo una sola vez
+    por corrida). Devuelve el resumen (no el mapa completo, que puede ser
+    grande) para imprimir/anexar al contexto."""
+    causas = registro_mod.causas_para_goteo()
+    grupos = seguimiento_mod.agrupar_causas_para_barrido(causas)
+    thread_por_rit = grupos["thread_por_rit"]
+
+    thread_ids_vistos = set()
+    truncados = []
+    for nombre_grupo in ("ya_revisadas", "primera_revision"):
+        datos_grupo = grupos[nombre_grupo]
+        rits = datos_grupo["rits"]
+        if not rits:
+            continue
+        query = seguimiento_mod.construir_query_or_rits(rits, fecha_corte=datos_grupo.get("fecha_corte"))
+        resultado = _buscar_con_reintento_truncamiento(query)
+        if resultado["truncado"]:
+            truncados.append({
+                "grupo": nombre_grupo, "query": query,
+                "total": resultado["total"], "max_resultados_usado": resultado["max_resultados_usado"],
+            })
+        thread_ids_vistos.update(hilo["id"] for hilo in resultado["hilos"])
+
+    # Red de seguridad (bug confirmado el 2026-09-03 con T-26-2026): el
+    # thread_id original registrado de CADA causa activa se revisa siempre,
+    # sin depender de que el RIT aparezca como texto literal en la busqueda
+    # de Gmail de arriba. Antes esto solo cubria las causas de
+    # "primera_revision" — una causa ya revisada cuyo hilo original nunca
+    # menciona su RIT (el caso normal: el hilo sigue llamandose "Notificacion
+    # demanda laboral ..." sin el RIT en el asunto) quedaba fuera de la
+    # busqueda para siempre, aunque le llegaran documentos reales nuevos en
+    # esa misma cadena.
+    thread_ids_vistos.update(thread_por_rit.values())
+
+    rits_activos = grupos["ya_revisadas"]["rits"] + grupos["primera_revision"]["rits"]
+    rit_a_hilos: dict = {}
+    hilos_mensajes: dict = {}
+    descartados = []
+    for thread_id in sorted(thread_ids_vistos):
+        mensajes = _mensajes_de_hilo(thread_id)
+        if not mensajes:
+            continue
+        if seguimiento_mod.hilo_es_reporte_consolidado(mensajes):
+            descartados.append({
+                "thread_id": thread_id, "asunto": mensajes[0].get("subject", ""),
+                "motivo": "reporte consolidado interno",
+            })
+            continue
+        hilos_mensajes[thread_id] = mensajes
+        for rit in seguimiento_mod.clasificar_rits_de_hilo(rits_activos, mensajes):
+            rit_a_hilos.setdefault(rit, []).append(thread_id)
+
+    # El hilo original registrado de cada causa se atribuye siempre a su
+    # propio RIT, aunque el texto del hilo nunca lo mencione (misma razon de
+    # la red de seguridad de arriba) — sin esto, `clasificar_rits_de_hilo`
+    # (que exige el RIT como texto) es la unica via de asociacion.
+    for rit, thread_id in thread_por_rit.items():
+        if thread_id in hilos_mensajes and thread_id not in rit_a_hilos.get(rit, []):
+            rit_a_hilos.setdefault(rit, []).append(thread_id)
+
+    mapa = {
+        "generado_en": datetime.datetime.now().isoformat(),
+        "rit_a_hilos": rit_a_hilos,
+        "hilos": hilos_mensajes,
+        "truncado": truncados,
+        "descartados": descartados,
+    }
+    Path(ruta_salida).write_text(json.dumps(mapa, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    return {
+        "ruta": str(ruta_salida),
+        "total_rits_activos": len(rits_activos), "total_hilos": len(hilos_mensajes),
+        "total_descartados": len(descartados), "truncado": bool(truncados),
+    }
+
+
+def cmd_mapa_hilos_por_rit(args) -> int:
+    if args.dry_run:
+        _imprimir_json({"simulado": True, "accion": "mapa-hilos-por-rit", "salida": args.salida})
+        return 0
+    resumen = _generar_mapa_hilos_por_rit(args.salida)
+    _imprimir_json({"escrito": True, **resumen})
+    return 0
+
+
+def _generar_mapa_audiencias(ruta_cache, ruta_salida) -> dict:
+    """Mapa RIT -> audiencia para toda la corrida (ver goteo.md paso 3a y
+    agenda.md paso 2): en vez de que cada fase busque y clasifique el tipo de
+    audiencia de cada causa activa por separado, se resuelve una sola vez acá
+    con `calendar_client.mapa_audiencias_por_rit`, misma clasificación para
+    las dos fases.
+
+    Escribe `{"generado_en", "rit_a_audiencia"}` en `ruta_salida`. Usada tanto
+    por el comando suelto `mapa-audiencias` como por `contexto-corrida` (paso
+    1 del orquestador). Devuelve el resumen (no el mapa completo) para
+    imprimir/anexar al contexto."""
+    causas = registro_mod.causas_para_goteo()
+    rits = [c["rit"] for c in causas]
+    cache = calendar_client.cargar_cache_eventos(ruta_cache)
+    mapa = calendar_client.mapa_audiencias_por_rit(rits, cache["eventos"])
+    contenido = {
+        "generado_en": datetime.datetime.now().isoformat(),
+        "rit_a_audiencia": mapa,
+    }
+    Path(ruta_salida).write_text(json.dumps(contenido, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "ruta": str(ruta_salida),
+        "total_causas": len(rits),
+        "con_audiencia": len(mapa),
+    }
+
+
+def cmd_mapa_audiencias(args) -> int:
+    if args.dry_run:
+        _imprimir_json({"simulado": True, "accion": "mapa-audiencias", "salida": args.salida})
+        return 0
+    resumen = _generar_mapa_audiencias(args.ruta_cache, args.salida)
+    _imprimir_json({"escrito": True, **resumen})
+    return 0
+
+
 def cmd_buscar_audiencia_por_rit(args) -> int:
     if args.ics:
         eventos = ics_mod.buscar_audiencia_por_rit(args.ics, args.rit)
@@ -504,7 +802,22 @@ def cmd_panel_html(args) -> int:
         resumen = json.load(f)
     hoy = date.fromisoformat(args.hoy) if args.hoy else None
     ruta_registro = Path(args.ruta_registro) if args.ruta_registro else None
-    contenido = panel_mod.generar_panel_html(resumen, hoy=hoy, ruta_registro=ruta_registro)
+
+    borradores_pendientes = None
+    if args.borradores_json:
+        with open(args.borradores_json, "r", encoding="utf-8") as f:
+            # Acepta tanto el JSON completo de verificar-borradores-pendientes
+            # ({"pendientes": [...], "enviados": [...], ...}) como una lista
+            # ya extraida, para que --borradores-json sea facil de armar a
+            # mano en una corrida suelta.
+            datos_borradores = json.load(f)
+        borradores_pendientes = (
+            datos_borradores.get("pendientes", []) if isinstance(datos_borradores, dict) else datos_borradores
+        )
+
+    contenido = panel_mod.generar_panel_html(
+        resumen, hoy=hoy, ruta_registro=ruta_registro, borradores_pendientes=borradores_pendientes
+    )
     Path(args.salida).write_text(contenido, encoding="utf-8")
     _imprimir_json({"escrito": True, "ruta": args.salida})
     return 0
@@ -566,14 +879,22 @@ def cmd_contexto_corrida(args) -> int:
     orquestador aborta y manda el panel avisando). Un fallo del token personal
     no es motivo de salida 1: solo afecta el envio del panel al final.
     """
-    hoy = date.today()
+    ahora = datetime.datetime.now()
+    hoy = ahora.date()
     contexto = {
-        "generado_en": datetime.datetime.now().isoformat(),
+        "generado_en": ahora.isoformat(),
         "fecha_hoy": str(hoy),
         "dia_semana": DIAS_SEMANA[hoy.weekday()],
         "es_lunes": hoy.weekday() == 0,
+        # "manana" identifica la corrida de las 09:00 (cron "0 9,13,17 * * *"),
+        # la unica en la que el orquestador despacha "calendario" y
+        # "seguimiento" (ver orquestador/SKILL.md paso 2) -- sus umbrales son
+        # en dias habiles/2 avisos, correrlas 3x/dia no adelanta nada.
+        "corrida": "manana" if ahora.hour < 12 else "resto",
         "tokens": {},
         "cache_calendario": None,
+        "mapa_hilos": None,
+        "mapa_audiencias": None,
     }
 
     if args.dry_run:
@@ -596,6 +917,38 @@ def cmd_contexto_corrida(args) -> int:
                 "ok": False,
                 "email": contexto["tokens"]["calendar"]["email"],
                 "error": f"el token sirve pero fallo al traer los eventos: {type(e).__name__}: {e}",
+            }
+
+    # Mapa RIT -> audiencia (ver _generar_mapa_audiencias), una sola vez para
+    # toda la corrida, que despues consumen `goteo` y `agenda` en vez de
+    # resolver cada una el tipo de audiencia por su cuenta. Depende del cache
+    # de calendario recien generado; si ese cache no quedo listo, no hay de
+    # donde sacarlo y se deja como error no fatal (goteo/agenda caen a su
+    # propio fallback en vivo, igual que si el cache de calendario faltara).
+    if contexto["cache_calendario"]:
+        try:
+            contexto["mapa_audiencias"] = _generar_mapa_audiencias(
+                args.ruta_cache, args.ruta_mapa_audiencias)
+        except Exception as e:
+            contexto["mapa_audiencias"] = {
+                "ruta": args.ruta_mapa_audiencias,
+                "error": f"{type(e).__name__}: {e}",
+            }
+
+    # Barrido combinado de Gmail (ver _generar_mapa_hilos_por_rit), una sola
+    # vez para toda la corrida, que despues consumen `goteo` y `seguimiento`.
+    # A diferencia del cache de calendario, una falla ACA no aborta la
+    # corrida entera (calendario/smu no lo necesitan) -- goteo/seguimiento
+    # revisan `mapa_hilos.error` y, si esta presente, siguen con su propio
+    # fallback de busqueda en vivo (o detienen solo su fase, segun indiquen
+    # sus instrucciones).
+    if contexto["tokens"]["gmail_trabajo"]["ok"]:
+        try:
+            contexto["mapa_hilos"] = _generar_mapa_hilos_por_rit(args.ruta_mapa_hilos)
+        except Exception as e:
+            contexto["mapa_hilos"] = {
+                "ruta": args.ruta_mapa_hilos,
+                "error": f"{type(e).__name__}: {e}",
             }
 
     contexto["listo"] = (
@@ -713,6 +1066,38 @@ def construir_parser() -> argparse.ArgumentParser:
     p.add_argument("--fecha", default=None, help="AAAA-MM-DD, para tests; por defecto hoy")
     p.set_defaults(func=cmd_registrar_aviso)
 
+    p = sub.add_parser("registrar-pedido", help="Fase 'seguimiento': da de alta o actualiza a mano un pedido en registro_pedidos.json")
+    p.add_argument("--thread-id", required=True)
+    p.add_argument("--rit", default=None)
+    p.add_argument("--tipo", default=None, choices=["documentos", "acuerdo"])
+    p.add_argument("--origen", default="manual", choices=["manual", "etiqueta", "borrador_enviado"])
+    p.add_argument("--fecha-envio", default=None, help="AAAA-MM-DD")
+    p.add_argument("--destinatario", default=None)
+    p.add_argument("--items-json", default=None, help="Ruta a un JSON con la lista de items pedidos")
+    p.add_argument("--estado", default=None, choices=["esperando", "parcial", "completo", "gestion_manual", "pendiente_envio"])
+    p.set_defaults(func=cmd_registrar_pedido)
+
+    p = sub.add_parser("pedidos-abiertos", help="Fase 'seguimiento': lista los pedidos que siguen requiriendo revision")
+    p.set_defaults(func=cmd_pedidos_abiertos)
+
+    p = sub.add_parser(
+        "pedidos-desde-etiqueta",
+        help="Fase 'seguimiento': da de alta los pedidos que Nico etiqueto a mano con Esperando-Respuesta en Gmail",
+    )
+    p.add_argument("--max-hilos", type=int, default=100)
+    p.set_defaults(func=cmd_pedidos_desde_etiqueta)
+
+    p = sub.add_parser("cerrar-pedido", help="Fase 'seguimiento': marca un pedido completo/gestion_manual y quita la etiqueta si vino de ahi")
+    p.add_argument("--thread-id", required=True)
+    p.add_argument("--estado", required=True, choices=["completo", "gestion_manual"])
+    p.set_defaults(func=cmd_cerrar_pedido)
+
+    p = sub.add_parser(
+        "migrar-pedidos-bootstrap",
+        help="Siembra registro_pedidos.json una sola vez con el backlog de registro_seguimiento.json y los borradores vigentes (idempotente)",
+    )
+    p.set_defaults(func=cmd_migrar_pedidos_bootstrap)
+
     p = sub.add_parser("dias-habiles-entre", help="Fase 6: cuenta los dias habiles transcurridos entre dos fechas")
     p.add_argument("--desde", required=True, help="AAAA-MM-DD")
     p.add_argument("--hasta", required=True, help="AAAA-MM-DD")
@@ -789,6 +1174,21 @@ def construir_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_cache_eventos_calendario)
 
     p = sub.add_parser(
+        "mapa-hilos-por-rit",
+        help="Barrido combinado de Gmail para toda la corrida: arma el mapa RIT -> hilos con novedades en como maximo 2 busquedas, para que goteo/seguimiento no vuelvan a barrer la bandeja cada uno por su cuenta",
+    )
+    p.add_argument("--salida", default=str(RUTA_MAPA_HILOS_CORRIDA))
+    p.set_defaults(func=cmd_mapa_hilos_por_rit)
+
+    p = sub.add_parser(
+        "mapa-audiencias",
+        help="Mapa RIT -> audiencia (fecha/resumen/tipo) para toda la corrida, desde un cache de cache-eventos-calendario, para que goteo y agenda no clasifiquen el tipo de audiencia cada uno por su cuenta",
+    )
+    p.add_argument("--ruta-cache", default=str(calendar_client.RUTA_CACHE_EVENTOS_CALENDARIO))
+    p.add_argument("--salida", default=str(RUTA_MAPA_AUDIENCIAS_CORRIDA))
+    p.set_defaults(func=cmd_mapa_audiencias)
+
+    p = sub.add_parser(
         "buscar-audiencia-por-rit",
         help="Fase 4: busca eventos que mencionan este RIT en el calendario de nmunoz@gomezyriesco.cl (API directa; --desde-cache usa un archivo generado por cache-eventos-calendario; --ics fuerza el modo antiguo por archivo exportado)",
     )
@@ -802,10 +1202,14 @@ def construir_parser() -> argparse.ArgumentParser:
         "panel-html",
         help="Arma el HTML del panel de estado del ciclo de causas y lo escribe a un archivo",
     )
-    p.add_argument("--resumen-json", required=True, help='Ruta a un JSON: [{"fase":.., "resultado":.., "error":..}, ...]')
+    p.add_argument("--resumen-json", required=True, help='Ruta a un JSON: [{"fase":.., "titular":.., "metricas":.., "items":.., "acciones":.., "notas":..}, ...] (o el contrato viejo {"fase":.., "resultado":.., "error":..})')
     p.add_argument("--salida", required=True, help="Ruta donde escribir el HTML generado")
     p.add_argument("--hoy", default=None, help="Fecha AAAA-MM-DD a usar como 'hoy' (pruebas); por defecto hoy")
     p.add_argument("--ruta-registro", default=None, help="Ruta alternativa al registro de causas (pruebas); por defecto el registro real")
+    p.add_argument(
+        "--borradores-json", default=None,
+        help="Ruta a la salida de verificar-borradores-pendientes (o directamente su lista 'pendientes'), para sumarla a la bandeja de acciones",
+    )
     p.set_defaults(func=cmd_panel_html)
 
     p = sub.add_parser(
@@ -826,6 +1230,8 @@ def construir_parser() -> argparse.ArgumentParser:
     p.add_argument("--salida", default=str(RUTA_CONTEXTO_CORRIDA))
     p.add_argument("--ruta-cache", default=str(calendar_client.RUTA_CACHE_EVENTOS_CALENDARIO))
     p.add_argument("--dias-adelante", type=int, default=200, help="Ventana del cache de calendario")
+    p.add_argument("--ruta-mapa-hilos", default=str(RUTA_MAPA_HILOS_CORRIDA))
+    p.add_argument("--ruta-mapa-audiencias", default=str(RUTA_MAPA_AUDIENCIAS_CORRIDA))
     p.set_defaults(func=cmd_contexto_corrida)
 
     return parser

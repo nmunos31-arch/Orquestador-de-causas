@@ -85,21 +85,20 @@ la carpeta de Obreque con Salcobrand (O-809-2026) **tres veces** (2026-08-18, 20
 2026-08-24) antes de agregarse aquí — Nico confirmó que tampoco debe incluirse en esta
 automatización.
 
-**Antes de descartar o quedarte con un hilo (paso 2d):**
-1. Toma el `subject` de cada mensaje del hilo y quítale primero cualquier prefijo de
-   respuesta/reenvío (`RE:`, `RV:`, `FWD:`/`FW:`, `ENV:`, repetido, insensible a
-   mayúsculas) — de lo contrario un asunto como `"RE: INFORME PROVISIÓN ABRIL 2026"` o
-   `"Re: Risgo causas estado sentencias"` no calza con el patrón (bug de raíz confirmado el
-   2026-08-21).
-2. Descarta el hilo completo si el subject resultante (de **cualquiera** de sus mensajes)
-   empieza con "Provisiones demanda laborales", "Informe de provisión" / "INFORME
-   PROVISIÓN", o "Risgo causas estado sentencias" / "Riesgo causas estado sentencias"
-   (sin distinguir mayúsculas/minúsculas), o sea evidentemente un reporte/consolidado
-   interno que menciona la causa de pasada en vez de tratarse específicamente de ella
-   (mismo criterio de "usa criterio, no proceses todo a ciegas" ya mencionado abajo, pero
-   ahora con estos tres patrones conocidos como casos confirmados). Si aparece un patrón
-   de asunto nuevo con la misma pinta (reporte consolidado, no documento de un caso
-   puntual), anótalo en el resumen final para que Nico lo agregue a esta lista.
+**Descarte de estos 3 patrones — ya mecanizado (2026-09-02):** el paso 2 (más abajo) ya no
+te hace revisar esto hilo por hilo — el comando `mapa-hilos-por-rit` le quita primero a
+cada mensaje cualquier prefijo de respuesta/reenvío (`RE:`, `RV:`, `FWD:`/`FW:`, `ENV:`,
+repetido, insensible a mayúsculas — de lo contrario un asunto como `"RE: INFORME
+PROVISIÓN ABRIL 2026"` no calza con el patrón, bug de raíz confirmado el 2026-08-21) y
+descarta el hilo completo si el subject resultante de **cualquiera** de sus mensajes
+empieza con "Provisiones demanda laborales", "Informe de provisión" / "INFORME
+PROVISIÓN", o "Risgo causas estado sentencias" / "Riesgo causas estado sentencias" (sin
+distinguir mayúsculas/minúsculas/tildes) — ver `gestion_causas.seguimiento.
+es_reporte_consolidado`, con test unitario por cada patrón. Los hilos descartados así
+vienen listados en `descartados` del mapa (paso 2), no hace falta que los revises. Si ves
+un patrón de asunto nuevo con la misma pinta (reporte consolidado, no documento de un caso
+puntual) que **no** haya sido descartado, anótalo en el resumen final para que Nico lo
+agregue a esta lista.
 
 **Adjunto a excluir siempre, sin importar el remitente:** `invite.ics` (adjunto estándar
 de una invitación/respuesta de Calendar, ej. "Aceptado: Reunión preparatoria...",
@@ -137,6 +136,13 @@ De ahí sacás:
   quedar con fechas distintas.
 - `cache_calendario.ruta` — los eventos del calendario, traídos una sola vez para toda la
   corrida.
+- `mapa_hilos.ruta` — el barrido combinado de Gmail (mapa RIT → hilos con novedades),
+  armado una sola vez para toda la corrida — ver el paso 2 más abajo. Si en cambio trae
+  `mapa_hilos.error`, el barrido falló (red, cuota) y no hay archivo que leer: seguí con el
+  fallback en vivo que describe el paso 2.
+- `mapa_audiencias.ruta` — el mapa RIT → audiencia (fecha, resumen, tipo), resuelto una sola
+  vez para toda la corrida con el mismo criterio que usa `agenda` — ver el paso 3a más abajo.
+  Si en cambio trae `mapa_audiencias.error`, seguí con el fallback en vivo de ese paso.
 - `tokens` — el estado de los 3 tokens, ya verificado **sin** abrir ningún login
   interactivo. Si el orquestador te despachó, es porque los tokens de Gmail de trabajo y de
   Calendar están OK; no hace falta que los vuelvas a diagnosticar.
@@ -175,79 +181,51 @@ importar cuántas causas o hilos haya. **Nunca** hace falta lanzarlas en segundo
 después de la otra, dentro de tu propio turno (ver la regla completa más arriba,
 "Regla de ejecución obligatoria").
 
-## 2. Trae de una sola vez los hilos con novedades
+## 2. Lee el mapa de hilos con novedades
 
-La fecha de hoy que vas a usar en el paso 2b y en el paso 3h de cada causa es la
-`fecha_hoy` del contexto (paso 0) — no la recalcules.
+La fecha de hoy que vas a usar en el paso 3h de cada causa es la `fecha_hoy` del contexto
+(paso 0) — no la recalcules.
 
-En vez de preguntarle a Gmail causa por causa, arma un mapa `RIT -> [hilos]` con como
-máximo dos búsquedas para toda la corrida:
+**Esto ya no lo armás vos** (2026-09-02): el contexto de la corrida (paso 0) ya corrió el
+barrido combinado de Gmail una sola vez para toda la corrida — como mucho 2 búsquedas
+(causas "ya revisadas" con `after:<fecha_corte>`, causas de "primera revisión" sin filtro
+de fecha), con detección de truncamiento y el filtro de reportes/consolidados internos ya
+aplicados en Python (`gestion_causas.seguimiento.es_reporte_consolidado` /
+`clasificar_rits_de_hilo`, ver `docs/2026-09-01-registro-de-pedidos-design.md`). Con
+`Read` de `mapa_hilos.ruta` (del contexto, paso 0) obtenés:
 
-a. Junta el RIT de **todas** las causas activas del paso 1 en un solo operador `OR` de
-   Gmail, con cada RIT entre comillas (evita que Gmail interprete el guion del RIT como
-   operador de exclusión), ej. `("M-1321-2026" OR "M-164-2026" OR "M-26-2026" OR ...)`.
+```json
+{
+  "generado_en": "...",
+  "rit_a_hilos": {"M-1-2026": ["<thread_id>", ...], ...},
+  "hilos": {"<thread_id>": [<mensajes ya leídos, mismo formato que leer-hilo>, ...], ...},
+  "truncado": [{"grupo": "...", "query": "...", "total": N, "max_resultados_usado": N}],
+  "descartados": [{"thread_id": "...", "asunto": "...", "motivo": "..."}]
+}
+```
 
-   **Importante — detecta truncamiento:** el CLI corta los resultados exactamente en el
-   `--max-resultados` que le pases, sin avisar que había más (confirmado el 2026-08-28:
-   la búsqueda sin filtro de fecha de las 27 causas activas de ese día tenía 236 hilos
-   reales, y con `--max-resultados 200` se cortaban 36 en silencio). Por eso, en **cada
-   una** de las dos búsquedas del paso b de abajo (grupo "ya revisadas" y grupo "primera
-   revisión"): si el `total` que devuelve el CLI es **igual** al
-   `--max-resultados` que pediste, no asumas que ya tenés todos los resultados — repite la
-   misma búsqueda duplicando `--max-resultados` (500 → 1000 → 2000) hasta que el `total`
-   devuelto sea **estrictamente menor** al pedido. Si después de 3 intentos sigue
-   exactamente en el tope, detente ahí, no seas más agresivo, y anota en el resumen final
-   que esa búsqueda quedó sin confirmar completa (con el `total` y el tope alcanzado) para
-   que Nico decida si hay que investigar.
+- `rit_a_hilos` te da, para el RIT de cada causa, la lista de `thread_id` con novedades —
+  usalo directo en el paso 3b. Un RIT ausente del mapa significa que no hubo actividad
+  para esa causa en esta corrida (sáltala directo al paso 3h).
+- `hilos[thread_id]` ya trae los mensajes leídos — **no vuelvas a llamar** a `leer-hilo`
+  para estos hilos.
+- Si `truncado` no viene vacío, alguna de las 2 búsquedas quedó sin confirmar completa
+  (tope alcanzado tras 3 intentos) — anótalo en el resumen final tal cual viene, para que
+  Nico decida si hay que investigar. No es motivo para detener la corrida.
+- `descartados` son los hilos que el filtro de reportes consolidados ya sacó — no hace
+  falta que los revises, pero si ves un patrón de asunto que claramente debería estar acá
+  y no está (o al revés, algo descartado que no debería), anótalo en el resumen final.
 
-b. Para cada causa activa, revisa con `obtener-causa --rit "<rit>"` si ya tiene
-   `goteo_ultima_revision` registrada, y separa en dos grupos (esto se hace **todos los
-   días de la semana por igual**, incluidos los lunes — no hay rescan completo especial):
-
-   - **Grupo "ya revisadas"** (con `goteo_ultima_revision`): calcula `fecha_corte` = la
-     fecha `goteo_ultima_revision` **más antigua** de este grupo, menos 1 día de colchón
-     (el operador `after:` de Gmail filtra por día completo, no por hora, así que sin el
-     colchón se podría perder algo llegado el mismo día después de que goteo ya pasó en
-     una corrida anterior). Una sola búsqueda para todo el grupo:
-     ```
-     python -m gestion_causas.cli buscar-hilos --query "after:<fecha_corte AAAA/MM/DD> (<OR de los RIT de este grupo>)" --max-resultados 500
-     ```
-   - **Grupo "primera revisión"** (sin `goteo_ultima_revision` — primera vez que el goteo
-     la revisa; si el grupo no está vacío): una búsqueda aparte, sin filtro de fecha, solo
-     con los RIT de este grupo (mismo criterio de "escaneo completo, igual que siempre"
-     que tenía antes cada causa nueva):
-     ```
-     python -m gestion_causas.cli buscar-hilos --query "(<OR de los RIT de este grupo>)" --max-resultados 500
-     ```
-
-c. Junta los `thread_id` de la(s) búsqueda(s) anteriores (sin duplicados) y trae los
-   mensajes de cada uno — esto sigue siendo una llamada por hilo, pero ahora solo para los
-   hilos que de verdad tuvieron actividad, no una búsqueda vacía repetida por cada causa
-   sin novedades:
-   ```
-   python -m gestion_causas.cli leer-hilo --thread-id <thread_id>
-   ```
-
-d. Para cada hilo leído, revisa el `subject` de sus mensajes (quitándole primero
-   cualquier prefijo `RE:`/`RV:`/`FWD:`/`FW:`/`ENV:`, igual que siempre) para determinar a
-   qué RIT(s) corresponde — el RIT queda en el asunto de toda la cadena, incluidas las
-   respuestas. Arma con esto el mapa `RIT -> [hilos]` que vas a usar en el paso 3. Si un
-   hilo encontrado claramente no tiene que ver con ninguna causa (coincidencia de texto
-   casual), descártalo del mapa — usa criterio, no lo proceses a ciegas. Esto incluye los
-   hilos "Provisiones demanda laborales [mes]", "Informe de provisión [mes]" / "INFORME
-   PROVISIÓN [mes]" y "Risgo causas estado sentencias" / "Riesgo causas estado sentencias"
-   (ver nota de filtro de asunto más arriba) y cualquier otro reporte/consolidado interno
-   que solo mencione el RIT de pasada.
-
-e. Para las causas del grupo "primera revisión" (paso b), agrega también su `thread_id`
-   original guardado en el registro al mapa del RIT correspondiente, aunque no haya
-   aparecido en la búsqueda (mismo colchón de seguridad que tenía antes cada causa nueva,
-   por si el `thread_id` guardado por Fase 1 no calza con el `OR` de este paso).
-
-Si alguna de las búsquedas de este paso falla (error de red, cuota, límite de longitud de
-`query`, etc.), no reintentes ni improvises un fallback: detén la corrida en este punto y
-reporta el error tal cual en el resumen final (mismo criterio que la sección 0 y que el
-cache de calendario del paso 1).
+**Si `mapa_hilos.error` está presente en el contexto** (el barrido combinado falló: red,
+cuota) o **si no hay contexto** (estás corriendo esta fase suelta, a mano), no hay mapa que
+leer — corré vos mismo, una sola vez:
+```
+python -m gestion_causas.cli mapa-hilos-por-rit --salida "gestion_causas\_hilos_corrida.json"
+```
+y leé el archivo que deja en `--salida` igual que si lo hubiera generado el contexto. Si
+este comando también falla, no reintentes ni improvises un fallback: detén la corrida en
+este punto y reporta el error tal cual en el resumen final (mismo criterio que la sección 0
+y que el cache de calendario del paso 1).
 
 **Por qué esta búsqueda NO se restringe a los 7 dominios de confianza:** aunque los
 documentos de prueba solo se guardan si vienen de esos dominios (paso 3e), la detección de
@@ -259,26 +237,31 @@ Restringir esta búsqueda por dominio haría que el goteo dejara de detectar eso
 ## 3. Por cada causa activa
 
 a. **Determina la carpeta destino de los documentos**, según el tipo de la próxima
-   audiencia (mismo mecanismo que usa `gestion-causas-agenda` paso 2 — calendario de
-   `nmunoz@gomezyriesco.cl` en solo lectura), usando el cache que ya trajiste en el paso 1
-   (no vuelvas a llamar a la API por cada causa):
-   ```
-   python -m gestion_causas.cli buscar-audiencia-por-rit --rit "<rit>" --desde-cache "<ruta del cache del paso 1>"
-   ```
-   Quédate con el primer evento futuro o de hoy. Del `resumen` del evento, determina el
-   tipo:
-   - "audiencia de juicio" (o "aud. de juicio") → **Juicio**.
-   - "audiencia única" / "audiencia preparatoria", sin evento, o resumen ambiguo →
-     tipo normal (no adivines "Juicio" sin que el título del evento lo diga
-     explícitamente).
-
-   - Si el tipo es **Juicio**: la carpeta destino es la subcarpeta **"Exhibición de
+   audiencia. El tipo ya lo resolvió el contexto de la corrida (paso 0) en
+   `mapa_audiencias.ruta` — mismo mapa que usa `gestion-causas-agenda` paso 2, para que las
+   dos fases nunca vuelvan a clasificar el tipo de audiencia con criterios distintos. Buscá
+   la entrada de este RIT en `rit_a_audiencia` de ese archivo:
+   - Si no aparece (sin audiencia próxima) o su `tipo` es **Ambiguo**: tipo normal (no
+     adivines "Juicio" sin que el título del evento lo diga explícitamente).
+   - Si su `tipo` es **Juicio**: la carpeta destino es la subcarpeta **"Exhibición de
      documentos"** dentro de la carpeta de la causa (ej. `<carpeta de la causa>\Exhibición
      de documentos`). No hace falta crearla a mano — `guardar-adjunto` la crea sola si no
      existe. Anota en el resumen final qué causas tuvieron documentos guardados ahí, para
      que Nico sepa por qué no quedaron sueltos en la carpeta principal.
-   - En cualquier otro caso: la carpeta destino es la carpeta de la causa directamente
-     (comportamiento de siempre).
+   - Si su `tipo` es **Única** o **Preparatoria**: tipo normal (comportamiento de siempre).
+
+   En cualquier otro caso (tipo normal): la carpeta destino es la carpeta de la causa
+   directamente.
+
+   Si el contexto no existe o trae `mapa_audiencias.error`, cae al fallback en vivo de
+   siempre para esta causa puntual, usando el cache de calendario del paso 1 (no vuelvas a
+   llamar a la API por cada causa):
+   ```
+   python -m gestion_causas.cli buscar-audiencia-por-rit --rit "<rit>" --desde-cache "<ruta del cache del paso 1>"
+   ```
+   Quédate con el primer evento futuro o de hoy y clasificá el tipo con el mismo criterio:
+   "audiencia de juicio" (o "aud. de juicio") → Juicio; "audiencia única" / "audiencia
+   preparatoria", sin evento, o resumen ambiguo → tipo normal.
 
    Usa esta carpeta destino (llámala `<carpeta destino>` de aquí en adelante) en los
    pasos d y e.
@@ -286,12 +269,11 @@ a. **Determina la carpeta destino de los documentos**, según el tipo de la pró
 b. **Toma del mapa armado en el paso 2** los hilos que correspondan al RIT de esta causa
    (puede ser una lista vacía si no hubo novedades — en ese caso salta directo al paso h).
 
-c. Ya tenés los mensajes de cada hilo relevante (los trajiste en el paso 2c) — no vuelvas
-   a llamar a `leer-hilo`.
+c. Ya tenés los mensajes de cada hilo relevante (vienen en `hilos[thread_id]` del mapa
+   del paso 2) — no vuelvas a llamar a `leer-hilo`.
 
-c2. **Detecta acuerdo alcanzado y pago recibido**, con el mismo contenido que ya
-    trajiste en el paso 2c (no es una lectura adicional, es criterio sobre lo que ya
-    leíste):
+c2. **Detecta acuerdo alcanzado y pago recibido**, con el mismo contenido que ya trajo el
+    mapa del paso 2 (no es una lectura adicional, es criterio sobre lo que ya leíste):
 
     - Si la causa **no** tiene todavía `estado_acuerdo` en su registro (revísalo con
       `obtener-causa --rit "<rit>"`) y el contenido de algún hilo confirma que se
@@ -388,20 +370,52 @@ g. Si guardaste al menos un documento nuevo, anota en la bitácora (menciona si 
 
 h. **Guarda la fecha de esta revisión**, siempre (haya habido novedades o no, incluso si
    el paso 3b te dio una lista vacía) — es lo que permite que la próxima corrida calcule
-   bien `fecha_corte` en el paso 2b:
+   bien `fecha_corte` la próxima vez que el contexto de la corrida arme el mapa (paso 2):
    ```
    python -m gestion_causas.cli registrar-causa --rit "<rit>" --datos-json "<json con {\"goteo_ultima_revision\": \"<fecha de hoy AAAA-MM-DD>\"}>"
    ```
 
 ## 4. Resumen final
 
-Tu **último mensaje** de esta ejecución es el resumen que el orquestador va a copiar tal
-cual a la sección "Fase goteo" del panel de estado. Entrega un resumen breve: cuántas
-causas se revisaron (indicando cuántas fueron "primera revisión", sin
-`goteo_ultima_revision` previo, y cuántas incrementales desde la última corrida),
-cuántas tenían documentos nuevos (con el RIT y los nombres de los documentos, indicando
-cuáles se guardaron en la subcarpeta "Exhibición de documentos" por tener audiencia de
-juicio próxima), cuántos de esos documentos se identificaron como EERR y quedaron
-disponibles para reuso futuro, cuántas causas pasaron a "acuerdo pendiente de pago" y
-cuántas a "pago recibido, pendiente confirmar cierre" (con su RIT, para que Nico las
-revise). Si no hubo novedades en ninguna causa, dilo en una sola línea.
+Tu **último mensaje** de esta ejecución debe ser **un único objeto JSON**, sin texto antes
+ni después y sin envolverlo en \`\`\` — el orquestador lo copia tal cual a la sección "Fase
+goteo" del panel de estado. Formato:
+
+```json
+{
+  "fase": "goteo",
+  "titular": "<una frase: ej. \"3 causas con documentos nuevos, 1 pago recibido pendiente de confirmar\">",
+  "metricas": [
+    {"etiqueta": "Causas revisadas", "valor": N},
+    {"etiqueta": "Primera revisión", "valor": N},
+    {"etiqueta": "Con documentos nuevos", "valor": N},
+    {"etiqueta": "Identificados como EERR", "valor": N}
+  ],
+  "items": [
+    {"rit": "<rit>", "titulo": "<demandante> con <empresa>",
+     "detalle": "N documentos nuevos: <nombres>",
+     "etiqueta": "Exhibición de documentos"}
+  ],
+  "acciones": [],
+  "notas": []
+}
+```
+
+- `items`: una entrada por cada causa con documentos nuevos. `etiqueta` solo si se
+  guardaron en la subcarpeta "Exhibición de documentos" (audiencia de juicio próxima) —
+  si no, omití el campo.
+- `acciones`: las causas que pasaron a `"acuerdo pendiente de pago"` o a `"pago recibido,
+  pendiente confirmar cierre"` (paso 3c2) van **acá**, no en `items` — son las que
+  requieren que Nico revise/confirme: `{"rit": "<rit>", "que": "Pago recibido, pendiente
+  confirmar cierre" (o "Acuerdo alcanzado, pendiente de pago"), "urgencia": "alta"}`.
+  También un comprobante de pago visto pero no descargado por venir de un dominio no
+  confiable (paso 3c2): `{"rit": "<rit>", "que": "Comprobante de pago visto pero no
+  descargado (dominio no confiable <dominio>) — revisar y guardar a mano", "urgencia":
+  "media"}`.
+- `notas`: dominios nuevos vistos que parecen de confianza pero no están en la lista
+  (paso 3e), patrones de asunto nuevos que parecen reporte consolidado (paso 2), o
+  búsquedas que quedaron `truncado` en el mapa del paso 2.
+- Si no hubo novedades en ninguna causa, `titular` puede ser simplemente "Sin novedades" y
+  `items`/`acciones`/`notas` quedan vacíos.
+- Si el mapa/búsqueda del paso 2 falló y detuviste la corrida: en cambio,
+  `{"fase": "goteo", "error": "<el error tal cual>"}`.

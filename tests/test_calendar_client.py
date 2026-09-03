@@ -271,6 +271,84 @@ class TestEventosEmpresasInteresDesdeCache:
                 date(2026, 9, 1), date(2026, 12, 1), ruta=tmp_path / "no-existe.json")
 
 
+class TestClasificarTipoAudiencia:
+    def test_audiencia_de_juicio(self):
+        assert calendar_client.clasificar_tipo_audiencia("Audiencia de Juicio RIT M-643-2026") == "Juicio"
+
+    def test_aud_de_juicio_abreviado(self):
+        assert calendar_client.clasificar_tipo_audiencia("Aud. de juicio Iturriaga con Rendic") == "Juicio"
+
+    def test_audiencia_unica(self):
+        assert calendar_client.clasificar_tipo_audiencia('Audiencia única "Rebolledo con Salcobrand" M-637-2026') == "Unica"
+
+    def test_aud_unica_abreviado(self):
+        assert calendar_client.clasificar_tipo_audiencia("Aud. única M-1-2026") == "Unica"
+
+    def test_audiencia_preparatoria(self):
+        assert calendar_client.clasificar_tipo_audiencia("Audiencia preparatoria RIT O-1-2026") == "Preparatoria"
+
+    def test_reunion_preparatoria_es_alias_de_preparatoria(self):
+        # Redacción real y mayoritaria en el calendario del tribunal (confirmado
+        # 2026-09-01: 16 de 24 audiencias activas la usaban en vez de "audiencia
+        # preparatoria").
+        assert calendar_client.clasificar_tipo_audiencia('Reunión preparatoria "Tiznado con Salcobrand" M-744-2026') == "Preparatoria"
+
+    def test_titulo_sin_tipo_reconocible_es_ambiguo(self):
+        assert calendar_client.clasificar_tipo_audiencia("Reunion con cliente M-1-2026") == "Ambiguo"
+
+    def test_no_confunde_unica_con_juicio(self):
+        # "audiencia de juicio" contiene la palabra "audiencia" pero no debe
+        # calzar con el chequeo de "unica".
+        assert calendar_client.clasificar_tipo_audiencia("Audiencia de Juicio M-1-2026") != "Unica"
+
+
+class TestPrimerEventoFuturo:
+    def test_se_queda_con_el_mas_proximo_de_hoy_en_adelante(self):
+        eventos = [
+            {"fecha": date(2026, 8, 1), "resumen": "pasado"},
+            {"fecha": date(2026, 9, 10), "resumen": "futuro lejano"},
+            {"fecha": date(2026, 9, 5), "resumen": "futuro cercano"},
+        ]
+        resultado = calendar_client.primer_evento_futuro(eventos, hoy=date(2026, 9, 1))
+        assert resultado["resumen"] == "futuro cercano"
+
+    def test_hoy_mismo_cuenta_como_futuro(self):
+        eventos = [{"fecha": date(2026, 9, 1), "resumen": "hoy"}]
+        resultado = calendar_client.primer_evento_futuro(eventos, hoy=date(2026, 9, 1))
+        assert resultado["resumen"] == "hoy"
+
+    def test_todos_pasados_devuelve_none(self):
+        eventos = [{"fecha": date(2026, 8, 1), "resumen": "pasado"}]
+        assert calendar_client.primer_evento_futuro(eventos, hoy=date(2026, 9, 1)) is None
+
+    def test_lista_vacia_devuelve_none(self):
+        assert calendar_client.primer_evento_futuro([], hoy=date(2026, 9, 1)) is None
+
+
+class TestMapaAudienciasPorRit:
+    EVENTOS = [
+        {"fecha": date(2026, 9, 10), "resumen": "Audiencia Unica M-643-2026 Iturriaga con Rendic"},
+        {"fecha": date(2026, 8, 1), "resumen": "Audiencia de Juicio O-1-2026 pasada"},
+        {"fecha": date(2026, 9, 20), "resumen": "Audiencia de Juicio O-1-2026 reprogramada"},
+        {"fecha": date(2026, 9, 15), "resumen": "Reunion equipo semanal"},
+    ]
+
+    def test_arma_el_mapa_con_fecha_resumen_y_tipo(self):
+        mapa = calendar_client.mapa_audiencias_por_rit(
+            ["M-643-2026", "O-1-2026"], self.EVENTOS, hoy=date(2026, 9, 1))
+        assert mapa["M-643-2026"] == {
+            "fecha": "2026-09-10",
+            "resumen": "Audiencia Unica M-643-2026 Iturriaga con Rendic",
+            "tipo": "Unica",
+        }
+        assert mapa["O-1-2026"]["fecha"] == "2026-09-20"
+        assert mapa["O-1-2026"]["tipo"] == "Juicio"
+
+    def test_rit_sin_audiencia_proxima_no_aparece(self):
+        mapa = calendar_client.mapa_audiencias_por_rit(["M-999-2026"], self.EVENTOS, hoy=date(2026, 9, 1))
+        assert mapa == {}
+
+
 class TestLoginNoInteractivo:
     """En una corrida desatendida (contexto-corrida) el flujo de OAuth abre un
     navegador y nunca vuelve. Con permitir_login=False se falla rápido en vez

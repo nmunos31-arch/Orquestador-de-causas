@@ -7,9 +7,14 @@ token_gmail_personal.json
 registro_causas.json
 registro_ceco.json
 registro_seguimiento.json
+registro_pedidos.json
 bitacora.md
 cache_eventos_calendario.json
 _contexto_corrida.json
+_hilos_corrida.json
+_hilos_corrida_test.json
+_audiencias_corrida.json
+_audiencias_corrida_test.json
 _panel_resumen_temp.json
 _panel_temp.html
 *.lock

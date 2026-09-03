@@ -33,8 +33,9 @@ forma interactiva."
 
 Esta fase solo actúa **los lunes**, según el campo `es_lunes` del contexto (si no hay
 contexto, determina la fecha de hoy en zona horaria de Chile):
-- Si **no** es lunes: termina de inmediato. Tu único mensaje final debe ser
-  "No corresponde hoy (Fase 0 solo corre los lunes)." No ejecutes ningún comando del CLI.
+- Si **no** es lunes: termina de inmediato. Tu único mensaje final debe ser exactamente
+  `{"fase": "calendario", "resultado": "No corresponde hoy (Fase 0 solo corre los lunes).", "error": null}`
+  (un único objeto JSON, sin texto antes ni después). No ejecutes ningún comando del CLI.
 - Si es lunes: sigue con el resto de este archivo.
 
 **Por qué existe**: `gestion-causas-smu` (Fase 1) detecta causas nuevas por correo, pero
@@ -174,15 +175,32 @@ i. **Anota en la bitácora**:
 
 ## 3. Resumen final
 
-Tu **último mensaje** de esta ejecución es el resumen que el orquestador va a copiar tal
-cual a la sección "Fase calendario" del panel de estado — que sea breve y legible:
-- Cuántos eventos se revisaron en total, y cuántas causas nuevas se dieron de alta (RIT,
-  empresa, demandante, fecha y tipo de audiencia).
-- De las nuevas: cuántas tienen demanda guardada y cuántas no, cuántas se agregaron al
-  Excel y cuántas no aplicaban o quedaron pendientes por datos incompletos.
-- Cuántos eventos se saltaron por no traer un RIT reconocible en el título (con la fecha
-  y el texto del evento, para que Nico los revise a mano si le interesa).
-- Cuántos eventos eran de las 6 empresas pero no eran una audiencia única/preparatoria/
-  juicio (plazos, recursos, etc.) — solo el conteo, no hace falta el detalle salvo que
-  sea una causa completamente nueva para el sistema.
-- Si hubo problema de autenticación, dilo primero y no sigas.
+Tu **último mensaje** de esta ejecución debe ser **un único objeto JSON**, sin texto antes
+ni después y sin envolverlo en \`\`\` — el orquestador lo copia tal cual a la sección "Fase
+calendario" del panel de estado. Formato:
+
+```json
+{
+  "fase": "calendario",
+  "titular": "<una frase: ej. \"1 causa nueva detectada por calendario (Rebolledo con Salcobrand)\">",
+  "metricas": [
+    {"etiqueta": "Eventos revisados", "valor": N},
+    {"etiqueta": "Causas nuevas dadas de alta", "valor": N},
+    {"etiqueta": "Eventos sin RIT reconocible", "valor": N}
+  ],
+  "items": [
+    {"rit": "<rit>", "titulo": "<demandante> con <empresa>",
+     "detalle": "Audiencia <tipo> el <fecha>; demanda guardada/falta; Excel actualizado/no aplica"}
+  ],
+  "acciones": [],
+  "notas": []
+}
+```
+
+- `items`: una entrada por cada causa nueva dada de alta en esta corrida.
+- `notas`: eventos que se saltaron por no traer un RIT reconocible en el título (fecha +
+  texto del evento, para que Nico los revise a mano si le interesa) — no son urgentes,
+  van como nota, no como acción.
+- Si no es lunes, usá el mensaje del paso 0a en vez de este formato. Si hubo problema de
+  autenticación en el paso 0, en cambio: `{"fase": "calendario", "error": "<el error tal
+  cual>"}`.

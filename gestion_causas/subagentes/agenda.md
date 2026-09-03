@@ -48,6 +48,9 @@ De ahí sacás:
   quedar con fechas distintas.
 - `cache_calendario.ruta` — los eventos del calendario, traídos una sola vez para toda la
   corrida.
+- `mapa_audiencias.ruta` — el mapa RIT → audiencia (fecha, resumen, tipo), resuelto una sola
+  vez para toda la corrida con el mismo criterio que usa `goteo` — ver el paso 2 más abajo.
+  Si en cambio trae `mapa_audiencias.error`, seguí con el fallback en vivo de ese paso.
 - `tokens` — el estado de los 3 tokens, ya verificado **sin** abrir ningún login
   interactivo. Si el orquestador te despachó, es porque los tokens de Gmail de trabajo y de
   Calendar están OK; no hace falta que los vuelvas a diagnosticar.
@@ -76,13 +79,23 @@ excluyen solas (no hay nada más que agendar). Si `total` es 0, termina con un r
 
 ## 2. Por cada causa activa, busca su audiencia en el calendario
 
-El cache de eventos del calendario lo dejó el contexto de la corrida (paso 0), en
-`cache_calendario.ruta` — ya no depende de que `goteo` haya llegado a generarlo, que era el
-acoplamiento frágil de antes. Vas a usarlo con `--desde-cache` en vez de golpear la API por
-cada causa. Si no hay contexto o el archivo no existe (ej. estás corriendo agenda de forma
-suelta fuera del orquestador), usá la llamada en vivo de siempre, sin `--desde-cache` — el
-resultado es idéntico en ambos casos, solo cambia si se repite la llamada a la API por cada
-causa o no.
+El tipo y fecha de audiencia de cada RIT ya los resolvió el contexto de la corrida (paso 0)
+en `mapa_audiencias.ruta` — mismo mapa que usa `gestion-causas-goteo` paso 3a, para que las
+dos fases nunca vuelvan a divergir en cómo clasifican Única/Preparatoria/Juicio. Buscá la
+entrada de este RIT en `rit_a_audiencia` de ese archivo: trae `{"fecha", "resumen", "tipo"}`
+con `tipo` ∈ Única/Preparatoria/Juicio/Ambiguo. **Usa esta fecha como fuente de verdad**, no
+el campo `fecha_audiencia` guardado en el registro (que viene del cuadro del correo y puede
+quedar desactualizado si se reprogramó).
+
+- Si el RIT no aparece en el mapa: no hay audiencia próxima — sáltala, nada que agendar
+  todavía para esa causa.
+- Si el `tipo` es **Ambiguo**: sáltate los pasos 3 y 4 para esta causa y anótalo en el
+  resumen final para que Nico lo revise (mejor no adivinar el tipo de audiencia).
+
+**Fallback si no hay contexto, o trae `mapa_audiencias.error`** (ej. estás corriendo agenda
+de forma suelta fuera del orquestador): resolvé esta causa en vivo con el cache de
+calendario del paso 0 (`cache_calendario.ruta`) o, si tampoco existe, con la llamada directa
+a la API:
 
 ```
 python -m gestion_causas.cli buscar-audiencia-por-rit --rit "<rit>" --desde-cache "gestion_causas/cache_eventos_calendario.json"
@@ -91,35 +104,17 @@ python -m gestion_causas.cli buscar-audiencia-por-rit --rit "<rit>" --desde-cach
 flag — cae de vuelta al comportamiento de siempre)
 
 Si el comando con `--desde-cache` falla por algo que **no** es "no encuentra el
-archivo" (por ejemplo un error de formato/JSON — puede pasar si el contexto quedó
-interrumpido a mitad de generar el cache), tratalo igual que si el archivo no existiera:
-para esa causa puntual, reintenta sin `--desde-cache` (la llamada en vivo de siempre) y
-seguí adelante. No hace falta detener la corrida ni avisar a las demás causas — es un
-fallback por causa, no un fallo general.
+archivo" (por ejemplo un error de formato/JSON), tratalo igual que si el archivo no
+existiera: para esa causa puntual, reintenta sin `--desde-cache` (la llamada en vivo de
+siempre) y seguí adelante. No hace falta detener la corrida ni avisar a las demás causas —
+es un fallback por causa, no un fallo general.
 
-Busca en el calendario de `nmunoz@gomezyriesco.cl` (vía API cuando no usás
-`--desde-cache`, ventana de 200 días hacia adelante desde hoy por defecto — usa
-`--dias-adelante` si necesitas más rango) los eventos que mencionan ese RIT, y devuelve
-fecha + resumen del título, ordenados por fecha ascendente. **`--dias-adelante` solo
-tiene efecto en la llamada en vivo (sin `--desde-cache`)**: combinado con `--desde-cache`
-se ignora en silencio, porque la ventana ya quedó fija en el cache cuando `goteo` lo
-generó (también 200 días por defecto). Si una causa puntual necesita más rango que el que
-cubre el cache (raro — solo relevante si la audiencia está agendada a más de ~200 días),
-saltate `--desde-cache` para esa causa y llamá directo a
-`buscar-audiencia-por-rit --rit "<rit>" --dias-adelante <N>` (en vivo).
-Quédate con el **primero futuro o de hoy** (si todos son pasados, no hay
-audiencia próxima — sáltala). **Usa esta fecha como fuente de verdad**, no el campo
-`fecha_audiencia` guardado en el registro (que viene del cuadro del correo y puede quedar
-desactualizado si se reprogramó). Si `total` es 0, sáltala y anótalo en el resumen — nada
-que agendar todavía para esa causa.
-
-Del `resumen` del evento, determina el **tipo de audiencia**:
-- Si dice "audiencia única" (o "aud. única") → Única.
-- Si dice "audiencia preparatoria" → Preparatoria.
-- Si dice "audiencia de juicio" (o "aud. de juicio") → Juicio.
-
-Si el resumen no deja claro el tipo, sáltate los pasos 3 y 4 para esta causa y anótalo
-en el resumen final para que Nico lo revise (mejor no adivinar el tipo de audiencia).
+Quédate con el **primero futuro o de hoy** (si todos son pasados, no hay audiencia
+próxima — sáltala). Del `resumen` del evento, determina el tipo con el mismo criterio del
+mapa: "audiencia única" (o "aud. única") → Única; "audiencia preparatoria" (o "reunión
+preparatoria" — así la agenda el tribunal casi siempre en la práctica) → Preparatoria;
+"audiencia de juicio" (o "aud. de juicio") → Juicio; si no queda claro, es Ambiguo — sáltate
+los pasos 3 y 4 y anótalo en el resumen.
 
 **Causas que no son una demanda laboral contra la empresa** (ej. una demanda de
 desafuero, donde la empresa es la demandante y no la demandada — ver
@@ -253,9 +248,35 @@ d. Registra que ya se ejecutó, para no repetirlo:
 
 ## 5. Resumen final
 
-Tu **último mensaje** de esta ejecución es el resumen que el orquestador va a copiar tal
-cual a la sección "Fase agenda" del panel de estado. Entrega un resumen breve: cuántas
-causas se revisaron, cuántos borradores de
-ofrecimiento se crearon (con RIT, montos y el ofrecimiento calculado), cuántas minutas se
-generaron, cuántas causas no tenían evento de calendario encontrado todavía, y cualquier
-discrepancia entre los montos de la demanda y el cuadro que haya que revisar a mano.
+Tu **último mensaje** de esta ejecución debe ser **un único objeto JSON**, sin texto antes
+ni después y sin envolverlo en \`\`\` — el orquestador lo copia tal cual a la sección "Fase
+agenda" del panel de estado. Formato:
+
+```json
+{
+  "fase": "agenda",
+  "titular": "<una frase: ej. \"1 borrador de ofrecimiento creado, 2 minutas generadas\">",
+  "metricas": [
+    {"etiqueta": "Causas revisadas", "valor": N},
+    {"etiqueta": "Borradores de ofrecimiento creados", "valor": N},
+    {"etiqueta": "Minutas generadas", "valor": N},
+    {"etiqueta": "Sin evento de calendario todavía", "valor": N}
+  ],
+  "items": [
+    {"rit": "<rit>", "titulo": "<demandante> con <empresa>",
+     "detalle": "Ofrecimiento de $<monto> (Recargo $<x> + AFC $<y>)"}
+  ],
+  "acciones": [],
+  "notas": []
+}
+```
+
+- `items`: una entrada por cada borrador de ofrecimiento creado o minuta generada en esta
+  corrida (`detalle` describe cuál de las dos fue, con los montos si aplica).
+- `acciones`: **cualquier discrepancia entre los montos de la demanda y los del cuadro**
+  (paso 3c) va acá, siempre — es lo que más necesita que Nico la revise antes de que el
+  ofrecimiento salga con un monto equivocado: `{"rit": "<rit>", "que": "Discrepancia:
+  demanda dice $<x>, cuadro decía $<y> — se usó el de la demanda", "urgencia": "alta"}`.
+- `notas`: causas con tipo de audiencia ambiguo (paso 2, no se pudo determinar Única/
+  Preparatoria/Juicio) u otras observaciones de criterio.
+- Si no hubo novedades, `titular` puede ser "Sin novedades" con las listas vacías.

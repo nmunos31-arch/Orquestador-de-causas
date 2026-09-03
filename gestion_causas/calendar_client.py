@@ -232,6 +232,64 @@ def buscar_audiencia_por_rit_desde_cache(rit: str, ruta: Path = RUTA_CACHE_EVENT
     return buscar_eventos_por_rit(cargar_cache_eventos(ruta)["eventos"], rit)
 
 
+def clasificar_tipo_audiencia(resumen: str) -> str:
+    """Determina el tipo de audiencia a partir del título del evento de
+    calendario — mismo criterio que usaban por separado goteo.md (paso 3a) y
+    agenda.md (paso 2), unificado acá para que no vuelvan a divergir. "Única"
+    y "Juicio" comparten palabra ("audiencia de juicio" contiene "audiencia"),
+    así que el orden de los chequeos importa: Juicio primero. Si el título no
+    menciona ninguno de los tres, devuelve "Ambiguo" — nunca se adivina."""
+    texto = _normalizar_texto(resumen).replace(".", "")
+    if "audiencia de juicio" in texto or "aud de juicio" in texto:
+        return "Juicio"
+    if "audiencia unica" in texto or "aud unica" in texto:
+        return "Unica"
+    if "audiencia preparatoria" in texto or "aud preparatoria" in texto:
+        return "Preparatoria"
+    if "reunion preparatoria" in texto:
+        # Alias real observado en el calendario (ej. 'Reunión preparatoria
+        # "Tiznado con Salcobrand" M-744-2026') — el tribunal la agenda así
+        # aunque procesalmente es la audiencia preparatoria. Confirmado
+        # 2026-09-01: 16 de 24 audiencias activas usaban esta redacción.
+        return "Preparatoria"
+    return "Ambiguo"
+
+
+def primer_evento_futuro(eventos: list[dict], hoy: date | None = None) -> dict | None:
+    """De una lista de eventos ya filtrados por RIT, se queda con el primero
+    de hoy en adelante (ordena por fecha antes de elegir, por si el llamador
+    no los trae ya ordenados). None si todos son pasados o la lista está
+    vacía — "no hay audiencia próxima todavía" para ese RIT."""
+    if hoy is None:
+        hoy = date.today()
+    futuros = sorted((e for e in eventos if e["fecha"] >= hoy), key=lambda e: e["fecha"])
+    return futuros[0] if futuros else None
+
+
+def mapa_audiencias_por_rit(rits: list[str], eventos: list[dict], hoy: date | None = None) -> dict:
+    """Para cada RIT en `rits`, busca sus eventos en `eventos` (ya cargados,
+    ej. desde el cache de calendario), se queda con el primero de hoy en
+    adelante y clasifica su tipo. Reemplaza a `goteo.md` paso 3a y
+    `agenda.md` paso 2 resolviendo cada uno lo mismo por separado con
+    criterios que ya habían divergido (goteo solo distinguía Juicio/no-Juicio;
+    agenda distinguía las 3 variantes).
+
+    Los RIT sin audiencia próxima no aparecen en el resultado — mismo
+    criterio de "sáltala" que usaban ambas fases. Devuelve
+    `{rit: {"fecha": "YYYY-MM-DD", "resumen": str, "tipo": str}}`."""
+    resultado = {}
+    for rit in rits:
+        evento = primer_evento_futuro(buscar_eventos_por_rit(eventos, rit), hoy=hoy)
+        if evento is None:
+            continue
+        resultado[rit] = {
+            "fecha": str(evento["fecha"]),
+            "resumen": evento["resumen"],
+            "tipo": clasificar_tipo_audiencia(evento["resumen"]),
+        }
+    return resultado
+
+
 def filtrar_empresas_interes(eventos: list[dict]) -> list[dict]:
     """Se queda con los eventos cuyo resumen menciona alguna de las 6 empresas
     de interés, agregándoles "empresa_detectada" y "rit_detectado" (o None si

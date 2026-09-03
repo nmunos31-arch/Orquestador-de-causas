@@ -25,9 +25,11 @@ class TestParser:
             "listar-carpeta", "causas-activas", "dias-habiles-antes",
             "dias-corridos-antes", "obtener-causa", "parece-eerr",
             "buscar-audiencia-por-rit", "diagnostico-calendario", "eventos-calendario",
-            "cache-eventos-calendario",
+            "cache-eventos-calendario", "mapa-hilos-por-rit", "mapa-audiencias",
             "verificar-borradores-pendientes",
             "hilos-sin-respuesta", "puede-insistir", "registrar-aviso", "dias-habiles-entre",
+            "registrar-pedido", "pedidos-abiertos", "pedidos-desde-etiqueta",
+            "cerrar-pedido", "migrar-pedidos-bootstrap",
             "panel-html", "enviar-panel", "diagnostico-personal",
             "contexto-corrida",
         }
@@ -111,6 +113,32 @@ class TestSubcomandosSinRed:
         assert codigo == 0
         salida = json.loads(capsys.readouterr().out)
         assert salida["simulado"] is True
+
+    def test_registrar_pedido_dry_run_no_escribe_en_disco(self, capsys):
+        codigo = main(["--dry-run", "registrar-pedido", "--thread-id", "t1", "--rit", "M-1-2026", "--tipo", "documentos"])
+        assert codigo == 0
+        salida = json.loads(capsys.readouterr().out)
+        assert salida["simulado"] is True
+
+    def test_cerrar_pedido_dry_run_no_escribe_en_disco(self, capsys):
+        codigo = main(["--dry-run", "cerrar-pedido", "--thread-id", "t1", "--estado", "completo"])
+        assert codigo == 0
+        salida = json.loads(capsys.readouterr().out)
+        assert salida["simulado"] is True
+
+    def test_migrar_pedidos_bootstrap_dry_run_no_escribe_en_disco(self, capsys):
+        codigo = main(["--dry-run", "migrar-pedidos-bootstrap"])
+        assert codigo == 0
+        salida = json.loads(capsys.readouterr().out)
+        assert salida["simulado"] is True
+
+    def test_pedidos_abiertos_no_falla_sin_registro(self, capsys):
+        # El registro puede no existir todavia (bootstrap no corrido en este entorno);
+        # debe devolver una lista vacia, no fallar.
+        codigo = main(["pedidos-abiertos"])
+        assert codigo == 0
+        salida = json.loads(capsys.readouterr().out)
+        assert isinstance(salida["pedidos"], list)
 
     def test_dias_habiles_entre(self, capsys):
         # Caso real O-348-2026: 4 días hábiles entre el pedido y la insistencia.
@@ -227,6 +255,32 @@ class TestPanel:
         assert salida_html.exists()
         assert "sin novedades" in salida_html.read_text(encoding="utf-8")
 
+    def test_panel_html_borradores_json_va_a_la_bandeja(self, tmp_path, capsys):
+        resumen_json = tmp_path / "resumen.json"
+        resumen_json.write_text(json.dumps([]), encoding="utf-8")
+        borradores_json = tmp_path / "borradores.json"
+        borradores_json.write_text(json.dumps({
+            "pendientes": [{"rit": "M-1-2026", "empresa": "Alvi", "demandante": "Soto"}],
+            "enviados": [], "descartados": [],
+        }), encoding="utf-8")
+        salida_html = tmp_path / "panel.html"
+        registro_vacio = tmp_path / "registro_causas.json"
+        registro_vacio.write_text("{}", encoding="utf-8")
+
+        codigo = main([
+            "panel-html",
+            "--resumen-json", str(resumen_json),
+            "--salida", str(salida_html),
+            "--hoy", "2026-08-27",
+            "--ruta-registro", str(registro_vacio),
+            "--borradores-json", str(borradores_json),
+        ])
+
+        assert codigo == 0
+        html = salida_html.read_text(encoding="utf-8")
+        assert "Borrador de documentos sin enviar" in html
+        assert "M-1-2026" in html
+
     def test_panel_html_dry_run_no_escribe_en_disco(self, tmp_path, capsys):
         resumen_json = tmp_path / "resumen.json"
         resumen_json.write_text(
@@ -290,6 +344,22 @@ class TestContextoCorrida:
                 "total": 12, "ruta": str(ruta),
                 "desde": "2026-09-01", "hasta": "2027-03-20",
             })
+        # El barrido de Gmail (Etapa 2) no debe pegarle a la red real en estos
+        # tests de contexto-corrida — se prueba aparte en TestMapaHilosPorRit.
+        from gestion_causas import cli as cli_mod
+        monkeypatch.setattr(
+            cli_mod, "_generar_mapa_hilos_por_rit",
+            lambda ruta_salida: {
+                "ruta": str(ruta_salida), "total_rits_activos": 0,
+                "total_hilos": 0, "total_descartados": 0, "truncado": False,
+            })
+        # Idem para el mapa de audiencias (Etapa 4) -- se prueba aparte en
+        # TestMapaAudiencias.
+        monkeypatch.setattr(
+            cli_mod, "_generar_mapa_audiencias",
+            lambda ruta_cache, ruta_salida: {
+                "ruta": str(ruta_salida), "total_causas": 0, "con_audiencia": 0,
+            })
 
     def test_con_todo_ok_escribe_el_contexto_y_sale_cero(self, tmp_path, monkeypatch, capsys):
         self._preparar(monkeypatch)
@@ -305,6 +375,8 @@ class TestContextoCorrida:
         assert contexto["es_lunes"] == (contexto["dia_semana"] == "lunes")
         assert all(contexto["tokens"][t]["ok"] for t in ("gmail_trabajo", "calendar", "personal"))
         assert contexto["cache_calendario"]["total"] == 12
+        assert contexto["mapa_hilos"]["total_rits_activos"] == 0
+        assert contexto["mapa_audiencias"]["total_causas"] == 0
         # También lo imprime a stdout, para que el orquestador no tenga que leer el archivo.
         assert json.loads(capsys.readouterr().out)["listo"] is True
 
@@ -319,6 +391,7 @@ class TestContextoCorrida:
         contexto = json.loads(salida.read_text(encoding="utf-8"))
         assert contexto["listo"] is False
         assert contexto["cache_calendario"] is None
+        assert contexto["mapa_audiencias"] is None
         assert "login interactivo" in contexto["tokens"]["calendar"]["error"]
         capsys.readouterr()
 
@@ -353,9 +426,256 @@ class TestContextoCorrida:
         assert "otra@cuenta.cl" in contexto["tokens"]["gmail_trabajo"]["error"]
         capsys.readouterr()
 
+    def test_gmail_caido_no_genera_mapa_de_hilos(self, tmp_path, monkeypatch, capsys):
+        self._preparar(monkeypatch, gmail=False)
+        salida = tmp_path / "_contexto_corrida.json"
+
+        codigo = main(["contexto-corrida", "--salida", str(salida),
+                       "--ruta-cache", str(tmp_path / "cache.json")])
+
+        assert codigo == 1
+        contexto = json.loads(salida.read_text(encoding="utf-8"))
+        assert contexto["mapa_hilos"] is None
+        capsys.readouterr()
+
+    def test_fallo_del_mapa_de_hilos_no_aborta_la_corrida(self, tmp_path, monkeypatch, capsys):
+        # A diferencia del cache de calendario, una falla del barrido de Gmail
+        # no debe tumbar la corrida entera -- calendario/smu no lo necesitan.
+        self._preparar(monkeypatch)
+        from gestion_causas import cli as cli_mod
+
+        def explota(ruta_salida):
+            raise RuntimeError("cuota de Gmail excedida")
+
+        monkeypatch.setattr(cli_mod, "_generar_mapa_hilos_por_rit", explota)
+        salida = tmp_path / "_contexto_corrida.json"
+
+        codigo = main(["contexto-corrida", "--salida", str(salida),
+                       "--ruta-cache", str(tmp_path / "cache.json")])
+
+        assert codigo == 0
+        contexto = json.loads(salida.read_text(encoding="utf-8"))
+        assert contexto["listo"] is True
+        assert "cuota de Gmail excedida" in contexto["mapa_hilos"]["error"]
+        capsys.readouterr()
+
+    def test_fallo_del_mapa_de_audiencias_no_aborta_la_corrida(self, tmp_path, monkeypatch, capsys):
+        # Igual que el mapa de hilos: una falla acá no debe tumbar la corrida
+        # entera -- calendario/smu no lo necesitan, y goteo/agenda caen a su
+        # propio fallback en vivo si `mapa_audiencias.error` está presente.
+        self._preparar(monkeypatch)
+        from gestion_causas import cli as cli_mod
+
+        def explota(ruta_cache, ruta_salida):
+            raise RuntimeError("cache de calendario corrupto")
+
+        monkeypatch.setattr(cli_mod, "_generar_mapa_audiencias", explota)
+        salida = tmp_path / "_contexto_corrida.json"
+
+        codigo = main(["contexto-corrida", "--salida", str(salida),
+                       "--ruta-cache", str(tmp_path / "cache.json")])
+
+        assert codigo == 0
+        contexto = json.loads(salida.read_text(encoding="utf-8"))
+        assert contexto["listo"] is True
+        assert "cache de calendario corrupto" in contexto["mapa_audiencias"]["error"]
+        capsys.readouterr()
+
     def test_dry_run_no_escribe_nada(self, tmp_path, capsys):
         salida = tmp_path / "_contexto_corrida.json"
         codigo = main(["--dry-run", "contexto-corrida", "--salida", str(salida)])
+        assert codigo == 0
+        assert not salida.exists()
+        assert json.loads(capsys.readouterr().out)["simulado"] is True
+
+
+class TestMapaAudiencias:
+    def test_arma_mapa_desde_el_cache_y_las_causas_activas(self, tmp_path, monkeypatch):
+        from gestion_causas import cli as cli_mod
+        from gestion_causas import registro as registro_mod
+
+        causas = [{"rit": "M-643-2026"}, {"rit": "O-1-2026"}]
+        monkeypatch.setattr(registro_mod, "causas_para_goteo", lambda: causas)
+
+        ruta_cache = tmp_path / "cache.json"
+        ruta_cache.write_text(json.dumps({
+            "generado_en": "2026-09-01T09:00:00",
+            "desde": "2026-09-01", "hasta": "2027-03-20",
+            "eventos": [
+                {"fecha": "2026-09-10", "resumen": "Audiencia Unica M-643-2026 Iturriaga con Rendic"},
+            ],
+        }), encoding="utf-8")
+        salida = tmp_path / "audiencias.json"
+
+        codigo = main(["mapa-audiencias", "--ruta-cache", str(ruta_cache), "--salida", str(salida)])
+
+        assert codigo == 0
+        contenido = json.loads(salida.read_text(encoding="utf-8"))
+        assert contenido["rit_a_audiencia"]["M-643-2026"]["tipo"] == "Unica"
+        assert "O-1-2026" not in contenido["rit_a_audiencia"]
+
+    def test_dry_run_no_llama_a_calendar(self, tmp_path, monkeypatch, capsys):
+        from gestion_causas import cli as cli_mod
+
+        def explota(*a, **k):
+            raise AssertionError("no debería llamarse en dry-run")
+
+        monkeypatch.setattr(cli_mod, "_generar_mapa_audiencias", explota)
+        salida = tmp_path / "audiencias.json"
+
+        codigo = main(["--dry-run", "mapa-audiencias", "--salida", str(salida)])
+
+        assert codigo == 0
+        assert not salida.exists()
+        assert json.loads(capsys.readouterr().out)["simulado"] is True
+
+
+class TestMapaHilosPorRit:
+    def test_arma_mapa_rit_a_hilos_y_descarta_reportes(self, tmp_path, monkeypatch):
+        from gestion_causas import cli as cli_mod
+        from gestion_causas import registro as registro_mod
+
+        causas = [
+            {"rit": "M-1-2026", "thread_id": "torig1"},  # primera revision
+            {"rit": "M-2-2026", "goteo_ultima_revision": "2026-08-28"},  # ya revisada
+        ]
+        monkeypatch.setattr(registro_mod, "causas_para_goteo", lambda: causas)
+
+        def fake_buscar_hilos(query, servicio=None, max_resultados=50):
+            if "after:" in query:
+                assert "M-2-2026" in query
+                return [{"id": "t2"}]
+            assert "M-1-2026" in query
+            return [{"id": "t1"}]
+
+        monkeypatch.setattr(gmail_client, "buscar_hilos", fake_buscar_hilos)
+
+        mensajes_por_hilo = {
+            "t1": [{
+                "id": "m1", "subject": "Causa laboral X con Alvi M-1-2026",
+                "sender": "a@sb.cl", "to": "", "cc": "",
+                "date": "Fri, 14 Aug 2026 10:00:00 -0400", "cuerpo_texto": "",
+            }],
+            "t2": [{
+                "id": "m2", "subject": "RE: Causa laboral Y con Rendic M-2-2026",
+                "sender": "b@smu.cl", "to": "", "cc": "",
+                "date": "Fri, 28 Aug 2026 10:00:00 -0400", "cuerpo_texto": "",
+            }],
+            "torig1": [{
+                "id": "m3", "subject": "Provisiones demanda laborales Agosto 2026",
+                "sender": "c@sb.cl", "to": "", "cc": "",
+                "date": "Fri, 20 Aug 2026 10:00:00 -0400", "cuerpo_texto": "",
+            }],
+        }
+        monkeypatch.setattr(cli_mod, "_mensajes_de_hilo", lambda thread_id: mensajes_por_hilo.get(thread_id, []))
+
+        salida = tmp_path / "_hilos_corrida.json"
+        codigo = main(["mapa-hilos-por-rit", "--salida", str(salida)])
+        assert codigo == 0
+
+        resultado = json.loads(salida.read_text(encoding="utf-8"))
+        assert resultado["rit_a_hilos"] == {"M-1-2026": ["t1"], "M-2-2026": ["t2"]}
+        assert set(resultado["hilos"].keys()) == {"t1", "t2"}
+        assert resultado["descartados"] == [{
+            "thread_id": "torig1",
+            "asunto": "Provisiones demanda laborales Agosto 2026",
+            "motivo": "reporte consolidado interno",
+        }]
+        assert resultado["truncado"] == []
+
+    def test_hilo_original_de_causa_ya_revisada_se_incluye_aunque_no_mencione_el_rit(self, tmp_path, monkeypatch):
+        # Bug confirmado el 2026-09-03 con T-26-2026 (Saez con Preunic): el
+        # hilo original de la demanda ("Notificacion demanda laboral Saez
+        # con Preunic") nunca menciona el RIT como texto, asi que la
+        # busqueda OR por RIT nunca lo devuelve. Antes de este fix, una
+        # causa "ya revisada" (con goteo_ultima_revision) dependia SOLO de
+        # esa busqueda para que su hilo original entrara al mapa, y 5
+        # documentos reales llegados en esa cadena quedaron sin detectar.
+        # Ahora el thread_id registrado de toda causa activa se revisa
+        # siempre, sin importar si esta "ya revisada" o en "primera
+        # revision".
+        from gestion_causas import cli as cli_mod
+        from gestion_causas import registro as registro_mod
+
+        causas = [
+            {"rit": "T-26-2026", "thread_id": "torig-saez", "goteo_ultima_revision": "2026-08-13"},
+        ]
+        monkeypatch.setattr(registro_mod, "causas_para_goteo", lambda: causas)
+
+        def fake_buscar_hilos(query, servicio=None, max_resultados=50):
+            assert "T-26-2026" in query
+            return []  # la busqueda por texto no encuentra nada, como en el caso real
+
+        monkeypatch.setattr(gmail_client, "buscar_hilos", fake_buscar_hilos)
+
+        mensajes_por_hilo = {
+            "torig-saez": [{
+                "id": "m1", "subject": "Notificacion demanda laboral Saez con Preunic",
+                "sender": "cqueralto@sb.cl", "to": "", "cc": "",
+                "date": "Mon, 15 Jun 2026 08:00:00 -0400", "cuerpo_texto": "",
+            }],
+        }
+        monkeypatch.setattr(cli_mod, "_mensajes_de_hilo", lambda thread_id: mensajes_por_hilo.get(thread_id, []))
+
+        salida = tmp_path / "_hilos_corrida.json"
+        codigo = main(["mapa-hilos-por-rit", "--salida", str(salida)])
+        assert codigo == 0
+
+        resultado = json.loads(salida.read_text(encoding="utf-8"))
+        assert resultado["rit_a_hilos"] == {"T-26-2026": ["torig-saez"]}
+        assert set(resultado["hilos"].keys()) == {"torig-saez"}
+
+    def test_detecta_truncamiento_y_reintenta_con_el_doble(self, tmp_path, monkeypatch):
+        from gestion_causas import cli as cli_mod
+        from gestion_causas import registro as registro_mod
+
+        monkeypatch.setattr(registro_mod, "causas_para_goteo", lambda: [{"rit": "M-1-2026", "thread_id": "t1"}])
+
+        llamadas = []
+
+        def fake_buscar_hilos(query, servicio=None, max_resultados=50):
+            llamadas.append(max_resultados)
+            # Siempre devuelve exactamente el tope pedido: nunca deja de estar
+            # "lleno", asi que debe llegar a los 3 intentos (500 -> 1000 -> 2000).
+            return [{"id": f"t{i}"} for i in range(max_resultados)]
+
+        monkeypatch.setattr(gmail_client, "buscar_hilos", fake_buscar_hilos)
+        monkeypatch.setattr(cli_mod, "_mensajes_de_hilo", lambda thread_id: [])
+
+        salida = tmp_path / "_hilos_corrida.json"
+        codigo = main(["mapa-hilos-por-rit", "--salida", str(salida)])
+        assert codigo == 0
+        assert llamadas == [500, 1000, 2000]
+
+        resultado = json.loads(salida.read_text(encoding="utf-8"))
+        assert len(resultado["truncado"]) == 1
+        assert resultado["truncado"][0]["max_resultados_usado"] == 2000
+        assert resultado["truncado"][0]["total"] == 2000
+
+    def test_sin_causas_activas_escribe_mapa_vacio(self, tmp_path, monkeypatch):
+        from gestion_causas import registro as registro_mod
+
+        monkeypatch.setattr(registro_mod, "causas_para_goteo", lambda: [])
+        salida = tmp_path / "_hilos_corrida.json"
+        codigo = main(["mapa-hilos-por-rit", "--salida", str(salida)])
+        assert codigo == 0
+        resultado = json.loads(salida.read_text(encoding="utf-8"))
+        assert resultado["rit_a_hilos"] == {}
+        assert resultado["hilos"] == {}
+        assert resultado["descartados"] == []
+        assert resultado["truncado"] == []
+
+    def test_dry_run_no_escribe_ni_llama_a_gmail(self, tmp_path, monkeypatch, capsys):
+        from gestion_causas import registro as registro_mod
+
+        def explota(*a, **kw):
+            raise AssertionError("no deberia llamar a Gmail en --dry-run")
+
+        monkeypatch.setattr(registro_mod, "causas_para_goteo", explota)
+        monkeypatch.setattr(gmail_client, "buscar_hilos", explota)
+
+        salida = tmp_path / "_hilos_corrida.json"
+        codigo = main(["--dry-run", "mapa-hilos-por-rit", "--salida", str(salida)])
         assert codigo == 0
         assert not salida.exists()
         assert json.loads(capsys.readouterr().out)["simulado"] is True

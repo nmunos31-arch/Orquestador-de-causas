@@ -80,6 +80,11 @@ EMPRESAS_SIN_EXCEL = {"Preunic", "Salcobrand"}
 
 ETIQUETA_PROCESADO = "Procesado-GestionCausas"
 
+# Etiqueta que Nico aplica a mano a un correo que el mismo envio (pedido de
+# documentos o propuesta de acuerdo) para que el subagente "seguimiento" lo
+# de de alta como pedido a seguir, sin tener que buscarlo por texto.
+ETIQUETA_ESPERANDO_RESPUESTA = "Esperando-Respuesta"
+
 
 def log(msg):
     print(f"[gmail_client] {msg}", file=sys.stderr)
@@ -341,6 +346,17 @@ def aplicar_etiqueta_a_mensaje(message_id: str, label_id: str, servicio=None) ->
         servicio = construir_servicio()
     servicio.users().messages().modify(
         userId="me", id=message_id, body={"addLabelIds": [label_id]}
+    ).execute()
+
+
+def quitar_etiqueta_de_hilo(thread_id: str, label_id: str, servicio=None) -> None:
+    """Quita `label_id` del hilo (ej. al cerrar un pedido en seguimiento, para
+    que la etiqueta "Esperando-Respuesta" refleje siempre lo que sigue
+    abierto)."""
+    if servicio is None:
+        servicio = construir_servicio()
+    servicio.users().threads().modify(
+        userId="me", id=thread_id, body={"removeLabelIds": [label_id]}
     ).execute()
 
 

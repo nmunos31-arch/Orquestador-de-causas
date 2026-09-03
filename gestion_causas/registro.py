@@ -24,6 +24,7 @@ from pathlib import Path
 RUTA_REGISTRO_CAUSAS = Path(__file__).parent / "registro_causas.json"
 RUTA_REGISTRO_CECO = Path(__file__).parent / "registro_ceco.json"
 RUTA_REGISTRO_SEGUIMIENTO = Path(__file__).parent / "registro_seguimiento.json"
+RUTA_REGISTRO_PEDIDOS = Path(__file__).parent / "registro_pedidos.json"
 
 
 def normalizar_rit(valor) -> str:
@@ -363,3 +364,147 @@ def puede_insistir(
         "puede": False, "n_aviso": len(avisos) + 1,
         "motivo": f"ya se hicieron {len(avisos)} avisos, requiere gestion manual",
     }
+
+
+# ── Registro de pedidos (Fase "seguimiento": documentos y propuestas de
+# acuerdo esperando respuesta) ─────────────────────────────────────────────
+# Estados abiertos vs. cerrados de un pedido. "gestion_manual" sigue abierto
+# a efectos de reporte (aparece en la bandeja de acciones del panel) pero ya
+# no se le crean mas borradores de insistencia (agoto los 2 avisos).
+ESTADOS_PEDIDO_ABIERTO = {"esperando", "parcial", "gestion_manual"}
+
+
+def cargar_registro_pedidos(ruta: Path = RUTA_REGISTRO_PEDIDOS) -> dict:
+    return _cargar(ruta)
+
+
+def obtener_pedido(thread_id: str, ruta: Path = RUTA_REGISTRO_PEDIDOS) -> dict | None:
+    return cargar_registro_pedidos(ruta).get(thread_id)
+
+
+def registrar_pedido(thread_id: str, datos: dict, ruta: Path = RUTA_REGISTRO_PEDIDOS) -> dict:
+    """Da de alta un pedido nuevo o actualiza (merge) uno existente — mismo
+    criterio que `registrar_causa`: los campos nuevos de `datos` pisan a los
+    viejos, los que no vienen se conservan.
+
+    `datos` trae, entre otros: rit, tipo ("documentos"|"acuerdo"),
+    message_id, fecha_envio (AAAA-MM-DD), destinatario, items_pedidos
+    (lista), items_recibidos (lista), estado
+    ("esperando"|"parcial"|"completo"|"gestion_manual"), origen
+    ("borrador_enviado"|"etiqueta"|"manual"), label_id (si vino por
+    etiqueta, para poder quitarla al cerrar el pedido).
+
+    Devuelve la entrada final guardada.
+    """
+    with _lock(ruta):
+        registro = cargar_registro_pedidos(ruta)
+        existente = registro.get(thread_id, {})
+        fusionada = {**existente, **datos}
+        fusionada["thread_id"] = thread_id
+        fusionada.setdefault("estado", "esperando")
+        fusionada.setdefault("items_recibidos", [])
+        fusionada.setdefault("primera_vez_registrado", datetime.now().isoformat())
+        fusionada["ultima_revision"] = datetime.now().isoformat()
+        registro[thread_id] = fusionada
+        _guardar(ruta, registro)
+    return fusionada
+
+
+def pedidos_abiertos(
+    ruta: Path = RUTA_REGISTRO_PEDIDOS, ruta_causas: Path = RUTA_REGISTRO_CAUSAS
+) -> list:
+    """Pedidos que siguen requiriendo seguimiento (ver ESTADOS_PEDIDO_ABIERTO)
+    — es lo que recorre la fase "seguimiento" en cada corrida, en vez de
+    salir a buscar en Gmail cada vez. Excluye los pedidos cuyo `rit`
+    corresponde a una causa con `causa_cerrada: true` en registro_causas.json
+    — mismo criterio que `causas_para_goteo` — para no seguir insistiendo (ni
+    mostrando en el panel) por una causa que Nico ya cerró a mano, sin
+    depender de que alguien revise cada pedido uno por uno."""
+    rits_cerrados = {
+        entrada["rit"]
+        for entrada in cargar_registro_causas(ruta_causas).values()
+        if entrada.get("causa_cerrada") and entrada.get("rit")
+    }
+    return [
+        entrada for entrada in cargar_registro_pedidos(ruta).values()
+        if entrada.get("estado", "esperando") in ESTADOS_PEDIDO_ABIERTO
+        and entrada.get("rit") not in rits_cerrados
+    ]
+
+
+def migrar_pedidos_bootstrap(
+    ruta_pedidos: Path = RUTA_REGISTRO_PEDIDOS,
+    ruta_seguimiento: Path = RUTA_REGISTRO_SEGUIMIENTO,
+    ruta_causas: Path = RUTA_REGISTRO_CAUSAS,
+) -> dict:
+    """Siembra `registro_pedidos.json` una sola vez, con el backlog que ya
+    existia antes de que este registro existiera (ver diseno, Etapa 1.3):
+
+    - cada entrada de `registro_seguimiento.json` (13 al momento de
+      disenarlo) entra como pedido "esperando", con su RIT y tipo (traducido
+      de "acuerdo-daniela"/"causa-laboral" a "acuerdo", y "documentos" queda
+      igual) y `fecha_envio` tomada del primer aviso registrado — para que la
+      cadencia (que sigue viviendo en registro_seguimiento.json) seguir
+      contando desde donde iba;
+    - cada causa de `registro_causas.json` con `borrador_documentos_draft_id`
+      vigente entra como pedido "pendiente_envio" (todavia no se mando, asi
+      que no es "esperando" respuesta todavia).
+
+    No pisa entradas que ya existan en `registro_pedidos.json` (thread_id
+    repetido) — se puede correr mas de una vez sin duplicar. Devuelve
+    {"creados": [...thread_id...], "ya_existian": [...thread_id...]}.
+    """
+    _TIPO_SEGUIMIENTO_A_PEDIDO = {
+        "acuerdo-daniela": "acuerdo",
+        "causa-laboral": "acuerdo",
+        "documentos": "documentos",
+    }
+    creados = []
+    ya_existian = []
+    with _lock(ruta_pedidos):
+        pedidos = cargar_registro_pedidos(ruta_pedidos)
+
+        for thread_id, entrada in cargar_registro_seguimiento(ruta_seguimiento).items():
+            if thread_id in pedidos:
+                ya_existian.append(thread_id)
+                continue
+            avisos = entrada.get("avisos") or []
+            fecha_envio = avisos[0]["fecha"] if avisos else None
+            pedidos[thread_id] = {
+                "thread_id": thread_id,
+                "rit": entrada.get("rit"),
+                "tipo": _TIPO_SEGUIMIENTO_A_PEDIDO.get(entrada.get("tipo"), entrada.get("tipo")),
+                "fecha_envio": fecha_envio,
+                "items_pedidos": [],
+                "items_recibidos": [],
+                "estado": "esperando",
+                "origen": "bootstrap_seguimiento",
+                "primera_vez_registrado": datetime.now().isoformat(),
+                "ultima_revision": datetime.now().isoformat(),
+            }
+            creados.append(thread_id)
+
+        for rit, causa in cargar_registro_causas(ruta_causas).items():
+            draft_id = causa.get("borrador_documentos_draft_id")
+            if not draft_id:
+                continue
+            clave = f"borrador:{draft_id}"
+            if clave in pedidos:
+                ya_existian.append(clave)
+                continue
+            pedidos[clave] = {
+                "thread_id": causa.get("thread_id"),
+                "rit": causa.get("rit", rit),
+                "tipo": "documentos",
+                "draft_id": draft_id,
+                "items_pedidos": [],
+                "items_recibidos": [],
+                "estado": "pendiente_envio",
+                "origen": "bootstrap_borrador",
+                "primera_vez_registrado": datetime.now().isoformat(),
+                "ultima_revision": datetime.now().isoformat(),
+            }
+            creados.append(clave)
+
+        _guardar(ruta_pedidos, pedidos)
+    return {"creados": creados, "ya_existian": ya_existian}

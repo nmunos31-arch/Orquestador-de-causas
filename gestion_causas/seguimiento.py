@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Análisis puro (sin llamadas a Gmail) de hilos ya traídos, para detectar
-correos propios sin respuesta — Fase 5 ("gestion-causas-sin-respuesta") y
-Fase 6 ("gestion-causas-documentos-pendientes").
+correos propios sin respuesta (subagente "seguimiento") y para armar el
+barrido combinado de causas activas por RIT (subagente "goteo", comando
+`mapa-hilos-por-rit`).
 
 Todas las funciones reciben los mensajes ya leídos (mismo formato que
 devuelve gmail_client.leer_mensaje / cli.cmd_leer_hilo: dict con "id",
@@ -11,7 +12,7 @@ así se testean sin credenciales — mismo criterio que agenda.py y registro.py.
 """
 
 import re
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from email.utils import getaddresses, parsedate_to_datetime
 
 _PREFIJOS_ASUNTO = re.compile(r"^\s*(re|rv|fwd|fw)\s*:\s*", re.IGNORECASE)
@@ -203,3 +204,127 @@ def destinatarios_de_ultimo_propio(mensaje_propio: dict, direccion_propia: str) 
     if not direcciones:
         return {"para": "", "cc": []}
     return {"para": direcciones[0], "cc": direcciones[1:]}
+
+
+# ── Barrido combinado de Gmail por RIT (goteo.md paso 2 / seguimiento.md
+# paso 3b) — ver docs/2026-08-28-goteo-incremental-y-acuerdo-pago-design.md
+# para el historial de los 3 patrones de reporte consolidado que motivaron
+# este filtro, confirmados en producción (Provisiones/Informe de
+# provision/Riesgo causas estado sentencias, colados por error en varias
+# causas antes de agregarse aquí como filtro mecánico). ──────────────────
+_PREFIJOS_REPORTE_CONSOLIDADO = (
+    "provisiones demanda laborales",
+    "informe de provision",
+    "informe provision",
+    "risgo causas estado sentencias",
+    "riesgo causas estado sentencias",
+)
+
+
+def _sin_acentos(texto: str) -> str:
+    """Normaliza tildes comunes para comparar "provision"/"provisión" sin
+    depender de que el asunto real las traiga bien codificadas."""
+    tabla = str.maketrans("áéíóúÁÉÍÓÚ", "aeiouAEIOU")
+    return texto.translate(tabla)
+
+
+def es_reporte_consolidado(asunto: str) -> bool:
+    """True si `asunto` (tal cual, con o sin prefijos Re:/RV:/Fwd:) es un
+    reporte/consolidado interno que menciona muchas causas de pasada, no
+    prueba de una causa puntual — ver la nota de filtro de asunto en
+    subagentes/goteo.md. Quita los prefijos y compara sin distinguir
+    mayúsculas/tildes."""
+    normalizado = _sin_acentos(normalizar_asunto(asunto)).strip().lower()
+    return normalizado.startswith(_PREFIJOS_REPORTE_CONSOLIDADO)
+
+
+def hilo_es_reporte_consolidado(mensajes: list) -> bool:
+    """True si **cualquiera** de los mensajes del hilo tiene un asunto que
+    matchea `es_reporte_consolidado` — con uno solo que matchee, se descarta
+    el hilo completo (mismo criterio de goteo.md paso 2d)."""
+    return any(es_reporte_consolidado(m.get("subject", "")) for m in mensajes)
+
+
+def agrupar_causas_para_barrido(causas: list, hoy: date | None = None) -> dict:
+    """Separa las causas activas (ver registro.causas_para_goteo) en los dos
+    grupos del barrido combinado de goteo.md paso 2b:
+
+    - "ya_revisadas": causas con `goteo_ultima_revision` guardada. Trae
+      `rits` y `fecha_corte` (la `goteo_ultima_revision` más antigua del
+      grupo, menos 1 día de colchón — el operador `after:` de Gmail filtra
+      por día completo, así que sin el colchón se pierde lo llegado el mismo
+      día después de una corrida anterior).
+    - "primera_revision": causas sin `goteo_ultima_revision` — se buscan sin
+      filtro de fecha, mismo criterio que un escaneo completo.
+
+    También trae, a nivel de la raíz, "thread_por_rit": {rit: thread_id} para
+    **toda** causa activa con `thread_id` registrado, sea "ya_revisada" o de
+    "primera_revision" (bug confirmado el 2026-09-03 con T-26-2026: antes
+    esta red de seguridad solo cubría primera_revision, así que una causa ya
+    revisada cuyo hilo original nunca menciona su RIT como texto —el caso
+    normal cuando el hilo sigue siendo "Notificación demanda laboral ..."
+    sin el RIT en el asunto— quedaba fuera de la búsqueda de Gmail para
+    siempre, aunque le llegaran documentos reales en esa misma cadena). El
+    llamador (`cli._generar_mapa_hilos_por_rit`) usa este mapa para
+    garantizar que el hilo original de cada causa se revise siempre, y para
+    atribuírselo a su RIT sin depender de `clasificar_rits_de_hilo`.
+
+    Un grupo con `rits` vacío no se busca (el llamador debe saltearlo). No
+    toca la red — solo agrupa lo que ya trajo `causas_para_goteo`."""
+    if hoy is None:
+        hoy = date.today()
+
+    ya_revisadas_rits = []
+    fechas_revision = []
+    primera_revision_rits = []
+    thread_por_rit = {}
+
+    for causa in causas:
+        rit = causa.get("rit")
+        if not rit:
+            continue
+        if causa.get("thread_id"):
+            thread_por_rit[rit] = causa["thread_id"]
+        ultima = causa.get("goteo_ultima_revision")
+        if ultima:
+            ya_revisadas_rits.append(rit)
+            fechas_revision.append(date.fromisoformat(ultima))
+        else:
+            primera_revision_rits.append(rit)
+
+    fecha_corte = None
+    if fechas_revision:
+        fecha_corte = str(min(fechas_revision) - timedelta(days=1))
+
+    return {
+        "ya_revisadas": {"rits": ya_revisadas_rits, "fecha_corte": fecha_corte},
+        "primera_revision": {"rits": primera_revision_rits},
+        "thread_por_rit": thread_por_rit,
+    }
+
+
+def construir_query_or_rits(rits: list, fecha_corte: str | None = None) -> str:
+    """Arma el operador OR de Gmail para una lista de RITs, cada uno entre
+    comillas (evita que Gmail interprete el guion del RIT como operador de
+    exclusión), con `after:<fecha_corte>` antepuesto si se entrega."""
+    or_rits = "(" + " OR ".join(f'"{rit}"' for rit in rits) + ")"
+    if fecha_corte:
+        fecha_gmail = fecha_corte.replace("-", "/")
+        return f"after:{fecha_gmail} {or_rits}"
+    return or_rits
+
+
+def clasificar_rits_de_hilo(rits_activos: list, mensajes: list) -> list:
+    """Devuelve los RITs de `rits_activos` que aparecen literalmente en el
+    asunto de **algún** mensaje del hilo (normalizado, sin prefijos
+    Re:/RV:/Fwd:/Fw: — el RIT queda en el asunto de toda la cadena, incluidas
+    las respuestas). Comparación insensible a mayúsculas. Puede devolver más
+    de un RIT si el hilo los menciona a todos (raro, pero no se descarta a
+    ciegas — ver subagentes/goteo.md paso 2d, "usa criterio")."""
+    asuntos_normalizados = [normalizar_asunto(m.get("subject", "")).lower() for m in mensajes]
+    encontrados = []
+    for rit in rits_activos:
+        rit_normalizado = rit.lower()
+        if any(rit_normalizado in asunto for asunto in asuntos_normalizados):
+            encontrados.append(rit)
+    return encontrados
