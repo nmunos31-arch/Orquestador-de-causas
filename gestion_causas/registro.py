@@ -420,7 +420,8 @@ def puede_insistir(
 # acuerdo esperando respuesta) ─────────────────────────────────────────────
 # Estados abiertos vs. cerrados de un pedido. "gestion_manual" sigue abierto
 # a efectos de reporte (aparece en la bandeja de acciones del panel) pero ya
-# no se le crean mas borradores de insistencia (agoto los 2 avisos).
+# no se le crean mas borradores de insistencia (la causa no tiene audiencia
+# agendada, ver puede_insistir).
 ESTADOS_PEDIDO_ABIERTO = {"esperando", "parcial", "gestion_manual"}
 
 

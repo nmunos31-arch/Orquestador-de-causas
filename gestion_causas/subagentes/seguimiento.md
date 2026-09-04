@@ -16,7 +16,7 @@ subagente en la Fase "seguimiento" de cada corrida, después de "smu" y **en par
 de la otra dentro de la misma corrida (`seguimiento` escribe en `registro_pedidos.json` y
 `registro_seguimiento.json`, archivos que ni `goteo` ni `agenda` tocan). Solo se despacha
 en la **corrida de la mañana** — ver el paso 2 del orquestador — porque sus umbrales son
-en días hábiles y la cadencia limita a 2 avisos: correrla 3 veces al día no adelanta
+en días hábiles y la cadencia no adelanta sola: correrla 3 veces al día no adelanta
 ningún aviso.
 
 **Diferencia de fondo con las dos tareas viejas: esto ya NO busca, recuerda.** Las
@@ -227,7 +227,7 @@ f. **Actualiza el pedido** según lo que pasó en este paso:
      ```
      python -m gestion_causas.cli cerrar-pedido --thread-id <thread_id> --estado completo
      ```
-   - Se agotaron los 2 avisos (paso 3e) → márcalo `gestion_manual`:
+   - `puede-insistir` reportó "no tiene audiencia agendada" (paso 3e) → márcalo `gestion_manual`:
      ```
      python -m gestion_causas.cli cerrar-pedido --thread-id <thread_id> --estado gestion_manual
      ```
@@ -290,12 +290,12 @@ seguimiento" del panel de estado. Formato:
 
 - `items`: una entrada por cada pedido en el que creaste un borrador (insistencia o
   recordatorio) en esta corrida.
-- `acciones`: los pedidos que pasaron a `gestion_manual` en esta corrida (2 avisos
-  agotados) van **acá**, son lo más importante de todo el resumen: `{"rit": "<rit o
-  null>", "que": "2 avisos agotados sin respuesta (<tipo>) — requiere gestión manual",
-  "urgencia": "alta"}`. Los borradores de documentos todavía sin enviar (paso 1a,
-  `pendientes`) **no** van acá — el orquestador ya los junta por su cuenta en el paso 4,
-  no los dupliques.
+- `acciones`: los pedidos que pasaron a `gestion_manual` en esta corrida (causa sin
+  audiencia agendada) van **acá**, son lo más importante de todo el resumen: `{"rit":
+  "<rit o null>", "que": "Causa sin audiencia agendada, sin respuesta (<tipo>) —
+  requiere gestión manual", "urgencia": "alta"}`. Los borradores de documentos todavía
+  sin enviar (paso 1a, `pendientes`) **no** van acá — el orquestador ya los junta por su
+  cuenta en el paso 4, no los dupliques.
 - `notas`: pedidos dados de alta sin RIT detectado (paso 1b), u otras observaciones de
   criterio.
 - Si no hubo novedades en ningún bloque, `titular` puede ser "Sin novedades" con las

@@ -241,8 +241,8 @@ def acciones_consolidadas(
     las `acciones` que cada fase reporta en su resumen estructurado, los
     borradores de documentos sin enviar (ver
     cli.cmd_verificar_borradores_pendientes), las causas con
-    `estado_acuerdo: pago_recibido_pendiente_confirmar`, y los pedidos que
-    agotaron los 2 avisos (`estado: gestion_manual` en registro_pedidos.json,
+    `estado_acuerdo: pago_recibido_pendiente_confirmar`, y los pedidos sin audiencia agendada
+    (`estado: gestion_manual` en registro_pedidos.json,
     ver `registro.pedidos_abiertos`). Devuelve una lista de
     {"origen", "rit", "que", "urgencia"}, sin ordenar (el llamador ordena)."""
     acciones = []
@@ -275,7 +275,7 @@ def acciones_consolidadas(
             acciones.append({
                 "origen": "seguimiento",
                 "rit": p.get("rit", ""),
-                "que": f"2 avisos agotados sin respuesta ({p.get('tipo', '')}) — requiere gestion manual",
+                "que": f"Causa sin audiencia agendada, sin respuesta ({p.get('tipo', '')}) — requiere gestion manual",
                 "urgencia": "alta",
             })
     return acciones

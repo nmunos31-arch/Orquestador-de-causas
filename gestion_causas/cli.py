@@ -889,7 +889,7 @@ def cmd_contexto_corrida(args) -> int:
         # "manana" identifica la corrida de las 09:00 (cron "0 9,13,17 * * *"),
         # la unica en la que el orquestador despacha "calendario" y
         # "seguimiento" (ver orquestador/SKILL.md paso 2) -- sus umbrales son
-        # en dias habiles/2 avisos, correrlas 3x/dia no adelanta nada.
+        # en dias habiles, correrlas 3x/dia no adelanta nada.
         "corrida": "manana" if ahora.hour < 12 else "resto",
         "tokens": {},
         "cache_calendario": None,

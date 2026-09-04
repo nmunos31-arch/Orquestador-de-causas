@@ -85,7 +85,7 @@ completo la fase `calendario`** (no despaches ese subagente; en el paso 3 deja s
 como `{"fase": "calendario", "resultado": "No aplica: solo corre en la corrida de la
 mañana.", "error": null}`) y, en el paso de abajo, **no incluyas `seguimiento`** entre las
 fases que despachas en paralelo con `goteo`/`agenda` (mismo criterio en el paso 3). Los
-umbrales de ambas fases son semanales/en días hábiles con cadencia limitada a 2 avisos —
+umbrales de ambas fases son semanales/en días hábiles con cadencia que no se adelanta corriendo más seguido —
 correrlas 3 veces al día no adelanta nada y solo triplica el barrido de correo.
 
 **Orden y paralelismo:**
