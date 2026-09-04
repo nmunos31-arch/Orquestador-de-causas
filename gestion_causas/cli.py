@@ -1053,7 +1053,7 @@ def construir_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-hilos", type=int, default=50)
     p.set_defaults(func=cmd_hilos_sin_respuesta)
 
-    p = sub.add_parser("puede-insistir", help="Fase 5/6: aplica la cadencia de insistencia (1er aviso siempre, 2do a los 2 dias habiles, despues nunca)")
+    p = sub.add_parser("puede-insistir", help="Fase 5/6: aplica la cadencia de insistencia (1er aviso siempre, 2do a los 2 dias habiles; del 3ro en adelante segun cercania a la audiencia: ciclo 4/2 dias habiles si faltan +2 semanas, cada 2 dias si faltan -2 semanas, a diario si falta -1 semana)")
     p.add_argument("--thread-id", required=True)
     p.add_argument("--hoy", default=None, help="AAAA-MM-DD, para tests; por defecto hoy")
     p.set_defaults(func=cmd_puede_insistir)
