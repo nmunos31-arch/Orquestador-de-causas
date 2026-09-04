@@ -163,12 +163,15 @@ e. **Para cada candidato** (insistencia o recordatorio), verifica la cadencia �
    ```
    python -m gestion_causas.cli puede-insistir --thread-id <thread_id>
    ```
-   - `puede` false por 2 avisos agotados → no crear borrador; el pedido pasa a
-     `gestion_manual` (paso 3f) y se destaca en el resumen final (punto 5) — es lo más
-     importante de todo el resumen.
-   - `puede` false por no cumplirse aún los 2 días hábiles desde el 1er aviso → saltar
-     este pedido en esta corrida, sin mencionarlo en el resumen.
-   - `puede` true → continúa.
+   - `puede` false con motivo "no tiene audiencia agendada" → no crear borrador; el
+     pedido pasa a `gestion_manual` (paso 3f) y se destaca en el resumen final (punto 5)
+     — es lo más importante de todo el resumen.
+   - `puede` false por no cumplirse aún el umbral de días hábiles desde el último aviso
+     (ya sea el 2do aviso o uno posterior, cuyo umbral cambia solo según cuán cerca esté
+     la audiencia) → saltar este pedido en esta corrida, sin mencionarlo en el resumen.
+   - `puede` true → continúa. Ya no hay tope de avisos: mientras la causa tenga
+     `fecha_audiencia` registrada, la cadencia se ajusta sola (más espaciada si falta
+     mucho para la audiencia, diaria si está encima) en vez de detenerse a los 2 avisos.
 
    Arma los destinatarios: **Para** = `destinatario` del pedido (o, si viene vacío, el
    `to` del último mensaje propio del hilo); **CC** = el resto de los participantes del
