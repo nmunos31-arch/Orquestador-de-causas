@@ -322,6 +322,13 @@ def registrar_aviso(
     return entrada
 
 
+UMBRAL_TIER_LEJANO_DIAS = 14
+UMBRAL_TIER_MEDIO_DIAS = 8
+CADENCIA_TIER_LEJANO_HABILES = (4, 2)
+CADENCIA_TIER_MEDIO_HABILES = 2
+CADENCIA_TIER_CERCANO_HABILES = 1
+
+
 def puede_insistir(
     thread_id: str,
     hoy=None,
@@ -375,7 +382,7 @@ def puede_insistir(
         }
 
     n_aviso = len(avisos) + 1
-    rit = entrada.get("rit") if entrada else None
+    rit = entrada.get("rit")
     causa = obtener_causa(rit, ruta_causas) if rit else None
     fecha_audiencia = causa.get("fecha_audiencia") if causa else None
     if not fecha_audiencia:
@@ -385,16 +392,17 @@ def puede_insistir(
         }
 
     dias_hasta_audiencia = (_parsear_fecha(fecha_audiencia) - hoy).days
-    if dias_hasta_audiencia > 14:
+    if dias_hasta_audiencia > UMBRAL_TIER_LEJANO_DIAS:
         tier = "lejano"
-        posicion = (len(avisos) - 2) % 2
-        umbral = 4 if posicion == 0 else 2
-    elif dias_hasta_audiencia >= 8:
+        # 3er aviso -> 4 dias; 4to -> 2 dias; 5to -> 4 de nuevo (bucle)
+        posicion = (n_aviso - 3) % 2
+        umbral = CADENCIA_TIER_LEJANO_HABILES[posicion]
+    elif dias_hasta_audiencia >= UMBRAL_TIER_MEDIO_DIAS:
         tier = "medio"
-        umbral = 2
+        umbral = CADENCIA_TIER_MEDIO_HABILES
     else:
         tier = "cercano"
-        umbral = 1
+        umbral = CADENCIA_TIER_CERCANO_HABILES
 
     transcurridos = agenda_mod.dias_habiles_entre(avisos[-1]["fecha"], hoy, **kwargs_feriados)
     if transcurridos >= umbral:
