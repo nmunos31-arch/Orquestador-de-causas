@@ -327,15 +327,29 @@ def puede_insistir(
     hoy=None,
     ruta: Path = RUTA_REGISTRO_SEGUIMIENTO,
     ruta_feriados=None,
+    ruta_causas: Path = RUTA_REGISTRO_CAUSAS,
 ) -> dict:
     """Aplica la cadencia acordada con el usuario: el 1er aviso siempre
-    procede; el 2º solo si pasaron al menos 2 días hábiles desde el 1º; del
-    3º en adelante nunca se genera borrador (solo se reporta en el resumen
-    de la tarea, requiere gestión manual).
+    procede; el 2do solo si pasaron al menos 2 dias habiles desde el 1ro.
+
+    Del 3er aviso en adelante ya no hay tope: la cadencia se recalcula en
+    cada llamada segun cuanto falta (en dias corridos) para la
+    `fecha_audiencia` de la causa asociada (via el `rit` guardado en la
+    entrada de seguimiento):
+    - Sin `rit`, o el `rit` no tiene `fecha_audiencia` registrada en
+      `registro_causas.json`: no hay como elegir cadencia, se reporta motivo
+      distinto ("causa no tiene audiencia agendada") para no confundirlo con
+      un simple "todavia no toca".
+    - Faltan mas de 14 dias corridos: tier "lejano" — repite en bucle 4 dias
+      habiles / 2 dias habiles desde el aviso anterior (3er aviso exige 4,
+      4to exige 2, 5to vuelve a exigir 4, etc.).
+    - Faltan entre 8 y 14 dias corridos: tier "medio" — exige 2 dias habiles
+      desde el aviso anterior.
+    - Faltan 7 dias corridos o menos (incluida audiencia ya pasada): tier
+      "cercano" — exige 1 dia habil desde el aviso anterior.
 
     Devuelve {"puede": bool, "n_aviso": int, "motivo": str}, donde
-    `n_aviso` es el número de aviso que correspondería crear a continuación
-    (1, 2, o el que ya se agotó).
+    `n_aviso` es el numero de aviso que correspondería crear a continuacion.
     """
     from . import agenda as agenda_mod
 
@@ -346,13 +360,13 @@ def puede_insistir(
 
     entrada = obtener_seguimiento(thread_id, ruta)
     avisos = entrada["avisos"] if entrada else []
+    kwargs_feriados = {} if ruta_feriados is None else {"ruta_feriados": ruta_feriados}
 
     if len(avisos) == 0:
         return {"puede": True, "n_aviso": 1, "motivo": "sin avisos previos"}
 
     if len(avisos) == 1:
-        kwargs = {} if ruta_feriados is None else {"ruta_feriados": ruta_feriados}
-        transcurridos = agenda_mod.dias_habiles_entre(avisos[0]["fecha"], hoy, **kwargs)
+        transcurridos = agenda_mod.dias_habiles_entre(avisos[0]["fecha"], hoy, **kwargs_feriados)
         if transcurridos >= 2:
             return {"puede": True, "n_aviso": 2, "motivo": f"pasaron {transcurridos} dias habiles desde el 1er aviso"}
         return {
@@ -360,9 +374,37 @@ def puede_insistir(
             "motivo": f"solo pasaron {transcurridos} dias habiles desde el 1er aviso (se requieren 2)",
         }
 
+    n_aviso = len(avisos) + 1
+    rit = entrada.get("rit") if entrada else None
+    causa = obtener_causa(rit, ruta_causas) if rit else None
+    fecha_audiencia = causa.get("fecha_audiencia") if causa else None
+    if not fecha_audiencia:
+        return {
+            "puede": False, "n_aviso": n_aviso,
+            "motivo": "causa no tiene audiencia agendada, requiere revision manual",
+        }
+
+    dias_hasta_audiencia = (_parsear_fecha(fecha_audiencia) - hoy).days
+    if dias_hasta_audiencia > 14:
+        tier = "lejano"
+        posicion = (len(avisos) - 2) % 2
+        umbral = 4 if posicion == 0 else 2
+    elif dias_hasta_audiencia >= 8:
+        tier = "medio"
+        umbral = 2
+    else:
+        tier = "cercano"
+        umbral = 1
+
+    transcurridos = agenda_mod.dias_habiles_entre(avisos[-1]["fecha"], hoy, **kwargs_feriados)
+    if transcurridos >= umbral:
+        return {
+            "puede": True, "n_aviso": n_aviso,
+            "motivo": f"pasaron {transcurridos} dias habiles desde el ultimo aviso (tier {tier}, exige {umbral})",
+        }
     return {
-        "puede": False, "n_aviso": len(avisos) + 1,
-        "motivo": f"ya se hicieron {len(avisos)} avisos, requiere gestion manual",
+        "puede": False, "n_aviso": n_aviso,
+        "motivo": f"solo pasaron {transcurridos} dias habiles desde el ultimo aviso (tier {tier}, se requieren {umbral})",
     }
 
 
