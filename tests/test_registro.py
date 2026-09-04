@@ -259,7 +259,7 @@ class TestPuedeInsistir:
         assert resultado["puede"] is True
         assert resultado["n_aviso"] == 2
 
-    def test_tercer_aviso_nunca_procede(self, tmp_path):
+    def test_tercer_aviso_sin_rit_reporta_causa_no_agendada(self, tmp_path):
         ruta = tmp_path / "registro_seguimiento.json"
         ruta_feriados = _feriados_sin_feriados(tmp_path)
         registrar_aviso("t1", "documentos", "2026-08-19", ruta=ruta)
@@ -268,7 +268,99 @@ class TestPuedeInsistir:
         resultado = puede_insistir("t1", hoy=date(2026, 9, 1), ruta=ruta, ruta_feriados=ruta_feriados)
         assert resultado["puede"] is False
         assert resultado["n_aviso"] == 3
-        assert "gestion manual" in resultado["motivo"]
+        assert "no tiene audiencia agendada" in resultado["motivo"]
+
+    def test_tercer_aviso_con_rit_pero_sin_fecha_audiencia_reporta_causa_no_agendada(self, tmp_path):
+        ruta = tmp_path / "registro_seguimiento.json"
+        ruta_causas = tmp_path / "registro_causas.json"
+        ruta_feriados = _feriados_sin_feriados(tmp_path)
+        registrar_causa("O-1-2026", {}, ruta=ruta_causas)
+        registrar_aviso("t1", "documentos", "2026-08-19", rit="O-1-2026", ruta=ruta)
+        registrar_aviso("t1", "documentos", "2026-08-21", ruta=ruta)
+
+        resultado = puede_insistir(
+            "t1", hoy=date(2026, 9, 1), ruta=ruta, ruta_feriados=ruta_feriados, ruta_causas=ruta_causas
+        )
+        assert resultado["puede"] is False
+        assert "no tiene audiencia agendada" in resultado["motivo"]
+
+    def test_tier_lejano_repite_ciclo_4_y_2_dias_habiles_en_bucle(self, tmp_path):
+        ruta = tmp_path / "registro_seguimiento.json"
+        ruta_causas = tmp_path / "registro_causas.json"
+        ruta_feriados = _feriados_sin_feriados(tmp_path)
+        registrar_causa("O-1-2026", {"fecha_audiencia": "2026-12-01"}, ruta=ruta_causas)
+        kwargs = dict(ruta=ruta, ruta_feriados=ruta_feriados, ruta_causas=ruta_causas)
+
+        registrar_aviso("t1", "documentos", "2026-08-19", rit="O-1-2026", ruta=ruta)  # miércoles
+        registrar_aviso("t1", "documentos", "2026-08-21", ruta=ruta)  # viernes, 1er->2do: 2 hábiles
+
+        # 3er aviso exige 4 dias habiles desde el 2do (2026-08-21 -> 2026-08-27)
+        resultado = puede_insistir("t1", hoy=date(2026, 8, 26), **kwargs)
+        assert resultado["puede"] is False
+        assert resultado["n_aviso"] == 3
+        resultado = puede_insistir("t1", hoy=date(2026, 8, 27), **kwargs)
+        assert resultado["puede"] is True
+        assert resultado["n_aviso"] == 3
+        registrar_aviso("t1", "documentos", "2026-08-27", ruta=ruta)
+
+        # 4to aviso exige 2 dias habiles desde el 3ro (2026-08-27 -> 2026-08-31)
+        resultado = puede_insistir("t1", hoy=date(2026, 8, 28), **kwargs)
+        assert resultado["puede"] is False
+        assert resultado["n_aviso"] == 4
+        resultado = puede_insistir("t1", hoy=date(2026, 8, 31), **kwargs)
+        assert resultado["puede"] is True
+        assert resultado["n_aviso"] == 4
+        registrar_aviso("t1", "documentos", "2026-08-31", ruta=ruta)
+
+        # 5to aviso vuelve a exigir 4 dias habiles (confirma el bucle, no solo 2 pasos)
+        resultado = puede_insistir("t1", hoy=date(2026, 9, 3), **kwargs)
+        assert resultado["puede"] is False
+        assert resultado["n_aviso"] == 5
+        resultado = puede_insistir("t1", hoy=date(2026, 9, 4), **kwargs)
+        assert resultado["puede"] is True
+        assert resultado["n_aviso"] == 5
+
+    def test_tier_medio_exige_2_dias_habiles_entre_avisos(self, tmp_path):
+        ruta = tmp_path / "registro_seguimiento.json"
+        ruta_causas = tmp_path / "registro_causas.json"
+        ruta_feriados = _feriados_sin_feriados(tmp_path)
+        # A 10 y 9 dias corridos de las fechas "hoy" usadas abajo: tier medio (8-14 dias)
+        registrar_causa("O-1-2026", {"fecha_audiencia": "2026-09-03"}, ruta=ruta_causas)
+        registrar_aviso("t1", "documentos", "2026-08-19", rit="O-1-2026", ruta=ruta)
+        registrar_aviso("t1", "documentos", "2026-08-21", ruta=ruta)  # viernes
+        kwargs = dict(ruta=ruta, ruta_feriados=ruta_feriados, ruta_causas=ruta_causas)
+
+        # 3er aviso: solo 1 dia habil desde el 2do (2026-08-21 -> 2026-08-24, lunes);
+        # faltan 10 dias corridos para la audiencia (tier medio, exige 2): no alcanza
+        resultado = puede_insistir("t1", hoy=date(2026, 8, 24), **kwargs)
+        assert resultado["puede"] is False
+        assert "tier medio" in resultado["motivo"]
+
+        # 2 dias habiles (2026-08-21 -> 2026-08-25, martes); faltan 9 dias corridos
+        # (tier medio sigue): si alcanza
+        resultado = puede_insistir("t1", hoy=date(2026, 8, 25), **kwargs)
+        assert resultado["puede"] is True
+        assert "tier medio" in resultado["motivo"]
+
+    def test_tier_cercano_exige_1_dia_habil_entre_avisos(self, tmp_path):
+        ruta = tmp_path / "registro_seguimiento.json"
+        ruta_causas = tmp_path / "registro_causas.json"
+        ruta_feriados = _feriados_sin_feriados(tmp_path)
+        # 2026-08-21 (viernes) + 5 dias corridos = 2026-08-26: tier cercano (<=7 dias)
+        registrar_causa("O-1-2026", {"fecha_audiencia": "2026-08-26"}, ruta=ruta_causas)
+        registrar_aviso("t1", "documentos", "2026-08-19", rit="O-1-2026", ruta=ruta)
+        registrar_aviso("t1", "documentos", "2026-08-21", ruta=ruta)  # viernes
+        kwargs = dict(ruta=ruta, ruta_feriados=ruta_feriados, ruta_causas=ruta_causas)
+
+        # mismo dia habil que el 2do aviso: no alcanza
+        resultado = puede_insistir("t1", hoy=date(2026, 8, 21), **kwargs)
+        assert resultado["puede"] is False
+        assert "tier cercano" in resultado["motivo"]
+
+        # 1 dia habil despues (lunes 2026-08-24): alcanza
+        resultado = puede_insistir("t1", hoy=date(2026, 8, 24), **kwargs)
+        assert resultado["puede"] is True
+        assert "tier cercano" in resultado["motivo"]
 
 
 class TestEscrituraConcurrente:
