@@ -63,6 +63,51 @@ def _detectar_acuerdo_y_pago(mensajes_hilos: list[dict]) -> dict:
     return reasoning.preguntar(tarea, contexto, SCHEMA_ACUERDO)
 
 
+def _accion_error_deteccion(rit: str, error: str) -> dict:
+    return {
+        "rit": rit,
+        "que": f"No se pudo evaluar acuerdo/pago automáticamente: {error}",
+        "urgencia": "media",
+    }
+
+
+def _evaluar_acuerdo_y_pago(
+    rit: str, mensajes_hilos: list[dict], ruta_registro_causas: Path, acciones: list[dict]
+) -> None:
+    """Corre la detección de acuerdo/pago para una causa (si hay hilos
+    nuevos) y aplica la transición de estado correspondiente, agregando a
+    `acciones` (mutado in place) el aviso para Nico — de éxito o de error.
+    No hace nada si `mensajes_hilos` está vacío, ni si la causa ya está en el
+    estado terminal `pago_recibido_pendiente_confirmar`. Un valor de
+    `estado_acuerdo` desconocido se trata igual que 'sin acuerdo todavía'."""
+    if not mensajes_hilos:
+        return
+
+    causa_registrada = registro_mod.obtener_causa(rit, ruta=ruta_registro_causas) or {}
+    estado_actual = causa_registrada.get("estado_acuerdo")
+
+    if estado_actual not in ("pendiente_pago", "pago_recibido_pendiente_confirmar"):
+        deteccion = _detectar_acuerdo_y_pago(mensajes_hilos)
+        if deteccion.get("error"):
+            acciones.append(_accion_error_deteccion(rit, deteccion["error"]))
+        elif deteccion.get("acuerdo_cerrado"):
+            registro_mod.registrar_causa(rit, {"estado_acuerdo": "pendiente_pago"}, ruta=ruta_registro_causas)
+            bitacora_mod.registrar("Acuerdo alcanzado, pendiente de pago", rit=rit)
+            acciones.append({"rit": rit, "que": "Acuerdo alcanzado, pendiente de pago", "urgencia": "alta"})
+    elif estado_actual == "pendiente_pago":
+        deteccion = _detectar_acuerdo_y_pago(mensajes_hilos)
+        if deteccion.get("error"):
+            acciones.append(_accion_error_deteccion(rit, deteccion["error"]))
+        elif deteccion.get("pago_confirmado"):
+            registro_mod.registrar_causa(
+                rit, {"estado_acuerdo": "pago_recibido_pendiente_confirmar"}, ruta=ruta_registro_causas
+            )
+            bitacora_mod.registrar(
+                "Comprobante de pago recibido, pendiente que Nico confirme el cierre", rit=rit
+            )
+            acciones.append({"rit": rit, "que": "Pago recibido, pendiente confirmar cierre", "urgencia": "alta"})
+
+
 def correr(
     contexto_corrida: dict,
     *,
@@ -98,39 +143,7 @@ def correr(
             for mensaje in mapa_hilos.get("hilos", {}).get(thread_id, [])
         ]
 
-        if mensajes_hilos:
-            causa_registrada = registro_mod.obtener_causa(rit, ruta=ruta_registro_causas) or {}
-            estado_actual = causa_registrada.get("estado_acuerdo")
-            if estado_actual not in ("pendiente_pago", "pago_recibido_pendiente_confirmar"):
-                deteccion = _detectar_acuerdo_y_pago(mensajes_hilos)
-                if deteccion.get("error"):
-                    acciones.append({
-                        "rit": rit,
-                        "que": f"No se pudo evaluar acuerdo/pago automáticamente: {deteccion['error']}",
-                        "urgencia": "media",
-                    })
-                elif deteccion.get("acuerdo_cerrado"):
-                    registro_mod.registrar_causa(rit, {"estado_acuerdo": "pendiente_pago"}, ruta=ruta_registro_causas)
-                    bitacora_mod.registrar("Acuerdo alcanzado, pendiente de pago", rit=rit)
-                    acciones.append({"rit": rit, "que": "Acuerdo alcanzado, pendiente de pago", "urgencia": "alta"})
-            elif estado_actual == "pendiente_pago":
-                deteccion = _detectar_acuerdo_y_pago(mensajes_hilos)
-                if deteccion.get("error"):
-                    acciones.append({
-                        "rit": rit,
-                        "que": f"No se pudo evaluar acuerdo/pago automáticamente: {deteccion['error']}",
-                        "urgencia": "media",
-                    })
-                elif deteccion.get("pago_confirmado"):
-                    registro_mod.registrar_causa(
-                        rit, {"estado_acuerdo": "pago_recibido_pendiente_confirmar"}, ruta=ruta_registro_causas
-                    )
-                    bitacora_mod.registrar(
-                        "Comprobante de pago recibido, pendiente que Nico confirme el cierre", rit=rit
-                    )
-                    acciones.append({
-                        "rit": rit, "que": "Pago recibido, pendiente confirmar cierre", "urgencia": "alta",
-                    })
+        _evaluar_acuerdo_y_pago(rit, mensajes_hilos, ruta_registro_causas, acciones)
 
         tipo_audiencia = mapa_audiencias.get("rit_a_audiencia", {}).get(rit, {}).get("tipo")
         carpeta_causa = Path(causa["carpeta"])
