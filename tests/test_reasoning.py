@@ -1,4 +1,5 @@
 import json
+import subprocess
 
 from gestion_causas.reasoning import preguntar
 
@@ -50,6 +51,15 @@ class TestPreguntar:
     def test_devuelve_error_si_falla_dos_veces(self):
         def ejecutar_falso(prompt):
             return "esto tampoco es JSON"
+
+        resultado = preguntar("tarea", {}, SCHEMA_SIMPLE, ejecutar=ejecutar_falso)
+
+        assert "error" in resultado
+        assert isinstance(resultado["error"], str)
+
+    def test_devuelve_error_en_vez_de_propagar_si_ejecutar_lanza_excepcion(self):
+        def ejecutar_falso(prompt):
+            raise subprocess.TimeoutExpired(cmd="claude", timeout=120)
 
         resultado = preguntar("tarea", {}, SCHEMA_SIMPLE, ejecutar=ejecutar_falso)
 
