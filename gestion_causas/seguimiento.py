@@ -245,6 +245,26 @@ def hilo_es_reporte_consolidado(mensajes: list) -> bool:
     return any(es_reporte_consolidado(m.get("subject", "")) for m in mensajes)
 
 
+# Dominios desde los que RR.HH./legal de las 6 empresas manda documentos de
+# prueba reales (contrato, finiquito, EERR, comprobante de pago) en el goteo
+# — ver subagentes/goteo.md, nota "Filtro de remitente confiable" para el
+# historial de cada dominio agregado.
+DOMINIOS_CONFIABLES = {
+    "unimarc.cl", "super10.cl", "alvi.cl", "sb.cl",
+    "mayorista10.cl", "smu.cl", "divisionlogistica.cl",
+}
+
+
+def es_remitente_confiable(remitente: str) -> bool:
+    """True si la dirección de `remitente` (puede venir como 'Nombre <mail>'
+    o solo 'mail') termina en uno de `DOMINIOS_CONFIABLES`."""
+    direccion = extraer_direccion(remitente)
+    if "@" not in direccion:
+        return False
+    dominio = direccion.rsplit("@", 1)[1].lower()
+    return dominio in DOMINIOS_CONFIABLES
+
+
 def agrupar_causas_para_barrido(causas: list, hoy: date | None = None) -> dict:
     """Separa las causas activas (ver registro.causas_para_goteo) en los dos
     grupos del barrido combinado de goteo.md paso 2b:

@@ -274,3 +274,24 @@ class TestClasificarRitsDeHilo:
             _mensaje("b@sb.cl", "2026-08-15", subject="RV: Causa laboral Soto con Alvi M-1-2026"),
         ]
         assert seguimiento.clasificar_rits_de_hilo(["M-1-2026"], mensajes) == ["M-1-2026"]
+
+
+class TestEsRemitenteConfiable:
+    def test_acepta_dominios_confiables(self):
+        assert seguimiento.es_remitente_confiable("Daniela Soto <sorostica@unimarc.cl>")
+        assert seguimiento.es_remitente_confiable("nombre@super10.cl")
+        assert seguimiento.es_remitente_confiable("nombre@alvi.cl")
+        assert seguimiento.es_remitente_confiable("nombre@sb.cl")
+        assert seguimiento.es_remitente_confiable("nombre@mayorista10.cl")
+        assert seguimiento.es_remitente_confiable("nombre@smu.cl")
+        assert seguimiento.es_remitente_confiable("nombre@divisionlogistica.cl")
+
+    def test_rechaza_dominio_no_confiable(self):
+        assert not seguimiento.es_remitente_confiable("Nico Munoz <nmunoz@gomezyriesco.cl>")
+        assert not seguimiento.es_remitente_confiable("alguien@gmail.com")
+
+    def test_ignora_mayusculas(self):
+        assert seguimiento.es_remitente_confiable("Nombre <NOMBRE@SB.CL>")
+
+    def test_remitente_vacio_no_es_confiable(self):
+        assert not seguimiento.es_remitente_confiable("")
