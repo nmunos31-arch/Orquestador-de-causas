@@ -238,3 +238,37 @@ class TestDeteccionDeAcuerdoYPago:
             "que": "No se pudo evaluar acuerdo/pago automáticamente: Claude no devolvió JSON válido",
             "urgencia": "media",
         }]
+
+
+class TestDeteccionDeEerr:
+    def test_registra_eerr_cuando_el_nombre_del_adjunto_calza_y_hay_ceco_y_fecha_despido(self, tmp_path, monkeypatch):
+        carpeta_causa = tmp_path / "Perez con Alvi"
+        _registrar_causa_activa(
+            tmp_path, carpeta=str(carpeta_causa), ceco="1234", fecha_despido="2026-01-15",
+        )
+        ruta_ceco = tmp_path / "registro_ceco.json"
+
+        ruta_mapa = tmp_path / "mapa_hilos.json"
+        ruta_mapa.write_text(json.dumps({
+            "rit_a_hilos": {"M-1-2026": ["thread-1"]},
+            "hilos": {"thread-1": [{
+                "id": "msg-1", "thread_id": "thread-1", "sender": "nombre@sb.cl",
+                "subject": "EERR", "cuerpo_texto": "",
+                "adjuntos": [{"filename": "EERR 2026.pdf", "attachment_id": "att-1", "mime_type": "application/pdf", "size": 900}],
+            }]},
+        }), encoding="utf-8")
+
+        monkeypatch.setattr(goteo.gmail_client, "descargar_adjunto", lambda message_id, attachment_id: b"contenido")
+        monkeypatch.setattr(goteo, "_detectar_acuerdo_y_pago", lambda mensajes: {"acuerdo_cerrado": False, "pago_confirmado": False, "justificacion": ""})
+
+        contexto = {
+            "fecha_hoy": "2026-09-15",
+            "mapa_hilos": {"ruta": str(ruta_mapa)},
+            "mapa_audiencias": {"ruta": str(tmp_path / "no_existe.json")},
+        }
+
+        resumen = _correr_goteo(contexto, tmp_path, ruta_registro_ceco=ruta_ceco)
+
+        reusable = registro_mod.buscar_eerr_reusable("1234", "2026-01-15", ruta=ruta_ceco)
+        assert reusable == {"fecha_despido": "2026-01-15", "rit_causa": "M-1-2026"}
+        assert any(m["etiqueta"] == "Identificados como EERR" and m["valor"] == 1 for m in resumen["metricas"])

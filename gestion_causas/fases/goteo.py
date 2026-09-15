@@ -167,6 +167,15 @@ def correr(
                 rit=rit,
             )
 
+        for adjunto_guardado in guardados:
+            if not carpetas_mod.parece_eerr(adjunto_guardado["filename"]):
+                continue
+            ceco = causa.get("ceco")
+            fecha_despido = causa.get("fecha_despido")
+            if ceco and fecha_despido:
+                registro_mod.registrar_eerr_recibido(ceco, fecha_despido, rit, ruta=ruta_registro_ceco)
+                identificados_eerr += 1
+
         # Paso 3h: siempre se guarda la fecha de revisión, haya o no
         # novedades — permite que la próxima corrida acote el barrido.
         registro_mod.registrar_causa(
