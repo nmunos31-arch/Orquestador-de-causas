@@ -210,3 +210,15 @@ def listar_archivos_carpeta(carpeta: Path) -> list:
     if not carpeta.exists():
         return []
     return sorted(f.name for f in carpeta.iterdir() if f.is_file())
+
+
+def carpeta_destino_por_tipo_audiencia(carpeta_causa: Path, tipo: str | None) -> Path:
+    """Carpeta donde guardar documentos del goteo según el tipo de la próxima
+    audiencia (ver subagentes/goteo.md paso 3a): si es "Juicio", los
+    documentos van en la subcarpeta "Exhibición de documentos" (no se crea acá
+    — `guardar_adjunto` la crea sola si no existe). Cualquier otro tipo
+    (Única, Preparatoria, Ambiguo o None) usa la carpeta de la causa
+    directamente."""
+    if tipo == "Juicio":
+        return carpeta_causa / "Exhibición de documentos"
+    return carpeta_causa

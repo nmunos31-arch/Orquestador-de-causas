@@ -215,3 +215,26 @@ class TestListarArchivosCarpeta:
 
     def test_carpeta_inexistente_devuelve_lista_vacia(self, tmp_path):
         assert listar_archivos_carpeta(tmp_path / "no_existe") == []
+
+
+from gestion_causas.carpetas import carpeta_destino_por_tipo_audiencia
+
+
+class TestCarpetaDestinoPorTipoAudiencia:
+    def test_juicio_usa_subcarpeta_exhibicion(self, tmp_path):
+        carpeta_causa = tmp_path / "Perez con Alvi"
+        destino = carpeta_destino_por_tipo_audiencia(carpeta_causa, "Juicio")
+        assert destino == carpeta_causa / "Exhibición de documentos"
+
+    def test_unica_usa_carpeta_normal(self, tmp_path):
+        carpeta_causa = tmp_path / "Perez con Alvi"
+        assert carpeta_destino_por_tipo_audiencia(carpeta_causa, "Unica") == carpeta_causa
+
+    def test_preparatoria_usa_carpeta_normal(self, tmp_path):
+        carpeta_causa = tmp_path / "Perez con Alvi"
+        assert carpeta_destino_por_tipo_audiencia(carpeta_causa, "Preparatoria") == carpeta_causa
+
+    def test_ambiguo_o_sin_tipo_usa_carpeta_normal(self, tmp_path):
+        carpeta_causa = tmp_path / "Perez con Alvi"
+        assert carpeta_destino_por_tipo_audiencia(carpeta_causa, "Ambiguo") == carpeta_causa
+        assert carpeta_destino_por_tipo_audiencia(carpeta_causa, None) == carpeta_causa
