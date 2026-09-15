@@ -42,6 +42,7 @@ def correr(
         }
 
     mapa_hilos = _leer_mapa_hilos(contexto_corrida)
+    # mapa_audiencias se usa en un task posterior de este plan (carpeta destino por tipo de audiencia).
     mapa_audiencias = _leer_mapa_audiencias(contexto_corrida)
 
     items: list[dict] = []
@@ -53,6 +54,7 @@ def correr(
     for causa in causas:
         rit = causa["rit"]
         hilos_rit = mapa_hilos.get("rit_a_hilos", {}).get(rit, [])
+        # mensajes_hilos se usa en tasks posteriores de este plan (guardar adjuntos, detectar acuerdo/pago).
         mensajes_hilos = [
             mensaje
             for thread_id in hilos_rit
