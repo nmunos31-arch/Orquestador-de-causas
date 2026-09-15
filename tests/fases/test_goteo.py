@@ -154,3 +154,87 @@ class TestGuardaAdjuntosDeRemitenteConfiable:
 
         assert not (carpeta_causa / "invite.ics").exists()
         assert resumen["items"] == []
+
+
+class TestDeteccionDeAcuerdoYPago:
+    def test_registra_estado_acuerdo_pendiente_pago_cuando_claude_confirma_cierre(self, tmp_path, monkeypatch):
+        ruta_registro = _registrar_causa_activa(tmp_path, carpeta=str(tmp_path / "Perez con Alvi"))
+
+        ruta_mapa = tmp_path / "mapa_hilos.json"
+        ruta_mapa.write_text(json.dumps({
+            "rit_a_hilos": {"M-1-2026": ["thread-1"]},
+            "hilos": {
+                "thread-1": [{
+                    "id": "msg-1", "thread_id": "thread-1", "sender": "nmunoz@gomezyriesco.cl",
+                    "subject": "Re: Acuerdo", "cuerpo_texto": "Se aprobó el acuerdo por $500.000", "adjuntos": [],
+                }],
+            },
+        }), encoding="utf-8")
+
+        llamadas = []
+
+        def preguntar_falso(tarea, contexto, schema):
+            llamadas.append(contexto)
+            return {"acuerdo_cerrado": True, "pago_confirmado": False, "justificacion": "Acta de conciliación aprobada"}
+
+        monkeypatch.setattr(goteo.reasoning, "preguntar", preguntar_falso)
+
+        contexto = {
+            "fecha_hoy": "2026-09-15",
+            "mapa_hilos": {"ruta": str(ruta_mapa)},
+            "mapa_audiencias": {"ruta": str(tmp_path / "no_existe.json")},
+        }
+
+        resumen = _correr_goteo(contexto, tmp_path)
+
+        entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
+        assert entrada["estado_acuerdo"] == "pendiente_pago"
+        assert len(llamadas) == 1
+        assert resumen["acciones"] == [{
+            "rit": "M-1-2026", "que": "Acuerdo alcanzado, pendiente de pago", "urgencia": "alta",
+        }]
+
+    def test_no_llama_a_claude_si_la_causa_no_tiene_hilos_nuevos(self, tmp_path, monkeypatch):
+        _registrar_causa_activa(tmp_path)
+        ruta_mapa = _mapa_hilos_vacio(tmp_path)
+
+        llamadas = []
+        monkeypatch.setattr(goteo.reasoning, "preguntar", lambda *a, **k: llamadas.append(1))
+
+        contexto = {
+            "fecha_hoy": "2026-09-15",
+            "mapa_hilos": {"ruta": str(ruta_mapa)},
+            "mapa_audiencias": {"ruta": str(tmp_path / "no_existe.json")},
+        }
+
+        _correr_goteo(contexto, tmp_path)
+
+        assert llamadas == []
+
+    def test_anota_accion_si_reasoning_devuelve_error(self, tmp_path, monkeypatch):
+        _registrar_causa_activa(tmp_path, carpeta=str(tmp_path / "Perez con Alvi"))
+
+        ruta_mapa = tmp_path / "mapa_hilos.json"
+        ruta_mapa.write_text(json.dumps({
+            "rit_a_hilos": {"M-1-2026": ["thread-1"]},
+            "hilos": {"thread-1": [{
+                "id": "msg-1", "thread_id": "thread-1", "sender": "nmunoz@gomezyriesco.cl",
+                "subject": "Re: Acuerdo", "cuerpo_texto": "algo", "adjuntos": [],
+            }]},
+        }), encoding="utf-8")
+
+        monkeypatch.setattr(goteo.reasoning, "preguntar", lambda *a, **k: {"error": "Claude no devolvió JSON válido"})
+
+        contexto = {
+            "fecha_hoy": "2026-09-15",
+            "mapa_hilos": {"ruta": str(ruta_mapa)},
+            "mapa_audiencias": {"ruta": str(tmp_path / "no_existe.json")},
+        }
+
+        resumen = _correr_goteo(contexto, tmp_path)
+
+        assert resumen["acciones"] == [{
+            "rit": "M-1-2026",
+            "que": "No se pudo evaluar acuerdo/pago automáticamente: Claude no devolvió JSON válido",
+            "urgencia": "media",
+        }]

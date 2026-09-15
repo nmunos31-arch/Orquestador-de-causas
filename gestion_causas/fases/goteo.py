@@ -23,11 +23,44 @@ from gestion_causas.seguimiento import es_remitente_confiable
 
 NOMBRES_ADJUNTO_EXCLUIDOS = {"invite.ics"}
 
+SCHEMA_ACUERDO = {
+    "type": "object",
+    "properties": {
+        "acuerdo_cerrado": {"type": "boolean"},
+        "pago_confirmado": {"type": "boolean"},
+        "justificacion": {"type": "string"},
+    },
+    "required": ["acuerdo_cerrado", "pago_confirmado", "justificacion"],
+}
+
 
 def _detectar_acuerdo_y_pago(mensajes_hilos: list[dict]) -> dict:
-    """Placeholder hasta el Task 7 — se reemplaza por la llamada real a
-    reasoning.preguntar."""
-    return {"acuerdo_cerrado": False, "pago_confirmado": False, "justificacion": ""}
+    """Le pregunta a Claude si el hilo confirma que se ALCANZÓ Y APROBÓ un
+    acuerdo (no alcanza con que el tribunal haya propuesto bases de
+    conciliación — ver memoria gestion_causas_bases_tribunal_no_es_acuerdo) y
+    si hay un comprobante de pago asociado."""
+    contexto = {
+        "mensajes": [
+            {
+                "remitente": m.get("sender", ""),
+                "asunto": m.get("subject", ""),
+                "cuerpo": m.get("cuerpo_texto", ""),
+            }
+            for m in mensajes_hilos
+        ]
+    }
+    tarea = (
+        "Estos son los mensajes de un hilo de correo sobre una causa laboral. "
+        "Decidí si el hilo confirma que se ALCANZÓ Y APROBÓ un acuerdo "
+        "(avenimiento/conciliación) entre las partes. Que el tribunal haya "
+        "propuesto bases de conciliación en una audiencia NO cuenta como "
+        "acuerdo alcanzado — hace falta confirmación de que las partes lo "
+        "cerraron (ej. 'acta de conciliación', 'avenimiento aprobado', 'se "
+        "aprobó el acuerdo por $X', 'conciliación total'). Además decidí si "
+        "alguno de los mensajes trae un comprobante de pago o transferencia "
+        "asociado a ese acuerdo."
+    )
+    return reasoning.preguntar(tarea, contexto, SCHEMA_ACUERDO)
 
 
 def correr(
@@ -64,6 +97,40 @@ def correr(
             for thread_id in hilos_rit
             for mensaje in mapa_hilos.get("hilos", {}).get(thread_id, [])
         ]
+
+        if mensajes_hilos:
+            causa_registrada = registro_mod.obtener_causa(rit, ruta=ruta_registro_causas) or {}
+            estado_actual = causa_registrada.get("estado_acuerdo")
+            if estado_actual not in ("pendiente_pago", "pago_recibido_pendiente_confirmar"):
+                deteccion = _detectar_acuerdo_y_pago(mensajes_hilos)
+                if deteccion.get("error"):
+                    acciones.append({
+                        "rit": rit,
+                        "que": f"No se pudo evaluar acuerdo/pago automáticamente: {deteccion['error']}",
+                        "urgencia": "media",
+                    })
+                elif deteccion.get("acuerdo_cerrado"):
+                    registro_mod.registrar_causa(rit, {"estado_acuerdo": "pendiente_pago"}, ruta=ruta_registro_causas)
+                    bitacora_mod.registrar("Acuerdo alcanzado, pendiente de pago", rit=rit)
+                    acciones.append({"rit": rit, "que": "Acuerdo alcanzado, pendiente de pago", "urgencia": "alta"})
+            elif estado_actual == "pendiente_pago":
+                deteccion = _detectar_acuerdo_y_pago(mensajes_hilos)
+                if deteccion.get("error"):
+                    acciones.append({
+                        "rit": rit,
+                        "que": f"No se pudo evaluar acuerdo/pago automáticamente: {deteccion['error']}",
+                        "urgencia": "media",
+                    })
+                elif deteccion.get("pago_confirmado"):
+                    registro_mod.registrar_causa(
+                        rit, {"estado_acuerdo": "pago_recibido_pendiente_confirmar"}, ruta=ruta_registro_causas
+                    )
+                    bitacora_mod.registrar(
+                        "Comprobante de pago recibido, pendiente que Nico confirme el cierre", rit=rit
+                    )
+                    acciones.append({
+                        "rit": rit, "que": "Pago recibido, pendiente confirmar cierre", "urgencia": "alta",
+                    })
 
         tipo_audiencia = mapa_audiencias.get("rit_a_audiencia", {}).get(rit, {}).get("tipo")
         carpeta_causa = Path(causa["carpeta"])
