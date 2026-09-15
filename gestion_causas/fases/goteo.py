@@ -24,6 +24,12 @@ from gestion_causas.seguimiento import es_remitente_confiable
 NOMBRES_ADJUNTO_EXCLUIDOS = {"invite.ics"}
 
 
+def _detectar_acuerdo_y_pago(mensajes_hilos: list[dict]) -> dict:
+    """Placeholder hasta el Task 7 — se reemplaza por la llamada real a
+    reasoning.preguntar."""
+    return {"acuerdo_cerrado": False, "pago_confirmado": False, "justificacion": ""}
+
+
 def correr(
     contexto_corrida: dict,
     *,
@@ -42,7 +48,6 @@ def correr(
         }
 
     mapa_hilos = _leer_mapa_hilos(contexto_corrida)
-    # mapa_audiencias se usa en un task posterior de este plan (carpeta destino por tipo de audiencia).
     mapa_audiencias = _leer_mapa_audiencias(contexto_corrida)
 
     items: list[dict] = []
@@ -54,12 +59,33 @@ def correr(
     for causa in causas:
         rit = causa["rit"]
         hilos_rit = mapa_hilos.get("rit_a_hilos", {}).get(rit, [])
-        # mensajes_hilos se usa en tasks posteriores de este plan (guardar adjuntos, detectar acuerdo/pago).
         mensajes_hilos = [
             mensaje
             for thread_id in hilos_rit
             for mensaje in mapa_hilos.get("hilos", {}).get(thread_id, [])
         ]
+
+        tipo_audiencia = mapa_audiencias.get("rit_a_audiencia", {}).get(rit, {}).get("tipo")
+        carpeta_causa = Path(causa["carpeta"])
+        carpeta_destino = carpeta_destino_por_tipo_audiencia(carpeta_causa, tipo_audiencia)
+
+        guardados = _guardar_adjuntos_confiables(mensajes_hilos, carpeta_destino)
+        if guardados:
+            con_documentos_nuevos += 1
+            item = {
+                "rit": rit,
+                "titulo": f"{causa.get('demandante', '')} con {causa.get('empresa', '')}",
+                "detalle": f"{len(guardados)} documentos nuevos: {', '.join(g['filename'] for g in guardados)}",
+            }
+            if tipo_audiencia == "Juicio":
+                item["etiqueta"] = "Exhibición de documentos"
+            items.append(item)
+            bitacora_mod.registrar(
+                f"Goteo: se guardaron {len(guardados)} documentos nuevos "
+                f"({', '.join(g['filename'] for g in guardados)})"
+                + (", en Exhibición de documentos por audiencia de juicio" if tipo_audiencia == "Juicio" else ""),
+                rit=rit,
+            )
 
         # Paso 3h: siempre se guarda la fecha de revisión, haya o no
         # novedades — permite que la próxima corrida acote el barrido.
@@ -80,6 +106,30 @@ def correr(
         "notas": notas,
     }
     return resumen
+
+
+def _guardar_adjuntos_confiables(mensajes_hilos: list[dict], carpeta_destino: Path) -> list[dict]:
+    """Guarda los adjuntos de `mensajes_hilos` que vengan de un remitente
+    confiable, salvo `invite.ics` (ver subagentes/goteo.md, "Filtro de
+    remitente confiable" y "Adjunto a excluir siempre"). `guardar_adjunto` ya
+    hace de-dupe por nombre y por tamaño de bytes, así que no hace falta
+    listar la carpeta antes. Devuelve la lista de adjuntos efectivamente
+    guardados (con su `filename` original)."""
+    guardados = []
+    for mensaje in mensajes_hilos:
+        if not es_remitente_confiable(mensaje.get("sender", "")):
+            continue
+        for adjunto in mensaje.get("adjuntos", []):
+            nombre = adjunto["filename"]
+            if nombre in NOMBRES_ADJUNTO_EXCLUIDOS:
+                continue
+            contenido = gmail_client.descargar_adjunto(mensaje["id"], adjunto["attachment_id"])
+            if carpetas_mod.es_adjunto_firma(nombre, len(contenido)):
+                continue
+            resultado = carpetas_mod.guardar_adjunto(carpeta_destino, nombre, contenido)
+            if resultado["guardado"]:
+                guardados.append(adjunto)
+    return guardados
 
 
 def _leer_mapa_hilos(contexto_corrida: dict) -> dict:

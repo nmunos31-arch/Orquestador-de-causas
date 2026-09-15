@@ -61,3 +61,96 @@ class TestCorrerCausaSinNovedades:
 
         assert resumen["items"] == []
         assert any(m["etiqueta"] == "Causas revisadas" and m["valor"] == 1 for m in resumen["metricas"])
+
+
+class TestGuardaAdjuntosDeRemitenteConfiable:
+    def test_guarda_adjunto_de_dominio_confiable_y_lo_reporta_en_items(self, tmp_path, monkeypatch):
+        carpeta_causa = tmp_path / "Perez con Alvi"
+        _registrar_causa_activa(tmp_path, carpeta=str(carpeta_causa))
+
+        ruta_mapa = tmp_path / "mapa_hilos.json"
+        ruta_mapa.write_text(json.dumps({
+            "rit_a_hilos": {"M-1-2026": ["thread-1"]},
+            "hilos": {
+                "thread-1": [{
+                    "id": "msg-1", "thread_id": "thread-1", "sender": "Daniela <sorostica@unimarc.cl>",
+                    "subject": "RV: Documentos", "cuerpo_texto": "Adjunto el contrato",
+                    "adjuntos": [{"filename": "contrato.pdf", "attachment_id": "att-1", "mime_type": "application/pdf", "size": 1000}],
+                }],
+            },
+        }), encoding="utf-8")
+
+        monkeypatch.setattr(goteo.gmail_client, "descargar_adjunto", lambda message_id, attachment_id: b"contenido falso")
+        monkeypatch.setattr(goteo, "_detectar_acuerdo_y_pago", lambda mensajes: {"acuerdo_cerrado": False, "pago_confirmado": False, "justificacion": ""})
+
+        contexto = {
+            "fecha_hoy": "2026-09-15",
+            "mapa_hilos": {"ruta": str(ruta_mapa)},
+            "mapa_audiencias": {"ruta": str(tmp_path / "no_existe.json")},
+        }
+
+        resumen = _correr_goteo(contexto, tmp_path)
+
+        assert (carpeta_causa / "contrato.pdf").exists()
+        assert resumen["items"] == [{
+            "rit": "M-1-2026", "titulo": "Perez con Alvi",
+            "detalle": "1 documentos nuevos: contrato.pdf",
+        }]
+
+    def test_ignora_adjunto_de_dominio_no_confiable(self, tmp_path, monkeypatch):
+        carpeta_causa = tmp_path / "Perez con Alvi"
+        _registrar_causa_activa(tmp_path, carpeta=str(carpeta_causa))
+
+        ruta_mapa = tmp_path / "mapa_hilos.json"
+        ruta_mapa.write_text(json.dumps({
+            "rit_a_hilos": {"M-1-2026": ["thread-1"]},
+            "hilos": {
+                "thread-1": [{
+                    "id": "msg-1", "thread_id": "thread-1", "sender": "nmunoz@gomezyriesco.cl",
+                    "subject": "Re: Documentos", "cuerpo_texto": "",
+                    "adjuntos": [{"filename": "borrador.docx", "attachment_id": "att-1", "mime_type": "application/msword", "size": 500}],
+                }],
+            },
+        }), encoding="utf-8")
+
+        monkeypatch.setattr(goteo, "_detectar_acuerdo_y_pago", lambda mensajes: {"acuerdo_cerrado": False, "pago_confirmado": False, "justificacion": ""})
+
+        contexto = {
+            "fecha_hoy": "2026-09-15",
+            "mapa_hilos": {"ruta": str(ruta_mapa)},
+            "mapa_audiencias": {"ruta": str(tmp_path / "no_existe.json")},
+        }
+
+        resumen = _correr_goteo(contexto, tmp_path)
+
+        assert not (carpeta_causa / "borrador.docx").exists()
+        assert resumen["items"] == []
+
+    def test_excluye_invite_ics_aunque_sea_dominio_confiable(self, tmp_path, monkeypatch):
+        carpeta_causa = tmp_path / "Perez con Alvi"
+        _registrar_causa_activa(tmp_path, carpeta=str(carpeta_causa))
+
+        ruta_mapa = tmp_path / "mapa_hilos.json"
+        ruta_mapa.write_text(json.dumps({
+            "rit_a_hilos": {"M-1-2026": ["thread-1"]},
+            "hilos": {
+                "thread-1": [{
+                    "id": "msg-1", "thread_id": "thread-1", "sender": "nombre@sb.cl",
+                    "subject": "Aceptado: Reunión preparatoria", "cuerpo_texto": "",
+                    "adjuntos": [{"filename": "invite.ics", "attachment_id": "att-1", "mime_type": "text/calendar", "size": 300}],
+                }],
+            },
+        }), encoding="utf-8")
+
+        monkeypatch.setattr(goteo, "_detectar_acuerdo_y_pago", lambda mensajes: {"acuerdo_cerrado": False, "pago_confirmado": False, "justificacion": ""})
+
+        contexto = {
+            "fecha_hoy": "2026-09-15",
+            "mapa_hilos": {"ruta": str(ruta_mapa)},
+            "mapa_audiencias": {"ruta": str(tmp_path / "no_existe.json")},
+        }
+
+        resumen = _correr_goteo(contexto, tmp_path)
+
+        assert not (carpeta_causa / "invite.ics").exists()
+        assert resumen["items"] == []
