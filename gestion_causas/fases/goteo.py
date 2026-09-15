@@ -30,7 +30,7 @@ def correr(
     ruta_registro_causas: Path = registro_mod.RUTA_REGISTRO_CAUSAS,
     ruta_registro_ceco: Path = registro_mod.RUTA_REGISTRO_CECO,
 ) -> dict:
-    causas = registro_mod.causas_para_goteo(ruta=ruta_registro_causas)
+    causas = registro_mod.causas_para_goteo(hoy=contexto_corrida["fecha_hoy"], ruta=ruta_registro_causas)
     if not causas:
         return {
             "fase": "goteo",
