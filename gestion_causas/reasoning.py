@@ -25,9 +25,11 @@ def preguntar(tarea: str, contexto: dict, schema: dict, *, ejecutar=None) -> dic
     y seguir con la siguiente causa).
 
     `ejecutar` es inyectable para tests: recibe el prompt armado y devuelve el
-    texto de salida de Claude. Por defecto corre `claude -p "<prompt>"`. Una
-    excepción de `ejecutar` (timeout, binario no encontrado, exit code
-    distinto de cero, etc.) nunca se propaga fuera de `preguntar`.
+    texto de salida de Claude. Por defecto corre `claude -p`, pasando el
+    prompt por stdin (no como argumento de línea de comandos, ver
+    `_ejecutar_claude`). Una excepción de `ejecutar` (timeout, binario no
+    encontrado, exit code distinto de cero, etc.) nunca se propaga fuera de
+    `preguntar`.
     """
     ejecutar = ejecutar or _ejecutar_claude
 
