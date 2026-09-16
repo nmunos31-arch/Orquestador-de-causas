@@ -68,3 +68,52 @@ class TestOrigenDeLaCadena:
 
         assert llamadas == []
         assert resumen["items"] == []
+
+
+CUERPO_CUADRO_ALVI = """\
+Rit: M-1-2026
+Tribunal: Juzgado de Letras del Trabajo de Temuco
+Demandante: JUAN PEREZ
+Demandada: Alvi
+Cuantía: $500.000
+Materia: Despido injustificado
+"""
+
+
+class TestFiltroDeEmpresaYDuplicados:
+    def test_empresa_no_valida_no_genera_item(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
+        monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: [{
+            "id": "msg-1", "thread_id": "thread-1", "sender": "persona@smu.cl", "subject": "DEMANDA",
+            "cuerpo_texto": CUERPO_CUADRO_ALVI.replace("Alvi", "Falabella"), "adjuntos": [],
+        }])
+
+        resumen = smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=tmp_path / "registro_causas.json")
+
+        assert resumen["items"] == []
+
+    def test_cuadro_incompleto_no_genera_item_y_lo_anota(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
+        monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: [{
+            "id": "msg-1", "thread_id": "thread-1", "sender": "persona@smu.cl", "subject": "DEMANDA",
+            "cuerpo_texto": "Demandada: Alvi\n", "adjuntos": [],
+        }])
+
+        resumen = smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=tmp_path / "registro_causas.json")
+
+        assert resumen["items"] == []
+        assert any("cuadro" in n["detalle"].lower() for n in resumen["notas"])
+
+    def test_rit_ya_registrado_no_genera_item_nuevo(self, tmp_path, monkeypatch):
+        ruta_registro = tmp_path / "registro_causas.json"
+        registro_mod.registrar_causa("M-1-2026", {"empresa": "Alvi"}, ruta=ruta_registro)
+
+        monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
+        monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: [{
+            "id": "msg-1", "thread_id": "thread-1", "sender": "persona@smu.cl", "subject": "DEMANDA",
+            "cuerpo_texto": CUERPO_CUADRO_ALVI, "adjuntos": [],
+        }])
+
+        resumen = smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=ruta_registro)
+
+        assert resumen["items"] == []

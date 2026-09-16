@@ -71,6 +71,22 @@ def correr(
         if not origen["valida"]:
             continue
 
+        campos = extraer_campos_cuadro(primer_mensaje.get("cuerpo_texto", ""))
+        if not cuadro_completo(campos):
+            notas.append({
+                "tipo": "cuadro_incompleto",
+                "detalle": f"Hilo {thread_id}: cuadro incompleto o mal formado (falta Rit, Tribunal o Cuantía) — revisar a mano.",
+            })
+            continue
+
+        empresa = normalizar_empresa(campos.get("demandada", ""))
+        if empresa is None:
+            continue
+
+        rit = campos["rit"]
+        if registro_mod.causa_ya_registrada(rit, ruta=ruta_registro_causas):
+            continue
+
     resumen = {
         "fase": "smu",
         "titular": _armar_titular(causas_nuevas),
