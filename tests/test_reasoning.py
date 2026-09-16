@@ -86,7 +86,7 @@ class TestEjecutarClaudeResuelveRutaCompleta:
             stderr = ""
 
         def run_falso(args, **kwargs):
-            llamadas_run.append(args)
+            llamadas_run.append((args, kwargs))
             return ResultadoFalso()
 
         monkeypatch.setattr(reasoning_mod.shutil, "which", which_falso)
@@ -96,7 +96,9 @@ class TestEjecutarClaudeResuelveRutaCompleta:
 
         assert resultado == "ok"
         assert llamadas_which == ["claude"]
-        assert llamadas_run[0][0] == "C:\\ruta\\falsa\\claude.CMD"
+        args, kwargs = llamadas_run[0]
+        assert args == ["C:\\ruta\\falsa\\claude.CMD", "-p"]
+        assert kwargs.get("input") == "un prompt cualquiera"
 
     def test_lanza_runtimeerror_si_claude_no_esta_en_el_path(self, monkeypatch):
         from gestion_causas import reasoning as reasoning_mod
@@ -105,3 +107,32 @@ class TestEjecutarClaudeResuelveRutaCompleta:
 
         with pytest.raises(RuntimeError):
             reasoning_mod._ejecutar_claude("un prompt cualquiera")
+
+
+class TestEjecutarClaudePasaPromptPorStdin:
+    def test_no_pasa_el_prompt_como_argumento_de_linea_de_comandos(self, monkeypatch):
+        from gestion_causas import reasoning as reasoning_mod
+
+        prompt_largo = "x" * 100_000  # simula un contexto grande (ej. un hilo de correo largo)
+        llamadas = []
+
+        class ResultadoFalso:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        def which_falso(nombre):
+            return "C:\\ruta\\falsa\\claude.CMD"
+
+        def run_falso(args, **kwargs):
+            llamadas.append((args, kwargs))
+            return ResultadoFalso()
+
+        monkeypatch.setattr(reasoning_mod.shutil, "which", which_falso)
+        monkeypatch.setattr(reasoning_mod.subprocess, "run", run_falso)
+
+        reasoning_mod._ejecutar_claude(prompt_largo)
+
+        args, kwargs = llamadas[0]
+        assert prompt_largo not in args
+        assert kwargs.get("input") == prompt_largo

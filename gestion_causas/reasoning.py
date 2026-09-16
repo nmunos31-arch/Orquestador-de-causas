@@ -88,16 +88,25 @@ def _parsear_json(texto: str) -> dict | None:
 
 
 def _ejecutar_claude(prompt: str) -> str:
-    """Corre `claude -p "<prompt>"`. En Windows, `claude` es un shim `.CMD` de
-    npm que `subprocess.run` no encuentra si se le pasa el nombre desnudo (sin
-    pasar por una shell) — hay que resolver la ruta completa con
-    `shutil.which` primero (confirmado en una corrida real: sin esto, todas
-    las llamadas fallaban con `FileNotFoundError: [WinError 2]`)."""
+    """Corre `claude -p`, pasando el prompt por stdin (no como argumento de
+    línea de comandos) — en Windows, un prompt largo (el contexto de una
+    causa con muchos correos puede ser de decenas de miles de caracteres)
+    excede el límite de longitud de línea de comandos del sistema operativo
+    si se pasa como argv, y falla con `WinError 206` / "línea de comandos
+    demasiado larga" (confirmado en una corrida real). Por stdin no hay ese
+    límite.
+
+    En Windows, `claude` es un shim `.CMD` de npm que `subprocess.run` no
+    encuentra si se le pasa el nombre desnudo (sin pasar por una shell) —
+    hay que resolver la ruta completa con `shutil.which` primero (también
+    confirmado en una corrida real: sin esto, todas las llamadas fallaban
+    con `FileNotFoundError: [WinError 2]`)."""
     ejecutable = shutil.which("claude")
     if ejecutable is None:
         raise RuntimeError("No se encontró el ejecutable 'claude' en el PATH.")
     resultado = subprocess.run(
-        [ejecutable, "-p", prompt],
+        [ejecutable, "-p"],
+        input=prompt,
         capture_output=True, text=True, timeout=TIMEOUT_SEGUNDOS, check=False,
     )
     if resultado.returncode != 0:
