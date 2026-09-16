@@ -6,13 +6,15 @@ from gestion_causas import orquestador
 
 
 class TestCorrerOrquestador:
-    def test_corre_goteo_y_devuelve_su_resumen(self, tmp_path):
+    def test_corre_goteo_y_devuelve_su_resumen(self, tmp_path, monkeypatch):
         ruta_contexto = tmp_path / "_contexto_corrida.json"
         ruta_contexto.write_text(json.dumps({
             "fecha_hoy": "2026-09-15",
             "mapa_hilos": {"ruta": str(tmp_path / "no_existe.json")},
             "mapa_audiencias": {"ruta": str(tmp_path / "no_existe.json")},
         }), encoding="utf-8")
+
+        monkeypatch.setattr(orquestador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
 
         resultado = orquestador.correr(
             ruta_contexto=ruta_contexto,
@@ -31,6 +33,7 @@ class TestCorrerOrquestador:
             raise RuntimeError("boom")
 
         monkeypatch.setattr(orquestador.fases_goteo, "correr", goteo_falla)
+        monkeypatch.setattr(orquestador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
 
         resultado = orquestador.correr(
             ruta_contexto=ruta_contexto,
