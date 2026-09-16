@@ -145,36 +145,46 @@ def correr(
 
         _evaluar_acuerdo_y_pago(rit, mensajes_hilos, ruta_registro_causas, acciones)
 
-        tipo_audiencia = mapa_audiencias.get("rit_a_audiencia", {}).get(rit, {}).get("tipo")
-        carpeta_causa = Path(causa["carpeta"])
-        carpeta_destino = carpeta_destino_por_tipo_audiencia(carpeta_causa, tipo_audiencia)
+        carpeta = causa.get("carpeta")
+        if not carpeta:
+            notas.append({
+                "tipo": "sin_carpeta",
+                "detalle": (
+                    f"{rit}: la causa todavía no tiene carpeta asignada (sin demanda "
+                    "encontrada aún) — se salteó la revisión de documentos nuevos."
+                ),
+            })
+        else:
+            tipo_audiencia = mapa_audiencias.get("rit_a_audiencia", {}).get(rit, {}).get("tipo")
+            carpeta_causa = Path(carpeta)
+            carpeta_destino = carpeta_destino_por_tipo_audiencia(carpeta_causa, tipo_audiencia)
 
-        guardados = _guardar_adjuntos_confiables(mensajes_hilos, carpeta_destino)
-        if guardados:
-            con_documentos_nuevos += 1
-            item = {
-                "rit": rit,
-                "titulo": f"{causa.get('demandante', '')} con {causa.get('empresa', '')}",
-                "detalle": f"{len(guardados)} documentos nuevos: {', '.join(g['filename'] for g in guardados)}",
-            }
-            if tipo_audiencia == "Juicio":
-                item["etiqueta"] = "Exhibición de documentos"
-            items.append(item)
-            bitacora_mod.registrar(
-                f"Goteo: se guardaron {len(guardados)} documentos nuevos "
-                f"({', '.join(g['filename'] for g in guardados)})"
-                + (", en Exhibición de documentos por audiencia de juicio" if tipo_audiencia == "Juicio" else ""),
-                rit=rit,
-            )
+            guardados = _guardar_adjuntos_confiables(mensajes_hilos, carpeta_destino)
+            if guardados:
+                con_documentos_nuevos += 1
+                item = {
+                    "rit": rit,
+                    "titulo": f"{causa.get('demandante', '')} con {causa.get('empresa', '')}",
+                    "detalle": f"{len(guardados)} documentos nuevos: {', '.join(g['filename'] for g in guardados)}",
+                }
+                if tipo_audiencia == "Juicio":
+                    item["etiqueta"] = "Exhibición de documentos"
+                items.append(item)
+                bitacora_mod.registrar(
+                    f"Goteo: se guardaron {len(guardados)} documentos nuevos "
+                    f"({', '.join(g['filename'] for g in guardados)})"
+                    + (", en Exhibición de documentos por audiencia de juicio" if tipo_audiencia == "Juicio" else ""),
+                    rit=rit,
+                )
 
-        for adjunto_guardado in guardados:
-            if not carpetas_mod.parece_eerr(adjunto_guardado["filename"]):
-                continue
-            ceco = causa.get("ceco")
-            fecha_despido = causa.get("fecha_despido")
-            if ceco and fecha_despido:
-                registro_mod.registrar_eerr_recibido(ceco, fecha_despido, rit, ruta=ruta_registro_ceco)
-                identificados_eerr += 1
+            for adjunto_guardado in guardados:
+                if not carpetas_mod.parece_eerr(adjunto_guardado["filename"]):
+                    continue
+                ceco = causa.get("ceco")
+                fecha_despido = causa.get("fecha_despido")
+                if ceco and fecha_despido:
+                    registro_mod.registrar_eerr_recibido(ceco, fecha_despido, rit, ruta=ruta_registro_ceco)
+                    identificados_eerr += 1
 
         # Paso 3h: siempre se guarda la fecha de revisión, haya o no
         # novedades — permite que la próxima corrida acote el barrido.

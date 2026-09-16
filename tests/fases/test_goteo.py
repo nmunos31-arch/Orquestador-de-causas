@@ -301,3 +301,72 @@ class TestDeteccionDeEerr:
 
         assert any(m["etiqueta"] == "Identificados como EERR" and m["valor"] == 0 for m in resumen["metricas"])
         assert not ruta_ceco.exists()
+
+
+class TestCausaSinCarpeta:
+    def test_no_falla_si_la_causa_no_tiene_carpeta_y_lo_anota_en_notas(self, tmp_path):
+        ruta_registro = tmp_path / "registro_causas.json"
+        registro_mod.registrar_causa("T-10-2026", {
+            "empresa": "Salcobrand", "demandante": "Amengual", "thread_id": "thread-x",
+        }, ruta=ruta_registro)  # sin carpeta
+
+        ruta_mapa = _mapa_hilos_vacio(tmp_path)
+
+        contexto = {
+            "fecha_hoy": "2026-09-15",
+            "mapa_hilos": {"ruta": str(ruta_mapa)},
+            "mapa_audiencias": {"ruta": str(tmp_path / "no_existe.json")},
+        }
+
+        resumen = goteo.correr(
+            contexto,
+            ruta_registro_causas=ruta_registro,
+            ruta_registro_ceco=tmp_path / "registro_ceco.json",
+        )
+
+        assert resumen["items"] == []
+        assert any("T-10-2026" in n["detalle"] for n in resumen["notas"])
+        entrada = registro_mod.obtener_causa("T-10-2026", ruta=ruta_registro)
+        assert entrada["goteo_ultima_revision"] == "2026-09-15"
+
+    def test_otra_causa_con_carpeta_se_procesa_normalmente_aunque_otra_no_tenga(self, tmp_path, monkeypatch):
+        ruta_registro = tmp_path / "registro_causas.json"
+        registro_mod.registrar_causa("T-10-2026", {
+            "empresa": "Salcobrand", "demandante": "Amengual", "thread_id": "thread-x",
+        }, ruta=ruta_registro)  # sin carpeta
+        carpeta_causa_2 = tmp_path / "Perez con Alvi"
+        registro_mod.registrar_causa("M-1-2026", {
+            "empresa": "Alvi", "demandante": "Perez", "carpeta": str(carpeta_causa_2),
+            "thread_id": "thread-y",
+        }, ruta=ruta_registro)
+
+        ruta_mapa = tmp_path / "mapa_hilos.json"
+        ruta_mapa.write_text(json.dumps({
+            "rit_a_hilos": {"M-1-2026": ["thread-1"]},
+            "hilos": {
+                "thread-1": [{
+                    "id": "msg-1", "thread_id": "thread-1", "sender": "nombre@sb.cl",
+                    "subject": "Documentos", "cuerpo_texto": "",
+                    "adjuntos": [{"filename": "contrato.pdf", "attachment_id": "att-1", "mime_type": "application/pdf", "size": 1000}],
+                }],
+            },
+        }), encoding="utf-8")
+
+        monkeypatch.setattr(goteo.gmail_client, "descargar_adjunto", lambda message_id, attachment_id: b"contenido")
+        monkeypatch.setattr(goteo, "_detectar_acuerdo_y_pago", lambda mensajes: {"acuerdo_cerrado": False, "pago_confirmado": False, "justificacion": ""})
+
+        contexto = {
+            "fecha_hoy": "2026-09-15",
+            "mapa_hilos": {"ruta": str(ruta_mapa)},
+            "mapa_audiencias": {"ruta": str(tmp_path / "no_existe.json")},
+        }
+
+        resumen = goteo.correr(
+            contexto,
+            ruta_registro_causas=ruta_registro,
+            ruta_registro_ceco=tmp_path / "registro_ceco.json",
+        )
+
+        assert (carpeta_causa_2 / "contrato.pdf").exists()
+        assert any(item["rit"] == "M-1-2026" for item in resumen["items"])
+        assert any("T-10-2026" in n["detalle"] for n in resumen["notas"])
