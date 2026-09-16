@@ -87,6 +87,30 @@ def correr(
         if registro_mod.causa_ya_registrada(rit, ruta=ruta_registro_causas):
             continue
 
+        apellido = campos.get("demandante", "").split()[-1].title() if campos.get("demandante") else rit
+
+        carpeta_existente = carpetas_mod.buscar_carpeta_existente_por_rit(rit)
+        carpeta = carpeta_existente or carpetas_mod.crear_carpeta_causa(apellido, empresa, rit)
+
+        demanda_guardada = False
+        for adjunto in primer_mensaje.get("adjuntos", []):
+            if not adjunto["filename"].lower().endswith(".pdf"):
+                continue
+            contenido = gmail_client.descargar_adjunto(primer_mensaje["id"], adjunto["attachment_id"])
+            if carpetas_mod.es_adjunto_firma(adjunto["filename"], len(contenido)):
+                continue
+            resultado = carpetas_mod.guardar_adjunto(carpeta, "demanda.pdf", contenido)
+            demanda_guardada = resultado["guardado"] or demanda_guardada
+            break
+
+        if not demanda_guardada:
+            notas.append({
+                "tipo": "sin_demanda",
+                "detalle": f"{rit}: no se encontró un PDF de demanda en el correo — súbela a mano.",
+            })
+
+        causas_nuevas += 1
+
     resumen = {
         "fase": "smu",
         "titular": _armar_titular(causas_nuevas),

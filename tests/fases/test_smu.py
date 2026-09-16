@@ -117,3 +117,24 @@ class TestFiltroDeEmpresaYDuplicados:
         resumen = smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=ruta_registro)
 
         assert resumen["items"] == []
+
+
+class TestCrearCarpetaYGuardarDemanda:
+    def test_crea_carpeta_y_guarda_el_pdf_de_la_demanda(self, tmp_path, monkeypatch):
+        carpeta_causa = tmp_path / "Minutas" / "Perez con Alvi M-1-2026"
+        monkeypatch.setattr(smu.carpetas_mod, "buscar_carpeta_existente_por_rit", lambda rit: None)
+        monkeypatch.setattr(smu.carpetas_mod, "crear_carpeta_causa", lambda apellido, empresa, rit: carpeta_causa)
+        monkeypatch.setattr(smu.gmail_client, "descargar_adjunto", lambda message_id, attachment_id: b"contenido pdf falso")
+
+        monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
+        monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: [{
+            "id": "msg-1", "thread_id": "thread-1", "sender": "persona@smu.cl", "subject": "DEMANDA",
+            "cuerpo_texto": CUERPO_CUADRO_ALVI, "adjuntos": [
+                {"filename": "demanda_original.pdf", "attachment_id": "att-1", "mime_type": "application/pdf", "size": 50000},
+            ],
+        }])
+
+        resumen = smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=tmp_path / "registro_causas.json")
+
+        assert (carpeta_causa / "demanda.pdf").exists()
+        assert resumen["metricas"] == [{"etiqueta": "Causas nuevas", "valor": 1}]
