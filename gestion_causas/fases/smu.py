@@ -137,6 +137,32 @@ def correr(
                         "urgencia": "alta",
                     })
 
+        registro_mod.registrar_causa(
+            rit,
+            {
+                "empresa": empresa,
+                "demandante": campos.get("demandante", ""),
+                "carpeta": str(carpeta),
+                "thread_id": thread_id,
+                "tiene_demanda": demanda_guardada,
+                "aplica_excel": empresa not in EMPRESAS_SIN_EXCEL,
+            },
+            ruta=ruta_registro_causas,
+        )
+
+        color = COLOR_POR_EMPRESA.get(empresa)
+        label_empresa = gmail_client.obtener_o_crear_etiqueta(empresa, color=color)
+        gmail_client.aplicar_etiqueta_a_hilo(thread_id, label_empresa)
+        label_procesado = gmail_client.obtener_o_crear_etiqueta(ETIQUETA_PROCESADO)
+        gmail_client.aplicar_etiqueta_a_hilo(thread_id, label_procesado)
+
+        bitacora_mod.registrar(
+            f"Causa nueva registrada ({empresa}), carpeta '{carpeta.name}'"
+            + ("" if demanda_guardada else " — sin demanda adjunta, súbela a mano"),
+            rit=rit,
+        )
+
+        items.append({"rit": rit, "titulo": f"{empresa} - {campos.get('demandante', '').title()}"})
         causas_nuevas += 1
 
     resumen = {

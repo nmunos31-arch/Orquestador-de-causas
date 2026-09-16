@@ -125,6 +125,8 @@ class TestCrearCarpetaYGuardarDemanda:
         monkeypatch.setattr(smu.carpetas_mod, "buscar_carpeta_existente_por_rit", lambda rit: None)
         monkeypatch.setattr(smu.carpetas_mod, "crear_carpeta_causa", lambda apellido, empresa, rit: carpeta_causa)
         monkeypatch.setattr(smu.gmail_client, "descargar_adjunto", lambda message_id, attachment_id: b"contenido pdf falso")
+        monkeypatch.setattr(smu.gmail_client, "obtener_o_crear_etiqueta", lambda nombre, color=None: f"label-{nombre}")
+        monkeypatch.setattr(smu.gmail_client, "aplicar_etiqueta_a_hilo", lambda thread_id, label_id: None)
 
         monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
         monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: [{
@@ -188,3 +190,40 @@ class TestResumenYExcel:
         smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=tmp_path / "registro_causas.json")
 
         assert llamadas_agregar_causa == []
+
+
+class TestRegistrarEtiquetarYMarcarProcesado:
+    def test_registra_la_causa_etiqueta_y_marca_procesado(self, tmp_path, monkeypatch):
+        carpeta_causa = tmp_path / "Minutas" / "Perez con Alvi M-1-2026"
+        monkeypatch.setattr(smu.carpetas_mod, "buscar_carpeta_existente_por_rit", lambda rit: None)
+        monkeypatch.setattr(smu.carpetas_mod, "crear_carpeta_causa", lambda apellido, empresa, rit: carpeta_causa)
+        monkeypatch.setattr(smu.gmail_client, "descargar_adjunto", lambda message_id, attachment_id: b"contenido pdf falso")
+        monkeypatch.setattr(smu, "agregar_causa", lambda ruta_excel, datos: {"agregada": True, "fila": 10})
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema: {"resumen": "Texto de prueba."})
+
+        etiquetas_aplicadas = []
+        monkeypatch.setattr(smu.gmail_client, "obtener_o_crear_etiqueta", lambda nombre, color=None: f"label-{nombre}")
+        monkeypatch.setattr(smu.gmail_client, "aplicar_etiqueta_a_hilo", lambda thread_id, label_id: etiquetas_aplicadas.append((thread_id, label_id)))
+
+        monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
+        monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: [{
+            "id": "msg-1", "thread_id": "thread-1", "sender": "persona@smu.cl", "subject": "DEMANDA",
+            "cuerpo_texto": CUERPO_CUADRO_ALVI, "adjuntos": [
+                {"filename": "demanda.pdf", "attachment_id": "att-1", "mime_type": "application/pdf", "size": 50000},
+            ],
+        }])
+
+        ruta_registro = tmp_path / "registro_causas.json"
+        resumen = smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=ruta_registro)
+
+        entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
+        assert entrada["empresa"] == "Alvi"
+        assert entrada["carpeta"] == str(carpeta_causa)
+        assert entrada["thread_id"] == "thread-1"
+        assert entrada["tiene_demanda"] is True
+        assert entrada["aplica_excel"] is True
+
+        assert ("thread-1", "label-Alvi") in etiquetas_aplicadas
+        assert ("thread-1", f"label-{smu.ETIQUETA_PROCESADO}") in etiquetas_aplicadas
+
+        assert resumen["items"] == [{"rit": "M-1-2026", "titulo": "Alvi - Juan Perez"}]
