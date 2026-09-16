@@ -48,11 +48,96 @@ def correr(
             "notas": [],
         }
 
-    return {
+    items: list[dict] = []
+    acciones: list[dict] = []
+    notas: list[dict] = []
+    causas_nuevas = 0
+
+    for hilo_resumen in hilos:
+        thread_id = hilo_resumen["id"]
+        mensajes = gmail_client.leer_hilo(thread_id)
+        if not mensajes:
+            continue
+        primer_mensaje = mensajes[0]
+
+        origen = _origen_cadena(primer_mensaje)
+        if origen.get("error"):
+            acciones.append({
+                "rit": None,
+                "que": f"No se pudo evaluar el origen de un hilo automáticamente: {origen['error']}",
+                "urgencia": "media",
+            })
+            continue
+        if not origen["valida"]:
+            continue
+
+    resumen = {
         "fase": "smu",
-        "titular": f"{len(hilos)} hilos candidatos",
-        "metricas": [],
-        "items": [],
-        "acciones": [],
-        "notas": [],
+        "titular": _armar_titular(causas_nuevas),
+        "metricas": [
+            {"etiqueta": "Causas nuevas", "valor": causas_nuevas},
+        ],
+        "items": items,
+        "acciones": acciones,
+        "notas": notas,
     }
+    return resumen
+
+
+def _armar_titular(causas_nuevas: int) -> str:
+    if causas_nuevas == 0:
+        return "Sin causas nuevas"
+    return f"{causas_nuevas} causas nuevas registradas"
+
+
+SCHEMA_ORIGEN_CADENA = {
+    "type": "object",
+    "properties": {
+        "es_reenvio_de_cuadro": {"type": "boolean"},
+        "justificacion": {"type": "string"},
+    },
+    "required": ["es_reenvio_de_cuadro", "justificacion"],
+}
+
+
+def _evaluar_origen_gomezyriesco(primer_mensaje: dict) -> dict:
+    """El primer mensaje del hilo es de @gomezyriesco.cl — decide si es un
+    reenvío/acuse de recibo que cita (texto citado, ej. con '>') un
+    cuadro-resumen firmado por alguien de @smu.cl/@sb.cl (cadena VÁLIDA), o
+    si es Nico/Román iniciando una conversación interna (cadena NO válida,
+    la usa la fase 'agenda', no esta)."""
+    contexto = {
+        "remitente": primer_mensaje.get("sender", ""),
+        "asunto": primer_mensaje.get("subject", ""),
+        "cuerpo": primer_mensaje.get("cuerpo_texto", ""),
+    }
+    tarea = (
+        "El primer mensaje de este hilo de correo lo envió alguien de dominio "
+        "@gomezyriesco.cl. Decidí si es un reenvío o acuse de recibo corto que cita, "
+        "dentro del cuerpo (texto citado, típicamente con '>' o similar), un "
+        "cuadro-resumen completo de una causa laboral (campos como Rit, Tribunal, "
+        "Demandante, etc.) firmado originalmente por alguien de dominio @smu.cl o "
+        "@sb.cl — en ese caso es una cadena VÁLIDA. Si en cambio es alguien de "
+        "gomezyriesco.cl iniciando una conversación (ej. preguntando sobre estrategia "
+        "de una causa ya conocida), sin ningún cuadro-resumen citado, es una cadena "
+        "INTERNA, no válida para esta tarea."
+    )
+    return reasoning.preguntar(tarea, contexto, SCHEMA_ORIGEN_CADENA)
+
+
+def _dominio(remitente: str) -> str:
+    direccion = extraer_direccion(remitente)
+    return direccion.rsplit("@", 1)[1].lower() if "@" in direccion else ""
+
+
+def _origen_cadena(primer_mensaje: dict) -> dict:
+    """Devuelve {"valida": True|False, "error": <str, opcional>}."""
+    dominio = _dominio(primer_mensaje.get("sender", ""))
+    if dominio in ("smu.cl", "sb.cl"):
+        return {"valida": True}
+    if dominio == "gomezyriesco.cl":
+        deteccion = _evaluar_origen_gomezyriesco(primer_mensaje)
+        if deteccion.get("error"):
+            return {"valida": False, "error": deteccion["error"]}
+        return {"valida": bool(deteccion.get("es_reenvio_de_cuadro"))}
+    return {"valida": False}
