@@ -10,6 +10,7 @@ filtrar) y un schema de salida JSON fijo.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 
 TIMEOUT_SEGUNDOS = 120
@@ -87,13 +88,20 @@ def _parsear_json(texto: str) -> dict | None:
 
 
 def _ejecutar_claude(prompt: str) -> str:
+    """Corre `claude -p "<prompt>"`. En Windows, `claude` es un shim `.CMD` de
+    npm que `subprocess.run` no encuentra si se le pasa el nombre desnudo (sin
+    pasar por una shell) — hay que resolver la ruta completa con
+    `shutil.which` primero (confirmado en una corrida real: sin esto, todas
+    las llamadas fallaban con `FileNotFoundError: [WinError 2]`)."""
+    ejecutable = shutil.which("claude")
+    if ejecutable is None:
+        raise RuntimeError("No se encontró el ejecutable 'claude' en el PATH.")
     resultado = subprocess.run(
-        ["claude", "-p", prompt],
+        [ejecutable, "-p", prompt],
         capture_output=True, text=True, timeout=TIMEOUT_SEGUNDOS, check=False,
     )
     if resultado.returncode != 0:
         raise RuntimeError(
-            f"claude -p terminó con código {resultado.returncode}. "
-            f"stderr: {resultado.stderr.strip()[:500]!r}"
+            f"claude -p terminó con código {resultado.returncode}: {resultado.stderr[:500]}"
         )
     return resultado.stdout

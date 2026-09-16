@@ -1,6 +1,8 @@
 import json
 import subprocess
 
+import pytest
+
 from gestion_causas.reasoning import preguntar
 
 
@@ -65,3 +67,41 @@ class TestPreguntar:
 
         assert "error" in resultado
         assert isinstance(resultado["error"], str)
+
+
+class TestEjecutarClaudeResuelveRutaCompleta:
+    def test_usa_shutil_which_para_resolver_el_ejecutable(self, monkeypatch):
+        from gestion_causas import reasoning as reasoning_mod
+
+        llamadas_which = []
+        llamadas_run = []
+
+        def which_falso(nombre):
+            llamadas_which.append(nombre)
+            return "C:\\ruta\\falsa\\claude.CMD"
+
+        class ResultadoFalso:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        def run_falso(args, **kwargs):
+            llamadas_run.append(args)
+            return ResultadoFalso()
+
+        monkeypatch.setattr(reasoning_mod.shutil, "which", which_falso)
+        monkeypatch.setattr(reasoning_mod.subprocess, "run", run_falso)
+
+        resultado = reasoning_mod._ejecutar_claude("un prompt cualquiera")
+
+        assert resultado == "ok"
+        assert llamadas_which == ["claude"]
+        assert llamadas_run[0][0] == "C:\\ruta\\falsa\\claude.CMD"
+
+    def test_lanza_runtimeerror_si_claude_no_esta_en_el_path(self, monkeypatch):
+        from gestion_causas import reasoning as reasoning_mod
+
+        monkeypatch.setattr(reasoning_mod.shutil, "which", lambda nombre: None)
+
+        with pytest.raises(RuntimeError):
+            reasoning_mod._ejecutar_claude("un prompt cualquiera")
