@@ -58,3 +58,13 @@ class TestExtraerCamposCuadro:
         campos = extraer_campos_cuadro(cuerpo_sin_rut)
         assert "rut" not in campos
         assert campos["rit"] == "M-6-2026"
+
+    def test_normaliza_espacios_internos_de_la_etiqueta(self):
+        cuerpo = "Fecha  audiencia:   15 de octubre de 2026\n"
+        campos = extraer_campos_cuadro(cuerpo)
+        assert campos["fecha_audiencia"] == "15 de octubre de 2026"
+
+    def test_extrae_valor_que_contiene_dos_puntos(self):
+        cuerpo = "Fecha audiencia: 15:30 hrs, 15 de octubre de 2026\n"
+        campos = extraer_campos_cuadro(cuerpo)
+        assert campos["fecha_audiencia"] == "15:30 hrs, 15 de octubre de 2026"

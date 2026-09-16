@@ -44,7 +44,7 @@ def extraer_campos_cuadro(cuerpo_texto: str) -> dict:
         coincidencia = _LINEA_ETIQUETA_VALOR.match(linea)
         if not coincidencia:
             continue
-        etiqueta_cruda = _sin_tildes(coincidencia.group(1).strip())
+        etiqueta_cruda = re.sub(r"\s+", " ", _sin_tildes(coincidencia.group(1).strip()))
         valor = coincidencia.group(2).strip()
         if not valor:
             continue
