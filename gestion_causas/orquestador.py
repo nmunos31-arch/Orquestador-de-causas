@@ -17,6 +17,7 @@ from pathlib import Path
 from gestion_causas import bitacora as bitacora_mod
 from gestion_causas import registro as registro_mod
 from gestion_causas.fases import goteo as fases_goteo
+from gestion_causas.fases import smu as fases_smu
 
 RUTA_CONTEXTO_DEFAULT = Path(__file__).parent / "_contexto_corrida.json"
 
@@ -36,12 +37,15 @@ def correr(
     contexto_corrida = json.loads(Path(ruta_contexto).read_text(encoding="utf-8"))
 
     fases = {}
-    for nombre, funcion in (("goteo", fases_goteo.correr),):
+    for nombre, funcion, kwargs_extra in (
+        ("smu", fases_smu.correr, {}),
+        ("goteo", fases_goteo.correr, {"ruta_registro_ceco": ruta_registro_ceco}),
+    ):
         try:
             fases[nombre] = funcion(
                 contexto_corrida,
                 ruta_registro_causas=ruta_registro_causas,
-                ruta_registro_ceco=ruta_registro_ceco,
+                **kwargs_extra,
             )
         except Exception as e:
             mensaje = f"{type(e).__name__}: {e}"
