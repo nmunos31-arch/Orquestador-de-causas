@@ -109,6 +109,34 @@ def correr(
                 "detalle": f"{rit}: no se encontró un PDF de demanda en el correo — súbela a mano.",
             })
 
+        # El resumen narrativo solo hace falta para la fila del Excel — Preunic y
+        # Salcobrand nunca tienen fila (ver EMPRESAS_SIN_EXCEL), así que ni siquiera
+        # vale la pena gastar el llamado a Claude para esos dos casos.
+        if empresa not in EMPRESAS_SIN_EXCEL:
+            deteccion_resumen = _generar_resumen_narrativo(campos, primer_mensaje.get("cuerpo_texto", ""))
+            if deteccion_resumen.get("error"):
+                acciones.append({
+                    "rit": rit,
+                    "que": f"No se pudo redactar el Resumen del Excel automáticamente: {deteccion_resumen['error']}",
+                    "urgencia": "media",
+                })
+            else:
+                datos_excel = {
+                    "juzgado": campos.get("tribunal", ""),
+                    "materia": campos.get("materia", ""),
+                    "causa": rit,
+                    "cuantia": campos.get("cuantia", ""),
+                    "resumen": deteccion_resumen.get("resumen", ""),
+                }
+                try:
+                    agregar_causa(RUTA_EXCEL_JUICIOS, datos_excel)
+                except PermissionError:
+                    acciones.append({
+                        "rit": rit,
+                        "que": "El Excel de Juicios Vigentes está abierto/bloqueado — no se pudo escribir la fila. Se reintenta en la próxima corrida.",
+                        "urgencia": "alta",
+                    })
+
         causas_nuevas += 1
 
     resumen = {
@@ -128,6 +156,40 @@ def _armar_titular(causas_nuevas: int) -> str:
     if causas_nuevas == 0:
         return "Sin causas nuevas"
     return f"{causas_nuevas} causas nuevas registradas"
+
+
+SCHEMA_RESUMEN = {
+    "type": "object",
+    "properties": {"resumen": {"type": "string"}},
+    "required": ["resumen"],
+}
+
+
+def _generar_resumen_narrativo(campos: dict, cuerpo_texto_completo: str) -> dict:
+    """Redacta el párrafo "Resumen" del Excel de Juicios Vigentes siguiendo
+    la plantilla exacta de docs/2026-07-07-informe-juicios-email-design.md
+    (sección "Plantilla del Resumen"). `cuerpo_texto_completo` se pasa
+    entero (no solo los campos ya extraídos) porque el bloque "Hechos" y
+    "Conceptos demandados" son texto libre, sin acotar con regex."""
+    contexto = {"campos_extraidos": campos, "cuerpo_completo_del_correo": cuerpo_texto_completo}
+    tarea = (
+        'Redactá el párrafo "Resumen" de una fila del Excel de Juicios Vigentes, '
+        "siguiendo EXACTAMENTE esta plantilla (reemplazando lo que va entre corchetes, "
+        "sin agregar ni quitar nada de la estructura):\n\n"
+        '"Demanda de despido injustificado y cobro de prestaciones laborales interpuesta '
+        "por [Demandante(s), formato Nombre Propio] por haber sido "
+        "[desvinculad[o/a/os/as]] el [fecha de despido] por [causal]. Solicita el pago "
+        "total de [Cuantía formateada como $#.###.###] por [conceptos demandados, sin "
+        'montos parciales]."\n\n'
+        "Reglas: Demandante(s) en formato Nombre Propio (no mayúsculas sostenidas), "
+        "varios demandantes separados por comas y 'y' antes del último. Concordancia de "
+        "género según el nombre (singular) o plural coherente con el grupo. Fecha y "
+        "causal de despido se sacan del bloque 'Hechos' del cuerpo del correo. Formato de "
+        "fecha: día con dos dígitos, mes en palabras y minúsculas, año completo (ej. '08 "
+        "de enero de 2026'). Conceptos demandados: solo las etiquetas de los conceptos, "
+        "sin repetir montos parciales."
+    )
+    return reasoning.preguntar(tarea, contexto, SCHEMA_RESUMEN)
 
 
 SCHEMA_ORIGEN_CADENA = {

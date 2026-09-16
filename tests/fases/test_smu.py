@@ -138,3 +138,53 @@ class TestCrearCarpetaYGuardarDemanda:
 
         assert (carpeta_causa / "demanda.pdf").exists()
         assert resumen["metricas"] == [{"etiqueta": "Causas nuevas", "valor": 1}]
+
+
+class TestResumenYExcel:
+    def _monkeypatch_comunes(self, monkeypatch, tmp_path, empresa="Alvi"):
+        carpeta_causa = tmp_path / "Minutas" / "Perez con Alvi M-1-2026"
+        monkeypatch.setattr(smu.carpetas_mod, "buscar_carpeta_existente_por_rit", lambda rit: None)
+        monkeypatch.setattr(smu.carpetas_mod, "crear_carpeta_causa", lambda apellido, empresa, rit: carpeta_causa)
+        monkeypatch.setattr(smu.gmail_client, "descargar_adjunto", lambda message_id, attachment_id: b"contenido pdf falso")
+        monkeypatch.setattr(smu.gmail_client, "obtener_o_crear_etiqueta", lambda nombre, color=None: "label-id-1")
+        monkeypatch.setattr(smu.gmail_client, "aplicar_etiqueta_a_hilo", lambda thread_id, label_id: None)
+        monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
+        cuerpo = CUERPO_CUADRO_ALVI.replace("Alvi", empresa) if empresa != "Alvi" else CUERPO_CUADRO_ALVI
+        monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: [{
+            "id": "msg-1", "thread_id": "thread-1", "sender": "persona@smu.cl", "subject": "DEMANDA",
+            "cuerpo_texto": cuerpo, "adjuntos": [
+                {"filename": "demanda.pdf", "attachment_id": "att-1", "mime_type": "application/pdf", "size": 50000},
+            ],
+        }])
+        return carpeta_causa
+
+    def test_llama_a_reasoning_para_el_resumen_y_escribe_la_fila_del_excel(self, tmp_path, monkeypatch):
+        self._monkeypatch_comunes(monkeypatch, tmp_path)
+
+        llamadas_agregar_causa = []
+
+        def agregar_causa_falso(ruta_excel, datos):
+            llamadas_agregar_causa.append(datos)
+            return {"agregada": True, "fila": 10}
+
+        monkeypatch.setattr(smu, "agregar_causa", agregar_causa_falso)
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema: {"resumen": "Texto de prueba del resumen."})
+
+        smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=tmp_path / "registro_causas.json")
+
+        assert len(llamadas_agregar_causa) == 1
+        datos = llamadas_agregar_causa[0]
+        assert datos["causa"] == "M-1-2026"
+        assert datos["resumen"] == "Texto de prueba del resumen."
+        assert datos["juzgado"] == "Juzgado de Letras del Trabajo de Temuco"
+
+    def test_preunic_y_salcobrand_no_escriben_fila_de_excel(self, tmp_path, monkeypatch):
+        self._monkeypatch_comunes(monkeypatch, tmp_path, empresa="Preunic")
+
+        llamadas_agregar_causa = []
+        monkeypatch.setattr(smu, "agregar_causa", lambda ruta_excel, datos: llamadas_agregar_causa.append(datos))
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema: {"resumen": "Texto de prueba."})
+
+        smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=tmp_path / "registro_causas.json")
+
+        assert llamadas_agregar_causa == []
