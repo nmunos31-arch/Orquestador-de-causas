@@ -136,3 +136,29 @@ class TestEjecutarClaudePasaPromptPorStdin:
         args, kwargs = llamadas[0]
         assert prompt_largo not in args
         assert kwargs.get("input") == prompt_largo
+
+
+class TestEjecutarClaudeUsaUtf8:
+    def test_pasa_encoding_utf8_a_subprocess_run(self, monkeypatch):
+        from gestion_causas import reasoning as reasoning_mod
+
+        llamadas = []
+
+        class ResultadoFalso:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        def which_falso(nombre):
+            return "C:\\ruta\\falsa\\claude.CMD"
+
+        def run_falso(args, **kwargs):
+            llamadas.append(kwargs)
+            return ResultadoFalso()
+
+        monkeypatch.setattr(reasoning_mod.shutil, "which", which_falso)
+        monkeypatch.setattr(reasoning_mod.subprocess, "run", run_falso)
+
+        reasoning_mod._ejecutar_claude("prompt con acentos: ñ, á, é, y una flecha →")
+
+        assert llamadas[0].get("encoding") == "utf-8"

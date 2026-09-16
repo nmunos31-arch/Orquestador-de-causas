@@ -102,14 +102,25 @@ def _ejecutar_claude(prompt: str) -> str:
     encuentra si se le pasa el nombre desnudo (sin pasar por una shell) —
     hay que resolver la ruta completa con `shutil.which` primero (también
     confirmado en una corrida real: sin esto, todas las llamadas fallaban
-    con `FileNotFoundError: [WinError 2]`)."""
+    con `FileNotFoundError: [WinError 2]`).
+
+    Se fuerza `encoding="utf-8"` explícitamente: con `text=True` sin
+    `encoding`, Python usa la codepage por defecto del sistema operativo
+    (en Windows, típicamente `cp1252`, no UTF-8) para escribir el stdin en
+    el hilo interno `_writerthread` de `subprocess`. El contexto real de
+    una causa suele traer caracteres fuera de ese rango (guiones no
+    separables, flechas, etc.), lo que hace fallar la escritura en ese
+    hilo en silencio: `claude -p` no recibe stdin, agota el timeout de
+    espera y termina con exit code distinto de cero (confirmado en una
+    corrida real, con la mitad de las llamadas de razonamiento fallando
+    así)."""
     ejecutable = shutil.which("claude")
     if ejecutable is None:
         raise RuntimeError("No se encontró el ejecutable 'claude' en el PATH.")
     resultado = subprocess.run(
         [ejecutable, "-p"],
         input=prompt,
-        capture_output=True, text=True, timeout=TIMEOUT_SEGUNDOS, check=False,
+        capture_output=True, text=True, encoding="utf-8", timeout=TIMEOUT_SEGUNDOS, check=False,
     )
     if resultado.returncode != 0:
         raise RuntimeError(
