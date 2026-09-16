@@ -8,6 +8,7 @@ módulo estáticamente: qué funciones expone y qué scopes de OAuth pide.
 import inspect
 
 from gestion_causas import gmail_client
+from gestion_causas.gmail_client import leer_hilo
 
 
 class TestNoExponeEnvioNiBorrado:
@@ -288,3 +289,46 @@ class TestLoginNoInteractivo:
         monkeypatch.setattr(gmail_client, "TOKEN_PATH", str(tmp_path / "no-existe.json"))
         with pytest.raises(RuntimeError, match="diagnostico"):
             gmail_client.obtener_credenciales(permitir_login=False)
+
+
+class TestLeerHilo:
+    def test_aplana_los_mensajes_del_hilo(self):
+        class ServicioFalso:
+            def users(self):
+                return self
+
+            def threads(self):
+                return self
+
+            def get(self, userId, id, format=None):
+                return self
+
+            def execute(self):
+                return {
+                    "messages": [
+                        {
+                            "id": "msg-1",
+                            "threadId": "thread-1",
+                            "payload": {
+                                "headers": [
+                                    {"name": "Subject", "value": "DEMANDA M-1-2026"},
+                                    {"name": "From", "value": "alguien@smu.cl"},
+                                    {"name": "To", "value": "nmunoz@gomezyriesco.cl"},
+                                ],
+                                "mimeType": "text/plain",
+                                "body": {"data": ""},
+                            },
+                        },
+                    ]
+                }
+
+        mensajes = leer_hilo("thread-1", servicio=ServicioFalso())
+
+        assert len(mensajes) == 1
+        assert mensajes[0]["id"] == "msg-1"
+        assert mensajes[0]["thread_id"] == "thread-1"
+        assert mensajes[0]["subject"] == "DEMANDA M-1-2026"
+        assert mensajes[0]["sender"] == "alguien@smu.cl"
+        assert mensajes[0]["to"] == "nmunoz@gomezyriesco.cl"
+        assert mensajes[0]["cc"] == ""
+        assert mensajes[0]["adjuntos"] == []

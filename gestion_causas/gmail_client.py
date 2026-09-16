@@ -185,6 +185,32 @@ def obtener_hilo(thread_id: str, servicio=None) -> dict:
     return servicio.users().threads().get(userId="me", id=thread_id, format="full").execute()
 
 
+def leer_hilo(thread_id: str, servicio=None) -> list[dict]:
+    """Trae todos los mensajes de un hilo, aplanados a
+    {"id", "thread_id", "subject", "sender", "to", "cc", "date",
+    "cuerpo_texto", "adjuntos"} — mismo formato que usa `cli.cmd_leer_hilo`.
+    Reusado por los drivers Python de las fases (`fases/smu.py`, etc.) para
+    no repetir esta lógica."""
+    if servicio is None:
+        servicio = construir_servicio()
+    hilo = obtener_hilo(thread_id, servicio=servicio)
+    mensajes = []
+    for mensaje_crudo in hilo.get("messages", []):
+        headers = {h["name"].lower(): h["value"] for h in mensaje_crudo["payload"].get("headers", [])}
+        mensajes.append({
+            "id": mensaje_crudo["id"],
+            "thread_id": mensaje_crudo["threadId"],
+            "subject": headers.get("subject", ""),
+            "sender": headers.get("from", ""),
+            "to": headers.get("to", ""),
+            "cc": headers.get("cc", ""),
+            "date": headers.get("date", ""),
+            "cuerpo_texto": _extraer_texto_plano(mensaje_crudo["payload"]),
+            "adjuntos": _listar_adjuntos(mensaje_crudo["payload"]),
+        })
+    return mensajes
+
+
 def cabeceras_respuesta_de_hilo(thread_id: str, servicio=None) -> dict:
     """Devuelve {"in_reply_to", "references"} a partir de los headers
     Message-ID/References del ÚLTIMO mensaje del hilo.
