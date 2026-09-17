@@ -162,3 +162,91 @@ class TestEjecutarClaudeUsaUtf8:
         reasoning_mod._ejecutar_claude("prompt con acentos: ñ, á, é, y una flecha →")
 
         assert llamadas[0].get("encoding") == "utf-8"
+
+
+class TestEjecutarClaudeConRutaArchivo:
+    def test_agrega_allowedtools_read_y_add_dir_de_la_carpeta_del_archivo(self, monkeypatch, tmp_path):
+        from gestion_causas import reasoning as reasoning_mod
+
+        carpeta = tmp_path / "Minutas" / "Perez con Alvi M-1-2026"
+        carpeta.mkdir(parents=True)
+        ruta_demanda = carpeta / "demanda.pdf"
+
+        llamadas = []
+
+        class ResultadoFalso:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        monkeypatch.setattr(reasoning_mod.shutil, "which", lambda nombre: "C:\\ruta\\falsa\\claude.CMD")
+        monkeypatch.setattr(reasoning_mod.subprocess, "run", lambda args, **kwargs: llamadas.append((args, kwargs)) or ResultadoFalso())
+
+        reasoning_mod._ejecutar_claude("un prompt", ruta_archivo=ruta_demanda)
+
+        args, kwargs = llamadas[0]
+        assert args == [
+            "C:\\ruta\\falsa\\claude.CMD", "-p",
+            "--allowedTools", "Read",
+            "--add-dir", str(carpeta),
+        ]
+        assert kwargs.get("input") == "un prompt"
+
+    def test_sin_ruta_archivo_no_agrega_allowedtools(self, monkeypatch):
+        from gestion_causas import reasoning as reasoning_mod
+
+        llamadas = []
+
+        class ResultadoFalso:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        monkeypatch.setattr(reasoning_mod.shutil, "which", lambda nombre: "C:\\ruta\\falsa\\claude.CMD")
+        monkeypatch.setattr(reasoning_mod.subprocess, "run", lambda args, **kwargs: llamadas.append((args, kwargs)) or ResultadoFalso())
+
+        reasoning_mod._ejecutar_claude("un prompt")
+
+        args, kwargs = llamadas[0]
+        assert args == ["C:\\ruta\\falsa\\claude.CMD", "-p"]
+
+
+class TestPreguntarConRutaArchivo:
+    def test_pasa_ruta_archivo_a_ejecutar_y_lo_menciona_en_el_prompt(self, tmp_path):
+        from gestion_causas.reasoning import preguntar
+
+        ruta_demanda = tmp_path / "demanda.pdf"
+        llamadas = []
+
+        def ejecutar_falso(prompt, ruta_archivo=None):
+            llamadas.append((prompt, ruta_archivo))
+            return json.dumps({"ok": True})
+
+        resultado = preguntar(
+            "tarea de prueba", {"dato": 1}, SCHEMA_SIMPLE,
+            ejecutar=ejecutar_falso, ruta_archivo=ruta_demanda,
+        )
+
+        assert resultado == {"ok": True}
+        prompt, ruta_recibida = llamadas[0]
+        assert ruta_recibida == ruta_demanda
+        assert str(ruta_demanda) in prompt
+
+    def test_sin_ruta_archivo_ejecutar_se_llama_solo_con_el_prompt(self):
+        from gestion_causas.reasoning import preguntar
+
+        llamadas = []
+
+        def ejecutar_falso(prompt):
+            llamadas.append(prompt)
+            return json.dumps({"ok": True})
+
+        preguntar("tarea", {}, SCHEMA_SIMPLE, ejecutar=ejecutar_falso)
+
+        assert len(llamadas) == 1
+
+
+class TestTimeoutSubidoA180:
+    def test_timeout_segundos_es_180(self):
+        from gestion_causas.reasoning import TIMEOUT_SEGUNDOS
+        assert TIMEOUT_SEGUNDOS == 180

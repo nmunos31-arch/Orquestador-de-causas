@@ -12,11 +12,14 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from pathlib import Path
 
-TIMEOUT_SEGUNDOS = 120
+TIMEOUT_SEGUNDOS = 180
 
 
-def preguntar(tarea: str, contexto: dict, schema: dict, *, ejecutar=None) -> dict:
+def preguntar(
+    tarea: str, contexto: dict, schema: dict, *, ejecutar=None, ruta_archivo=None
+) -> dict:
     """Le pide a Claude que resuelva `tarea` sobre `contexto`, devolviendo un
     dict que cumple `schema`. Reintenta una vez si la respuesta no es JSON
     válido (o si `ejecutar` lanza una excepción); si vuelve a fallar, devuelve
@@ -30,15 +33,26 @@ def preguntar(tarea: str, contexto: dict, schema: dict, *, ejecutar=None) -> dic
     `_ejecutar_claude`). Una excepción de `ejecutar` (timeout, binario no
     encontrado, exit code distinto de cero, etc.) nunca se propaga fuera de
     `preguntar`.
+
+    `ruta_archivo` (opcional) deja que Claude lea ese archivo puntual con su
+    propia herramienta `Read` (necesario para PDFs, incluidos escaneos que se
+    leen en modo visión) en vez de intentar meter su contenido en `contexto`
+    como texto. Cuando se entrega, se pasa como segundo argumento a
+    `ejecutar` (`ejecutar(prompt, ruta_archivo=ruta_archivo)`); si no se
+    entrega, `ejecutar` se llama igual que siempre (`ejecutar(prompt)`), así
+    que ningún llamador existente que no use `ruta_archivo` se ve afectado.
     """
     ejecutar = ejecutar or _ejecutar_claude
 
     error_previo: str | None = None
     salida = ""
     for intento in range(2):
-        prompt = _armar_prompt(tarea, contexto, schema, error_previo=error_previo)
+        prompt = _armar_prompt(tarea, contexto, schema, error_previo=error_previo, ruta_archivo=ruta_archivo)
         try:
-            salida = ejecutar(prompt)
+            if ruta_archivo is not None:
+                salida = ejecutar(prompt, ruta_archivo=ruta_archivo)
+            else:
+                salida = ejecutar(prompt)
         except Exception as exc:  # noqa: BLE001 - una llamada externa (subprocess) no debe tumbar el batch
             error_previo = f"{type(exc).__name__}: {exc}"
             continue
@@ -57,10 +71,17 @@ def preguntar(tarea: str, contexto: dict, schema: dict, *, ejecutar=None) -> dic
     }
 
 
-def _armar_prompt(tarea: str, contexto: dict, schema: dict, error_previo: str | None = None) -> str:
-    partes = [
-        tarea,
-        "",
+def _armar_prompt(
+    tarea: str, contexto: dict, schema: dict, error_previo: str | None = None, ruta_archivo=None
+) -> str:
+    partes = [tarea, ""]
+    if ruta_archivo is not None:
+        partes += [
+            f"Antes de responder, usá tu herramienta Read para leer el archivo en esta "
+            f"ruta absoluta: {ruta_archivo}",
+            "",
+        ]
+    partes += [
         "Contexto (JSON):",
         json.dumps(contexto, ensure_ascii=False, indent=2),
         "",
@@ -89,7 +110,7 @@ def _parsear_json(texto: str) -> dict | None:
         return None
 
 
-def _ejecutar_claude(prompt: str) -> str:
+def _ejecutar_claude(prompt: str, ruta_archivo=None) -> str:
     """Corre `claude -p`, pasando el prompt por stdin (no como argumento de
     línea de comandos) — en Windows, un prompt largo (el contexto de una
     causa con muchos correos puede ser de decenas de miles de caracteres)
@@ -113,12 +134,24 @@ def _ejecutar_claude(prompt: str) -> str:
     hilo en silencio: `claude -p` no recibe stdin, agota el timeout de
     espera y termina con exit code distinto de cero (confirmado en una
     corrida real, con la mitad de las llamadas de razonamiento fallando
-    así)."""
+    así).
+
+    Si se entrega `ruta_archivo`, se agrega `--allowedTools Read --add-dir
+    <carpeta_del_archivo>` — el mínimo privilegio necesario para que Claude
+    pueda leer ESE archivo puntual con su herramienta Read (soporta PDFs,
+    incluido modo visión para escaneos sin capa de texto) sin habilitar
+    ninguna otra herramienta ni acceso a ningún otro directorio. Nunca se
+    usa `--dangerously-skip-permissions`."""
     ejecutable = shutil.which("claude")
     if ejecutable is None:
         raise RuntimeError("No se encontró el ejecutable 'claude' en el PATH.")
+
+    argv = [ejecutable, "-p"]
+    if ruta_archivo is not None:
+        argv += ["--allowedTools", "Read", "--add-dir", str(Path(ruta_archivo).parent)]
+
     resultado = subprocess.run(
-        [ejecutable, "-p"],
+        argv,
         input=prompt,
         capture_output=True, text=True, encoding="utf-8", timeout=TIMEOUT_SEGUNDOS, check=False,
     )
