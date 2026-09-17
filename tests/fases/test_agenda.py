@@ -136,3 +136,58 @@ class TestEvaluarMontosOfrecimiento:
         resultado = agenda._evaluar_montos_ofrecimiento("texto", tmp_path / "demanda.pdf")
 
         assert resultado == {"error": "Claude no devolvió JSON válido"}
+
+
+class TestArmarCuerpoOfrecimiento:
+    def test_un_solo_demandante_audiencia_unica(self):
+        demandantes = [{"apellido": "Pérez", "monto_recargo_30": 500000, "monto_afc": 200000}]
+
+        cuerpo = agenda._armar_cuerpo_ofrecimiento(demandantes, "Única", "2026-10-15", 14)
+
+        assert cuerpo == (
+            "Estimado Román:\n\n"
+            "En esta causa, con audiencia única fijada para el 15 de octubre de 2026 "
+            "(en 14 días), se demanda lo siguiente:\n\n"
+            "Pérez:\n"
+            "Recargo 30%: $500.000\n"
+            "Devolución AFC: $200.000\n"
+            "Total: $700.000\n\n"
+            "Por lo anterior, consulto si hago un ofrecimiento por $420.000 para don/doña "
+            "Pérez, equivalente al 60% del total\n\n\n"
+            "Atentamente,"
+        )
+
+    def test_dos_demandantes_audiencia_de_juicio(self):
+        demandantes = [
+            {"apellido": "Pérez", "monto_recargo_30": 500000, "monto_afc": 200000},
+            {"apellido": "González", "monto_recargo_30": 300000, "monto_afc": 100000},
+        ]
+
+        cuerpo = agenda._armar_cuerpo_ofrecimiento(demandantes, "Juicio", "2026-10-15", 14)
+
+        assert cuerpo == (
+            "Estimado Román:\n\n"
+            "En esta causa, con audiencia de juicio fijada para el 15 de octubre de 2026 "
+            "(en 14 días), se demanda lo siguiente:\n\n"
+            "Pérez:\n"
+            "Recargo 30%: $500.000\n"
+            "Devolución AFC: $200.000\n"
+            "Total: $700.000\n\n"
+            "González:\n"
+            "Recargo 30%: $300.000\n"
+            "Devolución AFC: $100.000\n"
+            "Total: $400.000\n\n"
+            "Total demandado (todos): $1.100.000\n\n"
+            "Por lo anterior, consulto si hago un ofrecimiento por $420.000 para don/doña "
+            "Pérez y $240.000 para don/doña González, equivalente al 60% del total\n\n\n"
+            "Atentamente,"
+        )
+
+
+class TestArmarAsuntoOfrecimiento:
+    def test_arma_el_asunto_con_apellido_empresa_y_rit(self):
+        causa = {"demandante": "Pérez", "empresa": "Alvi"}
+
+        asunto = agenda._armar_asunto_ofrecimiento(causa, "M-1-2026")
+
+        assert asunto == 'Demanda laboral "Pérez con Alvi" Rit M-1-2026'

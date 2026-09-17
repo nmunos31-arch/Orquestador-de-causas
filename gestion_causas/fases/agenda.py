@@ -21,6 +21,11 @@ from gestion_causas import registro as registro_mod
 
 TIPOS_CON_OFRECIMIENTO = {"Única", "Juicio"}
 
+_MESES_ES = {
+    1: "enero", 2: "febrero", 3: "marzo", 4: "abril", 5: "mayo", 6: "junio",
+    7: "julio", 8: "agosto", 9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre",
+}
+
 SCHEMA_OFRECIMIENTO = {
     "type": "object",
     "properties": {
@@ -92,6 +97,76 @@ def _debe_generar_ofrecimiento(causa: dict, audiencia: dict, fecha_hoy: str) -> 
         return False
     hito = dias_mod.dias_corridos_antes(fecha_audiencia, 14)
     return date.fromisoformat(fecha_hoy) >= hito
+
+
+def _formatear_pesos(monto: int) -> str:
+    return f"${monto:,}".replace(",", ".")
+
+
+def _formatear_fecha_larga(fecha_iso: str) -> str:
+    fecha = date.fromisoformat(fecha_iso)
+    return f"{fecha.day} de {_MESES_ES[fecha.month]} de {fecha.year}"
+
+
+def _armar_cuerpo_ofrecimiento(
+    demandantes: list[dict], tipo_audiencia: str, fecha_audiencia: str, dias_hasta_audiencia: int
+) -> str:
+    """Arma el cuerpo del borrador de ofrecimiento EXACTAMENTE con la
+    plantilla vigente (memoria gestion_causas_borrador_ofrecimiento_formato,
+    corregida el 18.08.2026 — no la plantilla desactualizada de
+    agenda.md paso 3e): desglose de Recargo 30%/AFC/Total por cada
+    demandante, sin agregar contexto de negociación ni escenarios
+    alternativos. La pregunta final ofrece el 60% de (Recargo 30% + AFC)
+    por persona, redondeado a un peso entero."""
+    fecha_legible = _formatear_fecha_larga(fecha_audiencia)
+    tipo_legible = "de juicio" if tipo_audiencia == "Juicio" else "única"
+
+    bloques = []
+    ofertas = []
+    total_general = 0
+    for demandante in demandantes:
+        recargo = demandante["monto_recargo_30"]
+        afc = demandante["monto_afc"]
+        total_persona = recargo + afc
+        total_general += total_persona
+        apellido = demandante["apellido"]
+        bloques.append(
+            f"{apellido}:\n"
+            f"Recargo 30%: {_formatear_pesos(recargo)}\n"
+            f"Devolución AFC: {_formatear_pesos(afc)}\n"
+            f"Total: {_formatear_pesos(total_persona)}"
+        )
+        ofertas.append((apellido, round(total_persona * 0.6)))
+
+    cuerpo = (
+        "Estimado Román:\n\n"
+        f"En esta causa, con audiencia {tipo_legible} fijada para el {fecha_legible} "
+        f"(en {dias_hasta_audiencia} días), se demanda lo siguiente:\n\n"
+        + "\n\n".join(bloques) + "\n\n"
+    )
+    if len(demandantes) > 1:
+        cuerpo += f"Total demandado (todos): {_formatear_pesos(total_general)}\n\n"
+
+    if len(ofertas) == 1:
+        apellido, oferta = ofertas[0]
+        pregunta = (
+            f"Por lo anterior, consulto si hago un ofrecimiento por {_formatear_pesos(oferta)} "
+            f"para don/doña {apellido}, equivalente al 60% del total"
+        )
+    else:
+        partes = [f"{_formatear_pesos(oferta)} para don/doña {apellido}" for apellido, oferta in ofertas]
+        pregunta = (
+            "Por lo anterior, consulto si hago un ofrecimiento por "
+            + ", ".join(partes[:-1]) + " y " + partes[-1] + ", equivalente al 60% del total"
+        )
+
+    return cuerpo + pregunta + "\n\n\nAtentamente,"
+
+
+def _armar_asunto_ofrecimiento(causa: dict, rit: str) -> str:
+    apellido = causa.get("demandante", "")
+    empresa = causa.get("empresa", "")
+    return f'Demanda laboral "{apellido} con {empresa}" Rit {rit}'
 
 
 def correr(
