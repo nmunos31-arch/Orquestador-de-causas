@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from gestion_causas.reasoning import preguntar
+from gestion_causas.reasoning import invocar_skill, preguntar
 
 
 SCHEMA_SIMPLE = {
@@ -287,3 +287,93 @@ class TestTimeoutSubidoA180:
     def test_timeout_segundos_es_180(self):
         from gestion_causas.reasoning import TIMEOUT_SEGUNDOS
         assert TIMEOUT_SEGUNDOS == 180
+
+
+class TestInvocarSkill:
+    def test_devuelve_ok_y_salida_cuando_ejecutar_no_lanza(self, tmp_path):
+        llamadas = []
+
+        def ejecutar_falso(prompt, carpeta, *, timeout):
+            llamadas.append((prompt, carpeta, timeout))
+            return "listo"
+
+        resultado = invocar_skill("/minuta-laboral X", tmp_path, ejecutar=ejecutar_falso)
+
+        assert resultado == {"ok": True, "salida": "listo"}
+        assert len(llamadas) == 1
+        prompt, carpeta, timeout = llamadas[0]
+        assert prompt == "/minuta-laboral X"
+        assert carpeta == tmp_path
+        from gestion_causas.reasoning import TIMEOUT_SKILL_SEGUNDOS
+        assert timeout == TIMEOUT_SKILL_SEGUNDOS
+
+    def test_devuelve_error_sin_lanzar_cuando_ejecutar_falla(self, tmp_path):
+        def ejecutar_falso(prompt, carpeta, *, timeout):
+            raise RuntimeError("claude -p terminó con código 1: boom")
+
+        resultado = invocar_skill("/minuta-laboral X", tmp_path, ejecutar=ejecutar_falso)
+
+        assert "error" in resultado
+        assert "boom" in resultado["error"]
+
+    def test_no_reintenta(self, tmp_path):
+        llamadas = []
+
+        def ejecutar_falso(prompt, carpeta, *, timeout):
+            llamadas.append(1)
+            raise RuntimeError("falla")
+
+        invocar_skill("/minuta-laboral X", tmp_path, ejecutar=ejecutar_falso)
+
+        assert len(llamadas) == 1
+
+    def test_respeta_timeout_explicito(self, tmp_path):
+        llamadas = []
+
+        def ejecutar_falso(prompt, carpeta, *, timeout):
+            llamadas.append(timeout)
+            return "ok"
+
+        invocar_skill("/minuta-laboral X", tmp_path, ejecutar=ejecutar_falso, timeout=42)
+
+        assert llamadas == [42]
+
+
+class TestEjecutarClaudeSkillResuelveRutaYPermisosAmplios:
+    def test_arma_argv_con_allowedtools_read_write_bash_y_add_dir(self, tmp_path, monkeypatch):
+        from gestion_causas.reasoning import _ejecutar_claude_skill
+
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: None)
+        monkeypatch.setattr("shutil.which", lambda nombre: "/usr/bin/claude")
+
+        capturado = {}
+
+        def run_falso(argv, **kwargs):
+            capturado["argv"] = argv
+            capturado["kwargs"] = kwargs
+            return subprocess.CompletedProcess(argv, 0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", run_falso)
+
+        salida = _ejecutar_claude_skill("/minuta-laboral X", tmp_path, timeout=60)
+
+        assert salida == "ok"
+        argv = capturado["argv"]
+        assert argv[0] == "/usr/bin/claude"
+        assert "--allowedTools" in argv
+        assert argv[argv.index("--allowedTools") + 1] == "Read,Write,Bash"
+        assert "--add-dir" in argv
+        assert argv[argv.index("--add-dir") + 1] == str(tmp_path)
+        assert capturado["kwargs"]["timeout"] == 60
+
+    def test_lanza_runtimeerror_si_exit_code_no_es_cero(self, tmp_path, monkeypatch):
+        from gestion_causas.reasoning import _ejecutar_claude_skill
+
+        monkeypatch.setattr("shutil.which", lambda nombre: "/usr/bin/claude")
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda argv, **k: subprocess.CompletedProcess(argv, 1, stdout="", stderr="boom"),
+        )
+
+        with pytest.raises(RuntimeError, match="boom"):
+            _ejecutar_claude_skill("/minuta-laboral X", tmp_path, timeout=60)

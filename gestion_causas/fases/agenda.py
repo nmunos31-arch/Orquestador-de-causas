@@ -1,13 +1,14 @@
-"""Driver Python de la fase 'agenda' — Plan A (ver plan de implementación
-docs/superpowers/plans/2026-09-17-driver-python-agenda-plan-a.md): pasos 1,
-2, 3 y 5 de subagentes/agenda.md. El paso 4 (invocación de la skill
-/minuta-laboral) es Agenda Plan B, todavía no migrado.
+"""Driver Python de la fase 'agenda' — Plan A + Plan B (ver planes de
+implementación docs/superpowers/plans/2026-09-17-driver-python-agenda-plan-a.md
+y docs/superpowers/plans/2026-09-17-driver-python-agenda-plan-b-minuta.md):
+los 5 pasos de subagentes/agenda.md.
 
 Revisa las causas activas, resuelve su próxima audiencia desde el mapa que
-el orquestador ya armó para toda la corrida, y en el hito de 14 días
-corridos antes de una audiencia Única o de Juicio deja un borrador de
-ofrecimiento a Román. Nunca envía correos (solo deja borradores) ni toca el
-calendario."""
+el orquestador ya armó para toda la corrida. En el hito de 14 días corridos
+antes de una audiencia Única o de Juicio deja un borrador de ofrecimiento a
+Román; en el hito de 4 días hábiles antes de una audiencia Única o
+Preparatoria invoca la skill `/minuta-laboral` sobre la carpeta de la causa.
+Nunca envía correos (solo deja borradores) ni toca el calendario."""
 
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ from gestion_causas import registro as registro_mod
 from gestion_causas.seguimiento import extraer_direccion
 
 TIPOS_CON_OFRECIMIENTO = {"Única", "Juicio"}
+TIPOS_CON_MINUTA = {"Única", "Preparatoria"}
 
 CUENTA_TRABAJO = "nmunoz@gomezyriesco.cl"
 
@@ -387,6 +389,100 @@ def _procesar_ofrecimiento(
     return True
 
 
+def _debe_generar_minuta(causa: dict, audiencia: dict, fecha_hoy: str) -> bool:
+    """True si corresponde invocar hoy la skill /minuta-laboral (paso 4 de
+    agenda.md): el tipo de audiencia es Única o Preparatoria (no Juicio — la
+    minuta de juicio tiene su propia lógica, fuera de este proyecto), la
+    causa no marcó `aplica_minuta_laboral: false`, no se generó ya
+    (`minuta_ejecutada`), y ya se cumplió — hoy o antes — el hito de 4 días
+    hábiles antes de la audiencia. A diferencia de `_debe_generar_ofrecimiento`,
+    no mira `estado_acuerdo`: la minuta de prueba sigue siendo necesaria
+    aunque haya un acuerdo en curso."""
+    if audiencia.get("tipo") not in TIPOS_CON_MINUTA:
+        return False
+    if causa.get("aplica_minuta_laboral") is False:
+        return False
+    if causa.get("minuta_ejecutada"):
+        return False
+    fecha_audiencia = audiencia.get("fecha")
+    if not fecha_audiencia:
+        return False
+    hito = dias_mod.dias_habiles_antes(fecha_audiencia, 4)
+    return date.fromisoformat(fecha_hoy) >= hito
+
+
+def _docs_minuta_existentes(carpeta: Path) -> set[str]:
+    """Nombres de archivo de los .docx en `carpeta` cuyo nombre menciona
+    "minuta" (case-insensitive) — se compara antes/después de invocar la
+    skill para detectar, por efecto observable, si generó un archivo nuevo
+    (un exit code 0 del subprocess no garantiza que la skill haya completado
+    su flujo)."""
+    return {p.name for p in carpeta.glob("*.docx") if "minuta" in p.name.lower()}
+
+
+def _invocar_minuta_laboral(carpeta: Path, rit: str) -> dict:
+    """Invoca la skill /minuta-laboral (sin tocarla — sigue viviendo aparte,
+    fuera de este rediseño) sobre la carpeta de la causa. Devuelve el dict
+    de `reasoning.invocar_skill` tal cual (`{"ok": True, ...}` o
+    `{"error": ...}`); el llamador decide qué hacer con el error."""
+    prompt = (
+        f"/minuta-laboral {carpeta}\n\n"
+        f"Trabajá únicamente sobre la carpeta de la causa {rit} indicada arriba "
+        "(ya tiene la plantilla, la demanda y los documentos de prueba disponibles)."
+    )
+    return reasoning.invocar_skill(prompt, carpeta)
+
+
+def _procesar_minuta(
+    causa: dict, audiencia: dict, fecha_hoy: str, ruta_registro_causas: Path, acciones: list[dict]
+) -> bool:
+    """Ejecuta el paso 4 completo para una causa (si corresponde): invoca la
+    skill /minuta-laboral y, si detecta que generó un .docx nuevo, registra
+    `minuta_ejecutada`. Devuelve True si se generó la minuta."""
+    rit = causa["rit"]
+    if not _debe_generar_minuta(causa, audiencia, fecha_hoy):
+        return False
+
+    carpeta_str = causa.get("carpeta")
+    carpeta = Path(carpeta_str) if carpeta_str else None
+    if not carpeta or not carpeta.exists():
+        acciones.append({
+            "rit": rit,
+            "que": (
+                "Tocó el hito de 4 días hábiles para la minuta, pero no se encontró "
+                "la carpeta de la causa — revisar a mano."
+            ),
+            "urgencia": "media",
+        })
+        return False
+
+    docs_antes = _docs_minuta_existentes(carpeta)
+    resultado = _invocar_minuta_laboral(carpeta, rit)
+    if resultado.get("error"):
+        acciones.append({
+            "rit": rit,
+            "que": f"No se pudo generar la minuta automáticamente: {resultado['error']}",
+            "urgencia": "media",
+        })
+        return False
+
+    docs_despues = _docs_minuta_existentes(carpeta)
+    if not (docs_despues - docs_antes):
+        acciones.append({
+            "rit": rit,
+            "que": (
+                "La skill /minuta-laboral terminó pero no se detectó una minuta nueva "
+                "en la carpeta de la causa — revisar a mano."
+            ),
+            "urgencia": "media",
+        })
+        return False
+
+    registro_mod.registrar_causa(rit, {"minuta_ejecutada": True}, ruta=ruta_registro_causas)
+    bitacora_mod.registrar("Minuta generada a 4 días hábiles de la audiencia", rit=rit)
+    return True
+
+
 def correr(
     contexto_corrida: dict,
     *,
@@ -411,6 +507,7 @@ def correr(
     acciones: list[dict] = []
     notas: list[dict] = []
     ofrecimientos_creados = 0
+    minutas_generadas = 0
     sin_evento = 0
 
     for causa in causas:
@@ -429,20 +526,24 @@ def correr(
             })
             continue
 
+        titulo = f"{causa.get('demandante', '')} con {causa.get('empresa', '')}"
         if _procesar_ofrecimiento(causa, audiencia, contexto_corrida["fecha_hoy"], ruta_registro_causas, acciones):
             ofrecimientos_creados += 1
-            items.append({
-                "rit": rit,
-                "titulo": f"{causa.get('demandante', '')} con {causa.get('empresa', '')}",
-                "detalle": "Borrador de ofrecimiento creado",
-            })
+            items.append({"rit": rit, "titulo": titulo, "detalle": "Borrador de ofrecimiento creado"})
+
+        # Hitos independientes (14 días corridos vs. 4 días hábiles antes de
+        # la audiencia): una causa puede disparar ambos el mismo día.
+        if _procesar_minuta(causa, audiencia, contexto_corrida["fecha_hoy"], ruta_registro_causas, acciones):
+            minutas_generadas += 1
+            items.append({"rit": rit, "titulo": titulo, "detalle": "Minuta de prueba generada"})
 
     resumen = {
         "fase": "agenda",
-        "titular": _armar_titular(ofrecimientos_creados),
+        "titular": _armar_titular(ofrecimientos_creados, minutas_generadas),
         "metricas": [
             {"etiqueta": "Causas revisadas", "valor": len(causas)},
             {"etiqueta": "Borradores de ofrecimiento creados", "valor": ofrecimientos_creados},
+            {"etiqueta": "Minutas generadas", "valor": minutas_generadas},
             {"etiqueta": "Sin evento de calendario todavía", "valor": sin_evento},
         ],
         "items": items,
@@ -452,8 +553,14 @@ def correr(
     return resumen
 
 
-def _armar_titular(ofrecimientos_creados: int) -> str:
-    if ofrecimientos_creados == 0:
+def _armar_titular(ofrecimientos_creados: int, minutas_generadas: int) -> str:
+    if ofrecimientos_creados == 0 and minutas_generadas == 0:
         return "Sin novedades"
-    plural = "es" if ofrecimientos_creados != 1 else ""
-    return f"{ofrecimientos_creados} borrador{plural} de ofrecimiento creado{plural}"
+    partes = []
+    if ofrecimientos_creados:
+        plural = "es" if ofrecimientos_creados != 1 else ""
+        partes.append(f"{ofrecimientos_creados} borrador{plural} de ofrecimiento creado{plural}")
+    if minutas_generadas:
+        plural = "s" if minutas_generadas != 1 else ""
+        partes.append(f"{minutas_generadas} minuta{plural} generada{plural}")
+    return ", ".join(partes)

@@ -75,7 +75,10 @@ class TestResolucionDeAudiencia:
         resumen = _correr_agenda(contexto, tmp_path)
 
         etiquetas = [m["etiqueta"] for m in resumen["metricas"]]
-        assert etiquetas == ["Causas revisadas", "Borradores de ofrecimiento creados", "Sin evento de calendario todavía"]
+        assert etiquetas == [
+            "Causas revisadas", "Borradores de ofrecimiento creados",
+            "Minutas generadas", "Sin evento de calendario todavía",
+        ]
 
 
 class TestDebeGenerarOfrecimiento:
@@ -112,6 +115,190 @@ class TestDebeGenerarOfrecimiento:
         # cerrada de estados conocidos.
         causa = {"estado_acuerdo": "acuerdo_verbal"}
         assert agenda._debe_generar_ofrecimiento(causa, self.AUDIENCIA_UNICA, "2026-10-02") is False
+
+
+class TestDebeGenerarMinuta:
+    AUDIENCIA_UNICA = {"fecha": "2026-10-15", "resumen": "Audiencia única", "tipo": "Única"}
+    AUDIENCIA_PREPARATORIA = {"fecha": "2026-10-15", "resumen": "Audiencia preparatoria", "tipo": "Preparatoria"}
+    AUDIENCIA_JUICIO = {"fecha": "2026-10-15", "resumen": "Audiencia de juicio", "tipo": "Juicio"}
+
+    def test_true_cuando_tipo_unica_y_hito_ya_paso(self):
+        assert agenda._debe_generar_minuta({}, self.AUDIENCIA_UNICA, "2026-10-14") is True
+
+    def test_true_cuando_tipo_preparatoria(self):
+        assert agenda._debe_generar_minuta({}, self.AUDIENCIA_PREPARATORIA, "2026-10-14") is True
+
+    def test_false_cuando_tipo_juicio(self):
+        assert agenda._debe_generar_minuta({}, self.AUDIENCIA_JUICIO, "2026-10-14") is False
+
+    def test_false_cuando_todavia_no_llega_el_hito(self):
+        assert agenda._debe_generar_minuta({}, self.AUDIENCIA_UNICA, "2026-10-01") is False
+
+    def test_false_cuando_causa_marca_aplica_minuta_laboral_false(self):
+        causa = {"aplica_minuta_laboral": False}
+        assert agenda._debe_generar_minuta(causa, self.AUDIENCIA_UNICA, "2026-10-14") is False
+
+    def test_false_cuando_ya_tiene_minuta_ejecutada(self):
+        causa = {"minuta_ejecutada": True}
+        assert agenda._debe_generar_minuta(causa, self.AUDIENCIA_UNICA, "2026-10-14") is False
+
+    def test_estado_acuerdo_no_bloquea_la_minuta(self):
+        # A diferencia del ofrecimiento, la minuta de prueba sigue
+        # generándose aunque haya un acuerdo en curso.
+        causa = {"estado_acuerdo": "pendiente_pago"}
+        assert agenda._debe_generar_minuta(causa, self.AUDIENCIA_UNICA, "2026-10-14") is True
+
+
+class TestProcesarMinutaIntegracion:
+    def _causa_lista_para_minuta(self, tmp_path, **extra):
+        carpeta = tmp_path / "Perez con Alvi"
+        carpeta.mkdir()
+        return _registrar_causa_activa(tmp_path, carpeta=str(carpeta), **extra), carpeta
+
+    AUDIENCIA_PREPARATORIA = {"fecha": "2026-10-15", "resumen": "Audiencia preparatoria", "tipo": "Preparatoria"}
+
+    def test_marca_minuta_ejecutada_cuando_aparece_un_docx_nuevo(self, tmp_path, monkeypatch):
+        ruta_registro, carpeta = self._causa_lista_para_minuta(tmp_path)
+        monkeypatch.setattr(agenda.bitacora_mod, "registrar", lambda *a, **k: None)
+
+        def invocar_falso(prompt, carpeta_arg):
+            assert "M-1-2026" in prompt
+            (carpeta_arg / "Minuta audiencia preparatoria M-1-2026.docx").write_bytes(b"docx falso")
+            return {"ok": True, "salida": ""}
+
+        monkeypatch.setattr(agenda.reasoning, "invocar_skill", invocar_falso)
+
+        acciones: list[dict] = []
+        creado = agenda._procesar_minuta(
+            {"rit": "M-1-2026", "carpeta": str(carpeta)}, self.AUDIENCIA_PREPARATORIA,
+            "2026-10-14", ruta_registro, acciones,
+        )
+
+        assert creado is True
+        assert acciones == []
+        entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
+        assert entrada["minuta_ejecutada"] is True
+
+    def test_no_marca_el_flag_si_la_skill_devuelve_error(self, tmp_path, monkeypatch):
+        ruta_registro, carpeta = self._causa_lista_para_minuta(tmp_path)
+
+        monkeypatch.setattr(
+            agenda.reasoning, "invocar_skill",
+            lambda prompt, carpeta_arg: {"error": "timeout"},
+        )
+
+        acciones: list[dict] = []
+        creado = agenda._procesar_minuta(
+            {"rit": "M-1-2026", "carpeta": str(carpeta)}, self.AUDIENCIA_PREPARATORIA,
+            "2026-10-14", ruta_registro, acciones,
+        )
+
+        assert creado is False
+        assert len(acciones) == 1
+        assert "timeout" in acciones[0]["que"]
+        entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
+        assert entrada.get("minuta_ejecutada") is not True
+
+    def test_no_marca_el_flag_si_no_aparece_ningun_docx_nuevo(self, tmp_path, monkeypatch):
+        ruta_registro, carpeta = self._causa_lista_para_minuta(tmp_path)
+
+        monkeypatch.setattr(
+            agenda.reasoning, "invocar_skill",
+            lambda prompt, carpeta_arg: {"ok": True, "salida": ""},
+        )
+
+        acciones: list[dict] = []
+        creado = agenda._procesar_minuta(
+            {"rit": "M-1-2026", "carpeta": str(carpeta)}, self.AUDIENCIA_PREPARATORIA,
+            "2026-10-14", ruta_registro, acciones,
+        )
+
+        assert creado is False
+        assert len(acciones) == 1
+        assert "no se detectó una minuta nueva" in acciones[0]["que"]
+        entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
+        assert entrada.get("minuta_ejecutada") is not True
+
+    def test_anota_accion_si_no_existe_la_carpeta(self, tmp_path):
+        carpeta_inexistente = tmp_path / "no existe"
+        ruta_registro = _registrar_causa_activa(tmp_path, carpeta=str(carpeta_inexistente))
+
+        acciones: list[dict] = []
+        creado = agenda._procesar_minuta(
+            {"rit": "M-1-2026", "carpeta": str(carpeta_inexistente)}, self.AUDIENCIA_PREPARATORIA,
+            "2026-10-14", ruta_registro, acciones,
+        )
+
+        assert creado is False
+        assert len(acciones) == 1
+        assert "no se encontró la carpeta" in acciones[0]["que"]
+
+    def test_no_confunde_un_docx_de_minuta_preexistente_con_uno_nuevo(self, tmp_path, monkeypatch):
+        """Si la carpeta ya tenía una minuta de una corrida anterior (re-
+        ejecución de la skill) y la skill no la regenera, no debe marcarse
+        como recién creada."""
+        ruta_registro, carpeta = self._causa_lista_para_minuta(tmp_path)
+        (carpeta / "Minuta audiencia preparatoria M-1-2026.docx").write_bytes(b"ya existia")
+
+        monkeypatch.setattr(
+            agenda.reasoning, "invocar_skill",
+            lambda prompt, carpeta_arg: {"ok": True, "salida": ""},
+        )
+
+        acciones: list[dict] = []
+        creado = agenda._procesar_minuta(
+            {"rit": "M-1-2026", "carpeta": str(carpeta)}, self.AUDIENCIA_PREPARATORIA,
+            "2026-10-14", ruta_registro, acciones,
+        )
+
+        assert creado is False
+        assert len(acciones) == 1
+
+
+class TestCorrerConAmbosHitosElMismoDia:
+    def test_una_causa_puede_disparar_ofrecimiento_y_minuta_el_mismo_dia(self, tmp_path, monkeypatch):
+        carpeta = tmp_path / "Perez con Alvi"
+        carpeta.mkdir()
+        (carpeta / "demanda.pdf").write_bytes(b"%PDF-1.4 contenido falso")
+        ruta_registro = _registrar_causa_activa(tmp_path, carpeta=str(carpeta))
+        # Única con audiencia el 2026-10-15: hito de 14 días corridos cae el
+        # 2026-10-01, hito de 4 días hábiles cae bastante después — se elige
+        # una fecha_hoy posterior a ambos para que disparen juntos.
+        ruta_mapa = _mapa_audiencias(tmp_path, {
+            "M-1-2026": {"fecha": "2026-10-15", "resumen": "Audiencia única", "tipo": "Única"},
+        })
+
+        monkeypatch.setattr(
+            agenda.reasoning, "preguntar",
+            lambda *a, **k: {
+                "demandantes": [{"apellido": "Pérez", "monto_recargo_30": 500000, "monto_afc": 200000}],
+                "hay_discrepancia": False, "detalle_discrepancia": "",
+            },
+        )
+
+        def invocar_skill_falso(prompt, carpeta_arg):
+            (carpeta_arg / "Minuta audiencia única M-1-2026.docx").write_bytes(b"docx falso")
+            return {"ok": True, "salida": ""}
+
+        monkeypatch.setattr(agenda.reasoning, "invocar_skill", invocar_skill_falso)
+        monkeypatch.setattr(agenda.bitacora_mod, "registrar", lambda *a, **k: None)
+        monkeypatch.setattr(agenda.gmail_client, "buscar_hilos", lambda query, **k: [])
+        monkeypatch.setattr(agenda.gmail_client, "buscar_borrador_por_asunto", lambda fragmento, **k: [])
+        monkeypatch.setattr(agenda.gmail_client, "leer_hilo", lambda thread_id, **k: [])
+        monkeypatch.setattr(agenda.gmail_client, "crear_borrador", lambda *a, **k: {"id": "draft-1"})
+
+        contexto = {"fecha_hoy": "2026-10-10", "mapa_audiencias": {"ruta": str(ruta_mapa)}}
+        resumen = _correr_agenda(contexto, tmp_path, ruta_registro_causas=ruta_registro)
+
+        assert resumen["metricas"][1] == {"etiqueta": "Borradores de ofrecimiento creados", "valor": 1}
+        assert resumen["metricas"][2] == {"etiqueta": "Minutas generadas", "valor": 1}
+        detalles = {item["detalle"] for item in resumen["items"]}
+        assert detalles == {"Borrador de ofrecimiento creado", "Minuta de prueba generada"}
+        assert resumen["titular"] == "1 borrador de ofrecimiento creado, 1 minuta generada"
+
+        entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
+        assert entrada["oferta_borrador_creado"] is True
+        assert entrada["minuta_ejecutada"] is True
 
 
 class TestDemandantesValidos:

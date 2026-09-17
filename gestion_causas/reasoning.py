@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 
 TIMEOUT_SEGUNDOS = 180
+TIMEOUT_SKILL_SEGUNDOS = 1800
 
 
 def preguntar(
@@ -69,6 +70,61 @@ def preguntar(
             f"Última respuesta: {error_previo[:500]!r}"
         )
     }
+
+
+def invocar_skill(
+    prompt: str, carpeta: Path, *, ejecutar=None, timeout: int = TIMEOUT_SKILL_SEGUNDOS
+) -> dict:
+    """Invoca una skill de Claude Code (ej. `/minuta-laboral`) dejándola operar
+    con permisos amplios (`Read`, `Write`, `Bash`) pero acotados a `carpeta` —
+    a diferencia de `preguntar`, que solo permite `Read` porque su salida es
+    JSON acotado por schema. Se usa para pasos que producen archivos (una
+    skill que genera un `.docx`/PDF), no una respuesta estructurada.
+
+    No parsea JSON ni reintenta: un prompt de skill no es determinístico de
+    la misma forma que un JSON mal formado, y reintentar podría duplicar
+    trabajo de una skill que ya escribió archivos parciales. Devuelve
+    `{"ok": True, "salida": <stdout>}` si el subprocess termina con exit code
+    0, o `{"error": "<detalle>"}` (sin lanzar excepción) si `ejecutar` falla
+    (timeout, binario no encontrado, exit code distinto de cero, etc.) — el
+    llamador decide qué hacer, típicamente anotarlo en `acciones` del resumen
+    y no marcar el paso como completado, para que se reintente en la corrida
+    siguiente."""
+    ejecutar = ejecutar or _ejecutar_claude_skill
+    try:
+        salida = ejecutar(prompt, carpeta, timeout=timeout)
+    except Exception as exc:  # noqa: BLE001 - una llamada externa (subprocess) no debe tumbar el batch
+        return {"error": f"{type(exc).__name__}: {exc}"}
+    return {"ok": True, "salida": salida}
+
+
+def _ejecutar_claude_skill(prompt: str, carpeta: Path, *, timeout: int) -> str:
+    """Mismo patrón de invocación que `_ejecutar_claude` (resolver `claude`
+    con `shutil.which`, prompt por stdin, `encoding="utf-8"` explícito — ver
+    docstring de `_ejecutar_claude` para el detalle de cada uno), pero con
+    `--allowedTools "Read,Write,Bash"` en vez de solo `Read`: la skill
+    instala paquetes de Python (`pymupdf`, `pypdf`) y escribe el `.docx`/PDF
+    generado en `carpeta`. Nunca se usa `--dangerously-skip-permissions`."""
+    ejecutable = shutil.which("claude")
+    if ejecutable is None:
+        raise RuntimeError("No se encontró el ejecutable 'claude' en el PATH.")
+
+    argv = [
+        ejecutable, "-p",
+        "--allowedTools", "Read,Write,Bash",
+        "--add-dir", str(carpeta),
+        "--strict-mcp-config",
+    ]
+
+    resultado = subprocess.run(
+        argv,
+        input=prompt,
+        capture_output=True, text=True, encoding="utf-8", timeout=timeout, check=False,
+    )
+    if resultado.returncode != 0:
+        detalle = resultado.stderr[:500] or resultado.stdout[:500]
+        raise RuntimeError(f"claude -p (skill) terminó con código {resultado.returncode}: {detalle}")
+    return resultado.stdout
 
 
 def _armar_prompt(

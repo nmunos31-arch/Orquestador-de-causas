@@ -15,7 +15,7 @@ diseño completo, y `docs/superpowers/plans/` para el historial de planes de imp
 |---|---|
 | `goteo` | ✅ migrada, validada en vivo |
 | `smu` | ✅ migrada (ingesta + borrador de documentos), validada en vivo |
-| `agenda` | 🟡 Plan A migrado (borrador de ofrecimiento); Plan B (`/minuta-laboral`) pendiente |
+| `agenda` | ✅ migrada (Plan A: borrador de ofrecimiento; Plan B: invocación de `/minuta-laboral`) |
 | `seguimiento` | ⏳ pendiente |
 | `calendario` | ⏳ pendiente |
 
