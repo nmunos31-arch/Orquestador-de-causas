@@ -11,12 +11,34 @@ calendario."""
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
+from gestion_causas import agenda as dias_mod
 from gestion_causas import mapas as mapas_mod
 from gestion_causas import registro as registro_mod
 
 TIPOS_CON_OFRECIMIENTO = {"Única", "Juicio"}
+
+
+def _debe_generar_ofrecimiento(causa: dict, audiencia: dict, fecha_hoy: str) -> bool:
+    """True si corresponde generar hoy el borrador de ofrecimiento (paso 3
+    de agenda.md): el tipo de audiencia es Única o Juicio, la causa no
+    marcó `aplica_ofrecimiento: false` (causas que no son una demanda
+    laboral estándar contra la empresa), no se generó ya
+    (`oferta_borrador_creado`), y ya se cumplió — hoy o antes — el hito de
+    14 días corridos antes de la audiencia."""
+    if audiencia.get("tipo") not in TIPOS_CON_OFRECIMIENTO:
+        return False
+    if causa.get("aplica_ofrecimiento") is False:
+        return False
+    if causa.get("oferta_borrador_creado"):
+        return False
+    fecha_audiencia = audiencia.get("fecha")
+    if not fecha_audiencia:
+        return False
+    hito = dias_mod.dias_corridos_antes(fecha_audiencia, 14)
+    return date.fromisoformat(fecha_hoy) >= hito
 
 
 def correr(

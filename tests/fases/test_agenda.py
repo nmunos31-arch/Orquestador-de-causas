@@ -75,3 +75,29 @@ class TestResolucionDeAudiencia:
 
         etiquetas = [m["etiqueta"] for m in resumen["metricas"]]
         assert etiquetas == ["Causas revisadas", "Borradores de ofrecimiento creados", "Sin evento de calendario todavía"]
+
+
+class TestDebeGenerarOfrecimiento:
+    AUDIENCIA_UNICA = {"fecha": "2026-10-15", "resumen": "Audiencia única", "tipo": "Única"}
+    AUDIENCIA_JUICIO = {"fecha": "2026-10-15", "resumen": "Audiencia de juicio", "tipo": "Juicio"}
+    AUDIENCIA_PREPARATORIA = {"fecha": "2026-10-15", "resumen": "Audiencia preparatoria", "tipo": "Preparatoria"}
+
+    def test_true_cuando_tipo_unica_y_hito_ya_paso(self):
+        assert agenda._debe_generar_ofrecimiento({}, self.AUDIENCIA_UNICA, "2026-10-02") is True
+
+    def test_true_cuando_tipo_juicio_y_hoy_es_exactamente_el_hito(self):
+        assert agenda._debe_generar_ofrecimiento({}, self.AUDIENCIA_JUICIO, "2026-10-01") is True
+
+    def test_false_cuando_tipo_preparatoria(self):
+        assert agenda._debe_generar_ofrecimiento({}, self.AUDIENCIA_PREPARATORIA, "2026-10-15") is False
+
+    def test_false_cuando_todavia_no_llega_el_hito(self):
+        assert agenda._debe_generar_ofrecimiento({}, self.AUDIENCIA_UNICA, "2026-09-30") is False
+
+    def test_false_cuando_causa_marca_aplica_ofrecimiento_false(self):
+        causa = {"aplica_ofrecimiento": False}
+        assert agenda._debe_generar_ofrecimiento(causa, self.AUDIENCIA_UNICA, "2026-10-02") is False
+
+    def test_false_cuando_ya_tiene_oferta_borrador_creado(self):
+        causa = {"oferta_borrador_creado": True}
+        assert agenda._debe_generar_ofrecimiento(causa, self.AUDIENCIA_UNICA, "2026-10-02") is False
