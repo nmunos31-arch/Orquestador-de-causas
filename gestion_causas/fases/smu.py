@@ -64,6 +64,8 @@ def correr(
     acciones: list[dict] = []
     notas: list[dict] = []
     causas_nuevas = 0
+    borradores_creados = 0
+    eerr_reusado_contador = 0
 
     for hilo_resumen in hilos:
         thread_id = hilo_resumen["id"]
@@ -155,6 +157,7 @@ def correr(
                         carpetas_mod.copiar_archivo_local(
                             carpeta_reusable / nombre_eerr, carpeta, nombre_eerr
                         )
+                        eerr_reusado_contador += 1
 
         # El resumen narrativo solo hace falta para la fila del Excel — Preunic y
         # Salcobrand nunca tienen fila (ver EMPRESAS_SIN_EXCEL), así que ni siquiera
@@ -184,6 +187,20 @@ def correr(
                         "urgencia": "alta",
                     })
 
+        documentos_solicitados: list[str] = []
+        draft_id = None
+        if demanda_guardada:
+            documentos_solicitados = _armar_lista_documentos(ajustes, eerr_reusado=bool(eerr_reusable))
+            if not gmail_client.listar_borradores_de_hilo(thread_id):
+                destinatario = extraer_direccion(primer_mensaje.get("sender", ""))
+                asunto = f"Re: {primer_mensaje.get('subject', '')}"
+                cuerpo_html = _cuerpo_html_lista(documentos_solicitados)
+                borrador = gmail_client.crear_borrador(
+                    destinatario, asunto, cuerpo_html, thread_id=thread_id, html=True
+                )
+                draft_id = borrador.get("id")
+                borradores_creados += 1
+
         registro_mod.registrar_causa(
             rit,
             {
@@ -195,6 +212,8 @@ def correr(
                 "aplica_excel": empresa not in EMPRESAS_SIN_EXCEL,
                 "ceco": ceco,
                 "fecha_despido": ajustes.get("fecha_despido"),
+                "borrador_documentos_draft_id": draft_id,
+                "documentos_solicitados": documentos_solicitados,
             },
             ruta=ruta_registro_causas,
         )
@@ -219,6 +238,8 @@ def correr(
         "titular": _armar_titular(causas_nuevas),
         "metricas": [
             {"etiqueta": "Causas nuevas", "valor": causas_nuevas},
+            {"etiqueta": "Borradores de documentos creados", "valor": borradores_creados},
+            {"etiqueta": "EERR reusado", "valor": eerr_reusado_contador},
         ],
         "items": items,
         "acciones": acciones,
@@ -253,6 +274,16 @@ def _armar_lista_documentos(ajustes: dict, eerr_reusado: bool) -> list[str]:
 
     indice_testigos = lista.index("Testigos")
     return lista[:indice_testigos] + ajustes_a_insertar + lista[indice_testigos:]
+
+
+def _cuerpo_html_lista(documentos: list[str]) -> str:
+    """Cuerpo del borrador: únicamente la lista numerada de documentos, sin
+    saludo ni firma (ver subagentes/smu.md paso 2k.5). Se manda como HTML
+    (`<ol><li>`) para que Gmail la reciba como lista numerada nativa — así
+    se puede insertar o quitar un documento en el medio sin renumerar el
+    resto a mano."""
+    items = "".join(f"<li>{documento}</li>" for documento in documentos)
+    return f"<ol>{items}</ol>"
 
 
 SCHEMA_RESUMEN = {

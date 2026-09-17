@@ -127,6 +127,12 @@ class TestCrearCarpetaYGuardarDemanda:
         monkeypatch.setattr(smu.gmail_client, "descargar_adjunto", lambda message_id, attachment_id: b"contenido pdf falso")
         monkeypatch.setattr(smu.gmail_client, "obtener_o_crear_etiqueta", lambda nombre, color=None: f"label-{nombre}")
         monkeypatch.setattr(smu.gmail_client, "aplicar_etiqueta_a_hilo", lambda thread_id, label_id: None)
+        monkeypatch.setattr(smu.gmail_client, "listar_borradores_de_hilo", lambda thread_id: [])
+        monkeypatch.setattr(smu.gmail_client, "crear_borrador", lambda *a, **k: {"id": "draft-1"})
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None: (
+            {"fecha_despido": "2026-01-08", "ajuste_base_calculo": False, "otros_ajustes": []}
+            if schema is smu.SCHEMA_AJUSTES_DEMANDA else {"resumen": "Texto de prueba."}
+        ))
 
         monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
         monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: [{
@@ -139,7 +145,11 @@ class TestCrearCarpetaYGuardarDemanda:
         resumen = smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=tmp_path / "registro_causas.json")
 
         assert (carpeta_causa / "demanda.pdf").exists()
-        assert resumen["metricas"] == [{"etiqueta": "Causas nuevas", "valor": 1}]
+        assert resumen["metricas"] == [
+            {"etiqueta": "Causas nuevas", "valor": 1},
+            {"etiqueta": "Borradores de documentos creados", "valor": 1},
+            {"etiqueta": "EERR reusado", "valor": 0},
+        ]
 
 
 class TestResumenYExcel:
@@ -150,6 +160,12 @@ class TestResumenYExcel:
         monkeypatch.setattr(smu.gmail_client, "descargar_adjunto", lambda message_id, attachment_id: b"contenido pdf falso")
         monkeypatch.setattr(smu.gmail_client, "obtener_o_crear_etiqueta", lambda nombre, color=None: "label-id-1")
         monkeypatch.setattr(smu.gmail_client, "aplicar_etiqueta_a_hilo", lambda thread_id, label_id: None)
+        monkeypatch.setattr(smu.gmail_client, "listar_borradores_de_hilo", lambda thread_id: [])
+        monkeypatch.setattr(smu.gmail_client, "crear_borrador", lambda *a, **k: {"id": "draft-1"})
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None: (
+            {"fecha_despido": "2026-01-08", "ajuste_base_calculo": False, "otros_ajustes": []}
+            if schema is smu.SCHEMA_AJUSTES_DEMANDA else {"resumen": "Texto de prueba."}
+        ))
         monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
         cuerpo = CUERPO_CUADRO_ALVI.replace("Alvi", empresa) if empresa != "Alvi" else CUERPO_CUADRO_ALVI
         monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: [{
@@ -204,6 +220,8 @@ class TestRegistrarEtiquetarYMarcarProcesado:
         etiquetas_aplicadas = []
         monkeypatch.setattr(smu.gmail_client, "obtener_o_crear_etiqueta", lambda nombre, color=None: f"label-{nombre}")
         monkeypatch.setattr(smu.gmail_client, "aplicar_etiqueta_a_hilo", lambda thread_id, label_id: etiquetas_aplicadas.append((thread_id, label_id)))
+        monkeypatch.setattr(smu.gmail_client, "listar_borradores_de_hilo", lambda thread_id: [])
+        monkeypatch.setattr(smu.gmail_client, "crear_borrador", lambda *a, **k: {"id": "draft-1"})
 
         monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
         monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: [{
@@ -436,3 +454,73 @@ class TestArmarListaDocumentos:
         indice_testigos = lista.index("Testigos")
         assert lista[indice_testigos - 2] == "Últimas 6 liquidaciones de remuneraciones"
         assert lista[indice_testigos - 1] == "Antecedentes del préstamo"
+
+
+class TestCrearBorradorDeDocumentos:
+    def _monkeypatch_comunes(self, monkeypatch, tmp_path):
+        carpeta_causa = tmp_path / "Minutas" / "Perez con Alvi M-1-2026"
+        monkeypatch.setattr(smu.carpetas_mod, "buscar_carpeta_existente_por_rit", lambda rit: None)
+        monkeypatch.setattr(smu.carpetas_mod, "crear_carpeta_causa", lambda apellido, empresa, rit: carpeta_causa)
+        monkeypatch.setattr(smu.gmail_client, "descargar_adjunto", lambda message_id, attachment_id: b"contenido pdf falso")
+        monkeypatch.setattr(smu.gmail_client, "obtener_o_crear_etiqueta", lambda nombre, color=None: "label-id-1")
+        monkeypatch.setattr(smu.gmail_client, "aplicar_etiqueta_a_hilo", lambda thread_id, label_id: None)
+        monkeypatch.setattr(smu, "agregar_causa", lambda ruta_excel, datos: {"agregada": True, "fila": 10})
+        monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
+        monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: [{
+            "id": "msg-1", "thread_id": "thread-1", "sender": "persona@smu.cl", "subject": "DEMANDA Rit M-1-2026",
+            "cuerpo_texto": CUERPO_CUADRO_ALVI, "adjuntos": [
+                {"filename": "demanda.pdf", "attachment_id": "att-1", "mime_type": "application/pdf", "size": 50000},
+            ],
+        }])
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None: (
+            {"fecha_despido": "2026-01-08", "ajuste_base_calculo": False, "otros_ajustes": []}
+            if schema is smu.SCHEMA_AJUSTES_DEMANDA else {"resumen": "Texto de prueba."}
+        ))
+        return carpeta_causa
+
+    def test_crea_el_borrador_como_respuesta_del_hilo_con_lista_html(self, tmp_path, monkeypatch):
+        self._monkeypatch_comunes(monkeypatch, tmp_path)
+        monkeypatch.setattr(smu.gmail_client, "listar_borradores_de_hilo", lambda thread_id: [])
+
+        llamadas = []
+        monkeypatch.setattr(smu.gmail_client, "crear_borrador", lambda *a, **k: llamadas.append((a, k)) or {"id": "draft-1"})
+
+        ruta_registro = tmp_path / "registro_causas.json"
+        smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=ruta_registro)
+
+        assert len(llamadas) == 1
+        args, kwargs = llamadas[0]
+        assert args[0] == "persona@smu.cl"
+        assert "M-1-2026" in args[1] or "DEMANDA" in args[1]
+        assert "<ol>" in args[2] and "<li>Contrato de trabajo y anexos</li>" in args[2]
+        assert kwargs["thread_id"] == "thread-1"
+        assert kwargs["html"] is True
+
+        entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
+        assert entrada["borrador_documentos_draft_id"] == "draft-1"
+        assert entrada["documentos_solicitados"][0] == "Contrato de trabajo y anexos"
+
+    def test_no_duplica_borrador_si_la_cadena_ya_tiene_uno(self, tmp_path, monkeypatch):
+        self._monkeypatch_comunes(monkeypatch, tmp_path)
+        monkeypatch.setattr(smu.gmail_client, "listar_borradores_de_hilo", lambda thread_id: [{"id": "draft-viejo"}])
+
+        llamadas = []
+        monkeypatch.setattr(smu.gmail_client, "crear_borrador", lambda *a, **k: llamadas.append(1) or {"id": "draft-nuevo"})
+
+        ruta_registro = tmp_path / "registro_causas.json"
+        smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=ruta_registro)
+
+        assert llamadas == []
+        entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
+        assert entrada["borrador_documentos_draft_id"] is None
+
+    def test_metricas_incluyen_borradores_creados_y_eerr_reusado(self, tmp_path, monkeypatch):
+        self._monkeypatch_comunes(monkeypatch, tmp_path)
+        monkeypatch.setattr(smu.gmail_client, "listar_borradores_de_hilo", lambda thread_id: [])
+        monkeypatch.setattr(smu.gmail_client, "crear_borrador", lambda *a, **k: {"id": "draft-1"})
+
+        resumen = smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=tmp_path / "registro_causas.json")
+
+        etiquetas = {m["etiqueta"] for m in resumen["metricas"]}
+        assert "Borradores de documentos creados" in etiquetas
+        assert "EERR reusado" in etiquetas
