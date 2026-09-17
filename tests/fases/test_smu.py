@@ -4,6 +4,16 @@ from gestion_causas import registro as registro_mod
 from gestion_causas.fases import smu
 
 
+class TestRutaActualizadorInformes:
+    def test_usa_el_valor_por_defecto_si_no_hay_variable_de_entorno(self, monkeypatch):
+        monkeypatch.delenv("RUTA_ACTUALIZADOR_INFORMES", raising=False)
+        assert smu._ruta_actualizador_informes() == smu._RUTA_ACTUALIZADOR_INFORMES_DEFAULT
+
+    def test_usa_la_variable_de_entorno_si_esta_definida(self, monkeypatch):
+        monkeypatch.setenv("RUTA_ACTUALIZADOR_INFORMES", "D:\\otra\\ruta")
+        assert smu._ruta_actualizador_informes() == "D:\\otra\\ruta"
+
+
 class TestCorrerSinHilosNuevos:
     def test_devuelve_resumen_sin_novedades(self, tmp_path, monkeypatch):
         monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])

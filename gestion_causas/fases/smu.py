@@ -14,10 +14,11 @@ ningún mapa previo, a diferencia de goteo."""
 from __future__ import annotations
 
 import html
+import os
 import re
+import sys
 from pathlib import Path
 
-from actualizar_informe_juicios import RUTA_EXCEL_JUICIOS, agregar_causa
 from gestion_causas import bitacora as bitacora_mod
 from gestion_causas import carpetas as carpetas_mod
 from gestion_causas import gmail_client
@@ -27,6 +28,33 @@ from gestion_causas.cuadro_resumen import cuadro_completo, extraer_campos_cuadro
 from gestion_causas.empresas import normalizar_empresa
 from gestion_causas.gmail_client import COLOR_POR_EMPRESA, EMPRESAS_SIN_EXCEL, ETIQUETA_PROCESADO
 from gestion_causas.seguimiento import extraer_direccion
+
+# `actualizar_informe_juicios.py` vive en un repo/carpeta separado del de
+# gestion_causas (es un script propio para actualizar el Excel de Juicios
+# Vigentes, sin relación funcional con esta migración) — a diferencia de
+# normalizar_rit en registro.py (duplicado deliberado por ser trivial),
+# escribir filas en el Excel es demasiado código para duplicar sin
+# arriesgar que las dos copias diverjan, así que en vez de importarlo como
+# paquete se agrega su carpeta a sys.path. La ruta es configurable con la
+# variable de entorno RUTA_ACTUALIZADOR_INFORMES para no hardcodear la
+# máquina de una sola persona en el código de un repo que en algún momento
+# podría correr en otra.
+_RUTA_ACTUALIZADOR_INFORMES_DEFAULT = r"C:\Users\usuario\Documents\Temporal 2\Actualizador de informes"
+
+
+def _ruta_actualizador_informes() -> str:
+    return os.environ.get("RUTA_ACTUALIZADOR_INFORMES", _RUTA_ACTUALIZADOR_INFORMES_DEFAULT)
+
+
+def _importar_actualizador_informe_juicios():
+    ruta = _ruta_actualizador_informes()
+    if ruta not in sys.path:
+        sys.path.insert(0, ruta)
+    from actualizar_informe_juicios import RUTA_EXCEL_JUICIOS, agregar_causa
+    return RUTA_EXCEL_JUICIOS, agregar_causa
+
+
+RUTA_EXCEL_JUICIOS, agregar_causa = _importar_actualizador_informe_juicios()
 
 QUERY_CANDIDATOS = (
     'from:(smu.cl OR sb.cl OR gomezyriesco.cl) subject:DEMANDA '
