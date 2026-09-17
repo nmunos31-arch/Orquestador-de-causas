@@ -524,3 +524,15 @@ class TestCrearBorradorDeDocumentos:
         etiquetas = {m["etiqueta"] for m in resumen["metricas"]}
         assert "Borradores de documentos creados" in etiquetas
         assert "EERR reusado" in etiquetas
+
+    def test_bitacora_menciona_el_borrador_creado(self, tmp_path, monkeypatch):
+        self._monkeypatch_comunes(monkeypatch, tmp_path)
+        monkeypatch.setattr(smu.gmail_client, "listar_borradores_de_hilo", lambda thread_id: [])
+        monkeypatch.setattr(smu.gmail_client, "crear_borrador", lambda *a, **k: {"id": "draft-1"})
+
+        mensajes_bitacora = []
+        monkeypatch.setattr(smu.bitacora_mod, "registrar", lambda mensaje, rit=None: mensajes_bitacora.append(mensaje))
+
+        smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=tmp_path / "registro_causas.json")
+
+        assert any("borrador" in m.lower() for m in mensajes_bitacora)

@@ -226,7 +226,8 @@ def correr(
 
         bitacora_mod.registrar(
             f"Causa nueva registrada ({empresa}), carpeta '{carpeta.name}'"
-            + ("" if demanda_guardada else " — sin demanda adjunta, súbela a mano"),
+            + ("" if demanda_guardada else " — sin demanda adjunta, súbela a mano")
+            + (f"; borrador de documentos creado ({len(documentos_solicitados)} items)" if draft_id else ""),
             rit=rit,
         )
 
