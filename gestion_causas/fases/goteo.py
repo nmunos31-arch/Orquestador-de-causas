@@ -17,6 +17,7 @@ from pathlib import Path
 from gestion_causas import bitacora as bitacora_mod
 from gestion_causas import carpetas as carpetas_mod
 from gestion_causas import gmail_client
+from gestion_causas import mapas as mapas_mod
 from gestion_causas import registro as registro_mod
 from gestion_causas import reasoning
 from gestion_causas.carpetas import carpeta_destino_por_tipo_audiencia
@@ -200,7 +201,7 @@ def correr(
         }
 
     mapa_hilos = _leer_mapa_hilos(contexto_corrida)
-    mapa_audiencias = _leer_mapa_audiencias(contexto_corrida)
+    mapa_audiencias = mapas_mod.leer_mapa_audiencias(contexto_corrida)
 
     items: list[dict] = []
     acciones: list[dict] = []
@@ -319,14 +320,6 @@ def _leer_mapa_hilos(contexto_corrida: dict) -> dict:
         })
     mapa["_notas"] = notas
     return mapa
-
-
-def _leer_mapa_audiencias(contexto_corrida: dict) -> dict:
-    info = contexto_corrida.get("mapa_audiencias") or {}
-    ruta = info.get("ruta")
-    if not ruta or not Path(ruta).exists():
-        return {"rit_a_audiencia": {}}
-    return json.loads(Path(ruta).read_text(encoding="utf-8"))
 
 
 def _armar_titular(con_documentos_nuevos: int, identificados_eerr: int) -> str:
