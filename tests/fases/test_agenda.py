@@ -103,6 +103,54 @@ class TestDebeGenerarOfrecimiento:
         causa = {"oferta_borrador_creado": True}
         assert agenda._debe_generar_ofrecimiento(causa, self.AUDIENCIA_UNICA, "2026-10-02") is False
 
+    def test_false_cuando_causa_ya_tiene_estado_acuerdo(self):
+        causa = {"estado_acuerdo": "pendiente_pago"}
+        assert agenda._debe_generar_ofrecimiento(causa, self.AUDIENCIA_UNICA, "2026-10-02") is False
+
+    def test_false_cuando_estado_acuerdo_es_otro_valor_no_vacio(self):
+        # El punto es "hay un proceso de acuerdo en curso", no una lista
+        # cerrada de estados conocidos.
+        causa = {"estado_acuerdo": "acuerdo_verbal"}
+        assert agenda._debe_generar_ofrecimiento(causa, self.AUDIENCIA_UNICA, "2026-10-02") is False
+
+
+class TestDemandantesValidos:
+    def _evaluacion_valida(self, **overrides):
+        base = {
+            "demandantes": [{"apellido": "Pérez", "monto_recargo_30": 500000, "monto_afc": 200000}],
+            "hay_discrepancia": False,
+            "detalle_discrepancia": "",
+        }
+        base.update(overrides)
+        return base
+
+    def test_devuelve_la_lista_cuando_es_valida(self):
+        evaluacion = self._evaluacion_valida()
+        assert agenda._demandantes_validos(evaluacion) == evaluacion["demandantes"]
+
+    def test_none_cuando_falta_la_clave_demandantes(self):
+        evaluacion = {"hay_discrepancia": False, "detalle_discrepancia": ""}
+        assert agenda._demandantes_validos(evaluacion) is None
+
+    def test_none_cuando_demandantes_es_lista_vacia(self):
+        evaluacion = self._evaluacion_valida(demandantes=[])
+        assert agenda._demandantes_validos(evaluacion) is None
+
+    def test_none_cuando_un_monto_es_string_en_vez_de_entero(self):
+        evaluacion = self._evaluacion_valida(
+            demandantes=[{"apellido": "Pérez", "monto_recargo_30": "500000", "monto_afc": 200000}]
+        )
+        assert agenda._demandantes_validos(evaluacion) is None
+
+    def test_none_cuando_falta_apellido(self):
+        evaluacion = self._evaluacion_valida(
+            demandantes=[{"monto_recargo_30": 500000, "monto_afc": 200000}]
+        )
+        assert agenda._demandantes_validos(evaluacion) is None
+
+    def test_none_cuando_la_respuesta_no_es_un_dict(self):
+        assert agenda._demandantes_validos(["no", "es", "un", "dict"]) is None
+
 
 class TestEvaluarMontosOfrecimiento:
     def test_pasa_ruta_archivo_y_texto_del_cuadro_a_reasoning(self, tmp_path, monkeypatch):
@@ -286,7 +334,10 @@ class TestProcesarOfrecimientoIntegracion:
         destinatario, asunto, cuerpo, kwargs = llamadas_crear[0]
         assert destinatario == "cgil@gomezyriesco.cl"
         assert kwargs["thread_id"] == "thread-interno"
-        assert asunto.startswith("Re: ")
+        # El asunto de la respuesta es el asunto REAL de la cadena encontrada
+        # (del mock de leer_hilo), no el reconstruido por
+        # _armar_asunto_ofrecimiento (que incluiría la palabra "Rit").
+        assert asunto == 'Re: Demanda laboral "Perez con Alvi" M-1-2026'
 
         entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
         assert entrada["oferta_borrador_creado"] is True
@@ -333,7 +384,13 @@ class TestProcesarOfrecimientoIntegracion:
             agenda.gmail_client, "leer_hilo",
             lambda thread_id, **k: [{"sender": "cgil@gomezyriesco.cl", "cuerpo_texto": "x", "subject": "x"}],
         )
-        monkeypatch.setattr(agenda.gmail_client, "listar_borradores_de_hilo", lambda thread_id, **k: [{"id": "draft-existente"}])
+        borrador_propio = {
+            "id": "draft-existente",
+            "message": {"payload": {"headers": [
+                {"name": "Subject", "value": 'Demanda laboral "Perez con Alvi" Rit M-1-2026'},
+            ]}},
+        }
+        monkeypatch.setattr(agenda.gmail_client, "listar_borradores_de_hilo", lambda thread_id, **k: [borrador_propio])
 
         llamadas_crear = []
         monkeypatch.setattr(agenda.gmail_client, "crear_borrador", lambda *a, **k: llamadas_crear.append(1))
@@ -379,3 +436,191 @@ class TestProcesarOfrecimientoIntegracion:
         accion_discrepancia = next(a for a in resumen["acciones"] if "Discrepancia" in a["que"])
         assert accion_discrepancia["urgencia"] == "alta"
         assert "500.000" in accion_discrepancia["que"]
+
+    def test_anota_accion_si_claude_no_devuelve_demandantes(self, tmp_path, monkeypatch):
+        ruta_registro = self._causa_lista_para_ofrecimiento(tmp_path)
+        ruta_mapa = _mapa_audiencias(tmp_path, {
+            "M-1-2026": {"fecha": "2026-10-01", "resumen": "Audiencia única", "tipo": "Única"},
+        })
+        monkeypatch.setattr(
+            agenda.reasoning, "preguntar",
+            lambda *a, **k: {"hay_discrepancia": False, "detalle_discrepancia": ""},
+        )
+        monkeypatch.setattr(agenda.bitacora_mod, "registrar", lambda *a, **k: None)
+        monkeypatch.setattr(agenda.gmail_client, "leer_hilo", lambda thread_id, **k: [])
+
+        llamadas_crear = []
+        monkeypatch.setattr(agenda.gmail_client, "crear_borrador", lambda *a, **k: llamadas_crear.append(1))
+
+        contexto = {"fecha_hoy": "2026-09-17", "mapa_audiencias": {"ruta": str(ruta_mapa)}}
+        resumen = _correr_agenda(contexto, tmp_path, ruta_registro_causas=ruta_registro)
+
+        assert llamadas_crear == []
+        assert len(resumen["acciones"]) == 1
+        assert "formato esperado" in resumen["acciones"][0]["que"]
+        assert resumen["acciones"][0]["urgencia"] == "media"
+        entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
+        assert entrada.get("oferta_borrador_creado") is not True
+
+    def test_anota_accion_si_claude_devuelve_lista_de_demandantes_vacia(self, tmp_path, monkeypatch):
+        ruta_registro = self._causa_lista_para_ofrecimiento(tmp_path)
+        ruta_mapa = _mapa_audiencias(tmp_path, {
+            "M-1-2026": {"fecha": "2026-10-01", "resumen": "Audiencia única", "tipo": "Única"},
+        })
+        self._mock_evaluacion(monkeypatch, demandantes=[])
+        monkeypatch.setattr(agenda.bitacora_mod, "registrar", lambda *a, **k: None)
+        monkeypatch.setattr(agenda.gmail_client, "leer_hilo", lambda thread_id, **k: [])
+
+        llamadas_crear = []
+        monkeypatch.setattr(agenda.gmail_client, "crear_borrador", lambda *a, **k: llamadas_crear.append(1))
+
+        contexto = {"fecha_hoy": "2026-09-17", "mapa_audiencias": {"ruta": str(ruta_mapa)}}
+        resumen = _correr_agenda(contexto, tmp_path, ruta_registro_causas=ruta_registro)
+
+        assert llamadas_crear == []
+        assert len(resumen["acciones"]) == 1
+        assert "formato esperado" in resumen["acciones"][0]["que"]
+
+    def test_no_genera_ofrecimiento_si_causa_ya_tiene_estado_acuerdo(self, tmp_path, monkeypatch):
+        ruta_registro = self._causa_lista_para_ofrecimiento(tmp_path, estado_acuerdo="pendiente_pago")
+        ruta_mapa = _mapa_audiencias(tmp_path, {
+            "M-1-2026": {"fecha": "2026-10-01", "resumen": "Audiencia única", "tipo": "Única"},
+        })
+        self._mock_evaluacion(monkeypatch)
+        monkeypatch.setattr(agenda.bitacora_mod, "registrar", lambda *a, **k: None)
+
+        llamadas_crear = []
+        monkeypatch.setattr(agenda.gmail_client, "crear_borrador", lambda *a, **k: llamadas_crear.append(1))
+
+        contexto = {"fecha_hoy": "2026-09-17", "mapa_audiencias": {"ruta": str(ruta_mapa)}}
+        resumen = _correr_agenda(contexto, tmp_path, ruta_registro_causas=ruta_registro)
+
+        assert llamadas_crear == []
+        assert resumen["items"] == []
+        assert resumen["metricas"][1] == {"etiqueta": "Borradores de ofrecimiento creados", "valor": 0}
+
+    def test_borrador_ajeno_en_la_cadena_no_se_confunde_con_el_de_ofrecimiento(self, tmp_path, monkeypatch):
+        """Si la cadena interna ya tiene un borrador cuyo asunto no menciona
+        el RIT (una respuesta ajena a medio escribir), no se lo debe tratar
+        como si fuera el de ofrecimiento: hay que crear uno nuevo y avisar
+        con una acción."""
+        ruta_registro = self._causa_lista_para_ofrecimiento(tmp_path)
+        ruta_mapa = _mapa_audiencias(tmp_path, {
+            "M-1-2026": {"fecha": "2026-10-01", "resumen": "Audiencia única", "tipo": "Única"},
+        })
+        self._mock_evaluacion(monkeypatch)
+        monkeypatch.setattr(agenda.bitacora_mod, "registrar", lambda *a, **k: None)
+
+        monkeypatch.setattr(agenda.gmail_client, "buscar_hilos", lambda query, **k: [{"id": "thread-interno"}])
+        monkeypatch.setattr(
+            agenda.gmail_client, "leer_hilo",
+            lambda thread_id, **k: [{
+                "sender": "cgil@gomezyriesco.cl", "cuerpo_texto": "x",
+                "subject": 'Demanda laboral "Perez con Alvi" M-1-2026',
+            }],
+        )
+        borrador_ajeno = {
+            "id": "draft-ajeno",
+            "message": {"payload": {"headers": [
+                {"name": "Subject", "value": "Re: otra consulta sin relación"},
+            ]}},
+        }
+        monkeypatch.setattr(agenda.gmail_client, "listar_borradores_de_hilo", lambda thread_id, **k: [borrador_ajeno])
+
+        llamadas_crear = []
+        monkeypatch.setattr(
+            agenda.gmail_client, "crear_borrador",
+            lambda destinatario, asunto, cuerpo, **k: llamadas_crear.append((destinatario, asunto, cuerpo, k)) or {"id": "draft-nuevo"},
+        )
+
+        contexto = {"fecha_hoy": "2026-09-17", "mapa_audiencias": {"ruta": str(ruta_mapa)}}
+        resumen = _correr_agenda(contexto, tmp_path, ruta_registro_causas=ruta_registro)
+
+        assert len(llamadas_crear) == 1
+        _destinatario, asunto, _cuerpo, kwargs = llamadas_crear[0]
+        assert kwargs["thread_id"] == "thread-interno"
+        assert asunto == 'Re: Demanda laboral "Perez con Alvi" M-1-2026'
+
+        accion = next(a for a in resumen["acciones"] if "no menciona el RIT" in a["que"])
+        assert accion["urgencia"] == "media"
+        entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
+        assert entrada["oferta_borrador_creado"] is True
+
+    def test_no_recrea_si_hay_un_borrador_ajeno_y_tambien_uno_propio_en_la_cadena(self, tmp_path, monkeypatch):
+        """Si la cadena tiene varios borradores y AL MENOS UNO sí menciona
+        el RIT, ese es el nuestro — se reusa sin crear uno nuevo, aunque
+        también haya un borrador ajeno sin relación en la misma cadena."""
+        ruta_registro = self._causa_lista_para_ofrecimiento(tmp_path)
+        ruta_mapa = _mapa_audiencias(tmp_path, {
+            "M-1-2026": {"fecha": "2026-10-01", "resumen": "Audiencia única", "tipo": "Única"},
+        })
+        self._mock_evaluacion(monkeypatch)
+        monkeypatch.setattr(agenda.bitacora_mod, "registrar", lambda *a, **k: None)
+
+        monkeypatch.setattr(agenda.gmail_client, "buscar_hilos", lambda query, **k: [{"id": "thread-interno"}])
+        monkeypatch.setattr(
+            agenda.gmail_client, "leer_hilo",
+            lambda thread_id, **k: [{"sender": "cgil@gomezyriesco.cl", "cuerpo_texto": "x", "subject": "x"}],
+        )
+        borrador_ajeno = {
+            "id": "draft-ajeno",
+            "message": {"payload": {"headers": [{"name": "Subject", "value": "Re: otra consulta sin relación"}]}},
+        }
+        borrador_propio = {
+            "id": "draft-propio",
+            "message": {"payload": {"headers": [
+                {"name": "Subject", "value": 'Demanda laboral "Perez con Alvi" Rit M-1-2026'},
+            ]}},
+        }
+        monkeypatch.setattr(
+            agenda.gmail_client, "listar_borradores_de_hilo",
+            lambda thread_id, **k: [borrador_ajeno, borrador_propio],
+        )
+
+        llamadas_crear = []
+        monkeypatch.setattr(agenda.gmail_client, "crear_borrador", lambda *a, **k: llamadas_crear.append(1))
+
+        contexto = {"fecha_hoy": "2026-09-17", "mapa_audiencias": {"ruta": str(ruta_mapa)}}
+        resumen = _correr_agenda(contexto, tmp_path, ruta_registro_causas=ruta_registro)
+
+        assert llamadas_crear == []
+        assert not any("no menciona el RIT" in a["que"] for a in resumen["acciones"])
+        entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
+        assert entrada["oferta_borrador_creado"] is True
+
+    def test_escapa_html_en_el_apellido_del_demandante(self, tmp_path, monkeypatch):
+        """El apellido es texto libre extraído por Claude de un PDF; si
+        contiene caracteres especiales de HTML (&, <, >), no debe romper el
+        cuerpo HTML del borrador ni renderizar mal."""
+        ruta_registro = self._causa_lista_para_ofrecimiento(tmp_path)
+        ruta_mapa = _mapa_audiencias(tmp_path, {
+            "M-1-2026": {"fecha": "2026-10-01", "resumen": "Audiencia única", "tipo": "Única"},
+        })
+        self._mock_evaluacion(
+            monkeypatch,
+            demandantes=[{"apellido": "O'Brien & <Hijos>", "monto_recargo_30": 500000, "monto_afc": 200000}],
+        )
+        monkeypatch.setattr(agenda.bitacora_mod, "registrar", lambda *a, **k: None)
+
+        monkeypatch.setattr(agenda.gmail_client, "buscar_hilos", lambda query, **k: [])
+        monkeypatch.setattr(agenda.gmail_client, "buscar_borrador_por_asunto", lambda fragmento, **k: [])
+        monkeypatch.setattr(agenda.gmail_client, "leer_hilo", lambda thread_id, **k: [])
+
+        llamadas_crear = []
+        monkeypatch.setattr(
+            agenda.gmail_client, "crear_borrador",
+            lambda destinatario, asunto, cuerpo, **k: llamadas_crear.append((destinatario, asunto, cuerpo, k)) or {"id": "draft-4"},
+        )
+
+        contexto = {"fecha_hoy": "2026-09-17", "mapa_audiencias": {"ruta": str(ruta_mapa)}}
+        _correr_agenda(contexto, tmp_path, ruta_registro_causas=ruta_registro)
+
+        assert len(llamadas_crear) == 1
+        _destinatario, _asunto, cuerpo, _kwargs = llamadas_crear[0]
+        assert "&amp;" in cuerpo
+        assert "&lt;Hijos&gt;" in cuerpo
+        assert "<Hijos>" not in cuerpo
+        # Los <br> propios (agregados después de escapar) no deben quedar
+        # doblemente escapados.
+        assert "<br>" in cuerpo
+        assert "&lt;br&gt;" not in cuerpo

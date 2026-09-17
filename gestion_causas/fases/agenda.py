@@ -11,6 +11,7 @@ calendario."""
 
 from __future__ import annotations
 
+import html
 from datetime import date
 from email.utils import getaddresses
 from pathlib import Path
@@ -85,18 +86,48 @@ def _evaluar_montos_ofrecimiento(texto_cuadro_original: str, ruta_demanda: Path)
     return reasoning.preguntar(tarea, contexto, SCHEMA_OFRECIMIENTO, ruta_archivo=ruta_demanda)
 
 
+def _demandantes_validos(evaluacion: dict) -> list | None:
+    """`reasoning.preguntar` solo hace json.loads sobre lo que devuelve
+    Claude — SCHEMA_OFRECIMIENTO es apenas texto de prompt, nunca se valida
+    de verdad. Esta función es la validación real: devuelve la lista de
+    `demandantes` solo si es una lista no vacía donde cada elemento trae
+    apellido (string no vacío), monto_recargo_30 y monto_afc (enteros); si
+    no, devuelve None para que el llamador registre una acción en vez de
+    reventar con un KeyError/IndexError/TypeError más adelante."""
+    if not isinstance(evaluacion, dict):
+        return None
+    demandantes = evaluacion.get("demandantes")
+    if not isinstance(demandantes, list) or not demandantes:
+        return None
+    for demandante in demandantes:
+        if not isinstance(demandante, dict):
+            return None
+        apellido = demandante.get("apellido")
+        if not isinstance(apellido, str) or not apellido.strip():
+            return None
+        for campo in ("monto_recargo_30", "monto_afc"):
+            monto = demandante.get(campo)
+            if not isinstance(monto, int) or isinstance(monto, bool):
+                return None
+    return demandantes
+
+
 def _debe_generar_ofrecimiento(causa: dict, audiencia: dict, fecha_hoy: str) -> bool:
     """True si corresponde generar hoy el borrador de ofrecimiento (paso 3
     de agenda.md): el tipo de audiencia es Única o Juicio, la causa no
     marcó `aplica_ofrecimiento: false` (causas que no son una demanda
     laboral estándar contra la empresa), no se generó ya
-    (`oferta_borrador_creado`), y ya se cumplió — hoy o antes — el hito de
-    14 días corridos antes de la audiencia."""
+    (`oferta_borrador_creado`), la causa no tiene ya un `estado_acuerdo`
+    (un acuerdo en curso hace que un ofrecimiento nuevo esté de más, aunque
+    quede una audiencia de formalidad en el calendario), y ya se cumplió —
+    hoy o antes — el hito de 14 días corridos antes de la audiencia."""
     if audiencia.get("tipo") not in TIPOS_CON_OFRECIMIENTO:
         return False
     if causa.get("aplica_ofrecimiento") is False:
         return False
     if causa.get("oferta_borrador_creado"):
+        return False
+    if causa.get("estado_acuerdo"):
         return False
     fecha_audiencia = audiencia.get("fecha")
     if not fecha_audiencia:
@@ -175,22 +206,25 @@ def _armar_asunto_ofrecimiento(causa: dict, rit: str) -> str:
     return f'Demanda laboral "{apellido} con {empresa}" Rit {rit}'
 
 
-def _buscar_cadena_interna(rit: str) -> str | None:
+def _buscar_cadena_interna(rit: str) -> tuple[str, str] | None:
     """Busca la cadena interna que Nico abre con Román al llegar la demanda
     (asunto 'Demanda laboral ... [RIT]', primer mensaje de
     @gomezyriesco.cl — la misma que gestion-causas-smu detecta como interna
-    y deja sin tocar). Devuelve su thread_id, o None si todavía no existe
-    (causa nueva, ver agenda.md paso 3g). Si la búsqueda acotada por asunto
-    no encuentra nada, reintenta sin restringir el asunto (causas RIT
-    T-/O-, cuyo primer mensaje no necesariamente sigue el patrón "Demanda
-    laboral...")."""
+    y deja sin tocar). Devuelve (thread_id, asunto_real_del_primer_mensaje),
+    o None si todavía no existe (causa nueva, ver agenda.md paso 3g). El
+    asunto real se usa para armar la respuesta ("Re: <asunto de esa
+    cadena>", agenda.md paso 3g) en vez de reconstruirlo desde los datos
+    del registro, que puede no coincidir exactamente (otra ortografía, un
+    prefijo "INT-", etc.). Si la búsqueda acotada por asunto no encuentra
+    nada, reintenta sin restringir el asunto (causas RIT T-/O-, cuyo primer
+    mensaje no necesariamente sigue el patrón "Demanda laboral...")."""
     hilos = gmail_client.buscar_hilos(f'from:gomezyriesco.cl subject:"{rit}"')
     if not hilos:
         hilos = gmail_client.buscar_hilos(f"from:gomezyriesco.cl {rit}")
     for hilo in hilos:
         mensajes = gmail_client.leer_hilo(hilo["id"])
         if mensajes and extraer_direccion(mensajes[0].get("sender", "")).endswith("@gomezyriesco.cl"):
-            return hilo["id"]
+            return hilo["id"], mensajes[0].get("subject", "")
     return None
 
 
@@ -217,27 +251,55 @@ def _destinatarios_respuesta(thread_id: str) -> str:
     return ", ".join(direcciones) if direcciones else "rgomez@gomezyriesco.cl"
 
 
-def _crear_borrador_ofrecimiento(rit: str, cuerpo: str, asunto: str) -> str:
+def _asunto_de_borrador(detalle: dict) -> str:
+    """Extrae el asunto de un dict de detalle de borrador tal como lo
+    devuelve la API de Gmail (`listar_borradores_de_hilo`/
+    `buscar_borrador_por_asunto`): vive en
+    detalle["message"]["payload"]["headers"], buscando el header "subject"
+    sin importar mayúsculas."""
+    headers = detalle.get("message", {}).get("payload", {}).get("headers", [])
+    return next((h.get("value", "") for h in headers if h.get("name", "").lower() == "subject"), "")
+
+
+def _crear_borrador_ofrecimiento(rit: str, cuerpo: str, asunto: str) -> tuple[str, bool, bool]:
     """Crea el borrador de ofrecimiento: responde dentro de la cadena
-    interna si ya existe, o crea un correo nuevo como respaldo si Nico
-    todavía no la abrió (agenda.md paso 3g). Nunca duplica un borrador ya
-    existente — devuelve su id en vez de crear uno nuevo."""
-    cuerpo_html = cuerpo.replace("\n", "<br>\n")
-    thread_id = _buscar_cadena_interna(rit)
-    if thread_id:
+    interna si ya existe (usando el asunto REAL de esa cadena, "Re: <asunto
+    de esa cadena>" — agenda.md paso 3g, no el reconstruido desde el
+    registro), o crea un correo nuevo como respaldo si Nico todavía no la
+    abrió. Nunca duplica un borrador de ofrecimiento ya existente — pero
+    tampoco confunde con un borrador ajeno que comparte la misma cadena
+    interna (p. ej. una respuesta a medio escribir de otro asunto): solo se
+    trata como "nuestro" un borrador cuyo asunto menciona el RIT; si
+    ninguno de los borradores de la cadena lo menciona, se crea uno nuevo
+    igual que si la cadena no tuviera borradores.
+
+    Devuelve (draft_id, creado, borrador_ajeno_detectado):
+    - `creado` es True solo si esta llamada efectivamente creó un borrador
+      nuevo (False si reusó uno ya existente que sí menciona el RIT).
+    - `borrador_ajeno_detectado` es True cuando la cadena interna tenía
+      borradores pero ninguno mencionaba el RIT (para que el llamador avise
+      a Nico a revisar manualmente esa cadena)."""
+    cuerpo_html = html.escape(cuerpo).replace("\n", "<br>\n")
+    encontrado = _buscar_cadena_interna(rit)
+    if encontrado:
+        thread_id, asunto_real_hilo = encontrado
         existentes = gmail_client.listar_borradores_de_hilo(thread_id)
-        if existentes:
-            return existentes[0]["id"]
+        propios = [d for d in existentes if rit in _asunto_de_borrador(d)]
+        if propios:
+            return propios[0]["id"], False, False
+        borrador_ajeno_detectado = bool(existentes)
         destinatarios = _destinatarios_respuesta(thread_id)
+        asunto_respuesta = f"Re: {asunto_real_hilo}" if asunto_real_hilo else f"Re: {asunto}"
         borrador = gmail_client.crear_borrador(
-            destinatarios, f"Re: {asunto}", cuerpo_html, thread_id=thread_id, html=True
+            destinatarios, asunto_respuesta, cuerpo_html, thread_id=thread_id, html=True
         )
+        return borrador["id"], True, borrador_ajeno_detectado
     else:
         existentes = gmail_client.buscar_borrador_por_asunto(asunto)
         if existentes:
-            return existentes[0]["id"]
+            return existentes[0]["id"], False, False
         borrador = gmail_client.crear_borrador("rgomez@gomezyriesco.cl", asunto, cuerpo_html, html=True)
-    return borrador["id"]
+        return borrador["id"], True, False
 
 
 def _procesar_ofrecimiento(
@@ -279,6 +341,18 @@ def _procesar_ofrecimiento(
         })
         return False
 
+    demandantes = _demandantes_validos(evaluacion)
+    if demandantes is None:
+        acciones.append({
+            "rit": rit,
+            "que": (
+                "No se pudieron extraer montos válidos por demandante para el ofrecimiento — "
+                "respuesta de Claude no tiene el formato esperado."
+            ),
+            "urgencia": "media",
+        })
+        return False
+
     if evaluacion.get("hay_discrepancia"):
         acciones.append({
             "rit": rit,
@@ -289,13 +363,27 @@ def _procesar_ofrecimiento(
     fecha_audiencia = audiencia["fecha"]
     dias_hasta_audiencia = (date.fromisoformat(fecha_audiencia) - date.fromisoformat(fecha_hoy)).days
     cuerpo = _armar_cuerpo_ofrecimiento(
-        evaluacion["demandantes"], audiencia["tipo"], fecha_audiencia, dias_hasta_audiencia
+        demandantes, audiencia["tipo"], fecha_audiencia, dias_hasta_audiencia
     )
     asunto = _armar_asunto_ofrecimiento(causa, rit)
-    draft_id = _crear_borrador_ofrecimiento(rit, cuerpo, asunto)
+    draft_id, creado, borrador_ajeno_detectado = _crear_borrador_ofrecimiento(rit, cuerpo, asunto)
 
     registro_mod.registrar_causa(rit, {"oferta_borrador_creado": True}, ruta=ruta_registro_causas)
-    bitacora_mod.registrar(f"Borrador de ofrecimiento creado (draft {draft_id})", rit=rit)
+    if creado:
+        bitacora_mod.registrar(f"Borrador de ofrecimiento creado (draft {draft_id})", rit=rit)
+    else:
+        bitacora_mod.registrar(
+            f"Ya existía un borrador de ofrecimiento (draft {draft_id}) — revisar si es el correcto", rit=rit
+        )
+    if borrador_ajeno_detectado:
+        acciones.append({
+            "rit": rit,
+            "que": (
+                "Se encontró un borrador en la cadena interna que no parece ser el de "
+                "ofrecimiento (no menciona el RIT) — revisar manualmente."
+            ),
+            "urgencia": "media",
+        })
     return True
 
 
