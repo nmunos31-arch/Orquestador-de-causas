@@ -109,6 +109,40 @@ class TestEjecutarClaudeResuelveRutaCompleta:
             reasoning_mod._ejecutar_claude("un prompt cualquiera")
 
 
+class TestEjecutarClaudeErrorIncluyeStdout:
+    def test_incluye_stdout_en_el_error_cuando_stderr_esta_vacio(self, monkeypatch):
+        """claude -p a veces imprime el motivo del fallo (ej. "Prompt is too
+        long") por stdout, no por stderr (confirmado en una corrida real con
+        un hilo de correo de ~800KB) — si el error solo mira stderr, el
+        mensaje queda vacío y no sirve para diagnosticar nada."""
+        from gestion_causas import reasoning as reasoning_mod
+
+        class ResultadoFalso:
+            returncode = 1
+            stdout = "Prompt is too long\n"
+            stderr = ""
+
+        monkeypatch.setattr(reasoning_mod.shutil, "which", lambda nombre: "C:\\ruta\\falsa\\claude.CMD")
+        monkeypatch.setattr(reasoning_mod.subprocess, "run", lambda args, **kwargs: ResultadoFalso())
+
+        with pytest.raises(RuntimeError, match="Prompt is too long"):
+            reasoning_mod._ejecutar_claude("un prompt cualquiera")
+
+    def test_prioriza_stderr_cuando_tiene_contenido(self, monkeypatch):
+        from gestion_causas import reasoning as reasoning_mod
+
+        class ResultadoFalso:
+            returncode = 1
+            stdout = "detalle de stdout"
+            stderr = "detalle real del error"
+
+        monkeypatch.setattr(reasoning_mod.shutil, "which", lambda nombre: "C:\\ruta\\falsa\\claude.CMD")
+        monkeypatch.setattr(reasoning_mod.subprocess, "run", lambda args, **kwargs: ResultadoFalso())
+
+        with pytest.raises(RuntimeError, match="detalle real del error"):
+            reasoning_mod._ejecutar_claude("un prompt cualquiera")
+
+
 class TestEjecutarClaudePasaPromptPorStdin:
     def test_no_pasa_el_prompt_como_argumento_de_linea_de_comandos(self, monkeypatch):
         from gestion_causas import reasoning as reasoning_mod

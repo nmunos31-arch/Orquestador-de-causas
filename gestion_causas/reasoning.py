@@ -162,7 +162,12 @@ def _ejecutar_claude(prompt: str, ruta_archivo=None) -> str:
         capture_output=True, text=True, encoding="utf-8", timeout=TIMEOUT_SEGUNDOS, check=False,
     )
     if resultado.returncode != 0:
-        raise RuntimeError(
-            f"claude -p terminó con código {resultado.returncode}: {resultado.stderr[:500]}"
-        )
+        # claude -p no siempre escribe el motivo del fallo en stderr — un
+        # prompt que excede su límite de tamaño imprime "Prompt is too long"
+        # por stdout con stderr vacío (confirmado en una corrida real con un
+        # hilo de correo de ~800KB), y mirar solo stderr dejaba el error
+        # vacío e inútil para diagnosticar. Preferimos stderr cuando tiene
+        # contenido (suele ser más específico), y caemos a stdout si no.
+        detalle = resultado.stderr[:500] or resultado.stdout[:500]
+        raise RuntimeError(f"claude -p terminó con código {resultado.returncode}: {detalle}")
     return resultado.stdout
