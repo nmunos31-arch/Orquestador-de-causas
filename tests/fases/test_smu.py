@@ -152,6 +152,59 @@ class TestCrearCarpetaYGuardarDemanda:
         ]
 
 
+class TestDemandaYaEnCarpeta:
+    def test_demanda_no_guardada_esta_corrida_pero_ya_existe_en_disco_sigue_el_flujo(self, tmp_path, monkeypatch):
+        """Simula una carpeta que Nico armó a mano antes de esta automatización,
+        con la demanda ya adentro, para un RIT que aún no estaba en el registro
+        JSON. guardar_adjunto devuelve guardado=False (el archivo "ya existía"),
+        pero el archivo demanda.pdf sigue estando ahí en disco — el flujo
+        completo (ajustes, EERR, lista, borrador) debe seguir corriendo."""
+        carpeta_causa = tmp_path / "Minutas" / "Perez con Alvi M-1-2026"
+        carpeta_causa.mkdir(parents=True)
+        (carpeta_causa / "demanda.pdf").write_bytes(b"demanda ya existente en disco")
+
+        monkeypatch.setattr(smu.carpetas_mod, "buscar_carpeta_existente_por_rit", lambda rit: carpeta_causa)
+        monkeypatch.setattr(smu.carpetas_mod, "crear_carpeta_causa", lambda apellido, empresa, rit: carpeta_causa)
+        monkeypatch.setattr(smu.gmail_client, "descargar_adjunto", lambda message_id, attachment_id: b"contenido pdf falso")
+        monkeypatch.setattr(
+            smu.carpetas_mod, "guardar_adjunto",
+            lambda carpeta, nombre, contenido: {"ruta": carpeta / nombre, "guardado": False},
+        )
+        monkeypatch.setattr(smu.gmail_client, "obtener_o_crear_etiqueta", lambda nombre, color=None: "label-id-1")
+        monkeypatch.setattr(smu.gmail_client, "aplicar_etiqueta_a_hilo", lambda thread_id, label_id: None)
+        monkeypatch.setattr(smu.gmail_client, "listar_borradores_de_hilo", lambda thread_id: [])
+        monkeypatch.setattr(smu.gmail_client, "crear_borrador", lambda *a, **k: {"id": "draft-1"})
+        monkeypatch.setattr(smu, "agregar_causa", lambda ruta_excel, datos: {"agregada": True, "fila": 10})
+
+        llamadas_ajustes = []
+
+        def preguntar_falso(tarea, contexto, schema, ruta_archivo=None):
+            if schema is smu.SCHEMA_AJUSTES_DEMANDA:
+                llamadas_ajustes.append(1)
+                return {"fecha_despido": "2026-01-08", "ajuste_base_calculo": False, "otros_ajustes": []}
+            return {"resumen": "Texto de prueba."}
+
+        monkeypatch.setattr(smu.reasoning, "preguntar", preguntar_falso)
+
+        monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
+        monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: [{
+            "id": "msg-1", "thread_id": "thread-1", "sender": "persona@smu.cl", "subject": "DEMANDA",
+            "cuerpo_texto": CUERPO_CUADRO_ALVI, "adjuntos": [
+                {"filename": "demanda.pdf", "attachment_id": "att-1", "mime_type": "application/pdf", "size": 50000},
+            ],
+        }])
+
+        ruta_registro = tmp_path / "registro_causas.json"
+        resumen = smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=ruta_registro)
+
+        assert llamadas_ajustes == [1]
+        assert not any(n["tipo"] == "sin_demanda" for n in resumen["notas"])
+
+        entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
+        assert entrada["borrador_documentos_draft_id"] == "draft-1"
+        assert entrada["documentos_solicitados"]
+
+
 class TestResumenYExcel:
     def _monkeypatch_comunes(self, monkeypatch, tmp_path, empresa="Alvi"):
         carpeta_causa = tmp_path / "Minutas" / "Perez con Alvi M-1-2026"
@@ -352,6 +405,32 @@ class TestAjustesDeLaDemanda:
         entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
         assert entrada["fecha_despido"] is None
 
+    def test_error_al_evaluar_ajustes_sube_la_urgencia_a_alta_y_advierte_en_bitacora(self, tmp_path, monkeypatch):
+        self._monkeypatch_comunes(monkeypatch, tmp_path)
+
+        def preguntar_falso(tarea, contexto, schema, ruta_archivo=None):
+            if schema is smu.SCHEMA_AJUSTES_DEMANDA:
+                return {"error": "Claude no devolvió JSON válido tras 2 intentos."}
+            return {"resumen": "Texto de prueba."}
+
+        monkeypatch.setattr(smu.reasoning, "preguntar", preguntar_falso)
+
+        mensajes_bitacora = []
+        monkeypatch.setattr(smu.bitacora_mod, "registrar", lambda mensaje, rit=None: mensajes_bitacora.append(mensaje))
+
+        ruta_registro = tmp_path / "registro_causas.json"
+        resumen = smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=ruta_registro)
+
+        acciones_ajustes = [a for a in resumen["acciones"] if "ajustes de la demanda" in a["que"]]
+        assert len(acciones_ajustes) == 1
+        assert acciones_ajustes[0]["urgencia"] == "alta"
+        assert any("ADVERTENCIA" in mensaje for mensaje in mensajes_bitacora)
+
+        # A pesar del error, el borrador se crea igual con la lista base (mejor
+        # un borrador incompleto que ninguno) y la causa queda registrada.
+        entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
+        assert entrada["borrador_documentos_draft_id"] == "draft-1"
+
 
 class TestReusoDeEerr:
     def _monkeypatch_comunes(self, monkeypatch, tmp_path, cuerpo_extra=""):
@@ -411,6 +490,32 @@ class TestReusoDeEerr:
         )
 
         assert list(carpeta_causa.iterdir()) == [carpeta_causa / "demanda.pdf"]
+
+    def test_causa_anterior_sin_archivo_eerr_no_quita_el_item_de_la_lista(self, tmp_path, monkeypatch):
+        """Aunque buscar_eerr_reusable encuentre una entrada de CECO, si la
+        causa anterior no tiene ningún archivo que parece_eerr en su carpeta
+        (o no tiene carpeta), no se copia nada — y por lo tanto el item del
+        EERR no debe quitarse de la lista de documentos a solicitar."""
+        self._monkeypatch_comunes(monkeypatch, tmp_path, cuerpo_extra="\nCECO: T-900\n")
+
+        carpeta_causa_anterior = tmp_path / "Minutas" / "Soto con Alvi M-9-2025"
+        carpeta_causa_anterior.mkdir(parents=True)
+        (carpeta_causa_anterior / "Otro documento.pdf").write_bytes(b"no es un eerr")
+
+        ruta_registro = tmp_path / "registro_causas.json"
+        registro_mod.registrar_causa("M-9-2025", {"carpeta": str(carpeta_causa_anterior)}, ruta=ruta_registro)
+
+        ruta_ceco = tmp_path / "registro_ceco.json"
+        registro_mod.registrar_eerr_recibido("T-900", "2025-11-01", "M-9-2025", ruta=ruta_ceco)
+
+        smu.correr(
+            {"fecha_hoy": "2026-09-16"},
+            ruta_registro_causas=ruta_registro,
+            ruta_registro_ceco=ruta_ceco,
+        )
+
+        entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
+        assert "EERR del local de los años 2024, 2025 y 2026" in entrada["documentos_solicitados"]
 
 
 class TestArmarListaDocumentos:
@@ -512,7 +617,7 @@ class TestCrearBorradorDeDocumentos:
 
         assert llamadas == []
         entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
-        assert entrada["borrador_documentos_draft_id"] is None
+        assert entrada["borrador_documentos_draft_id"] == "draft-viejo"
 
     def test_metricas_incluyen_borradores_creados_y_eerr_reusado(self, tmp_path, monkeypatch):
         self._monkeypatch_comunes(monkeypatch, tmp_path)

@@ -13,6 +13,7 @@ ningún mapa previo, a diferencia de goteo."""
 
 from __future__ import annotations
 
+import html
 import re
 from pathlib import Path
 
@@ -119,24 +120,27 @@ def correr(
             demanda_guardada = resultado["guardado"] or demanda_guardada
             break
 
-        if not demanda_guardada:
+        demanda_disponible = demanda_guardada or (carpeta / "demanda.pdf").exists()
+
+        if not demanda_disponible:
             notas.append({
                 "tipo": "sin_demanda",
                 "detalle": f"{rit}: no se encontró un PDF de demanda en el correo — súbela a mano.",
             })
 
         ajustes: dict = {}
-        if demanda_guardada:
+        if demanda_disponible:
             ajustes = _evaluar_ajustes_demanda(campos, carpeta / "demanda.pdf")
             if ajustes.get("error"):
                 acciones.append({
                     "rit": rit,
                     "que": f"No se pudieron detectar los ajustes de la demanda automáticamente: {ajustes['error']}",
-                    "urgencia": "media",
+                    "urgencia": "alta",
                 })
 
+        eerr_copiado = False
         eerr_reusable = None
-        if demanda_guardada and ceco and ajustes.get("fecha_despido"):
+        if demanda_disponible and ceco and ajustes.get("fecha_despido"):
             eerr_reusable = registro_mod.buscar_eerr_reusable(
                 ceco, ajustes["fecha_despido"], ruta=ruta_registro_ceco
             )
@@ -154,10 +158,12 @@ def correr(
                         None,
                     )
                     if nombre_eerr:
-                        carpetas_mod.copiar_archivo_local(
+                        resultado_copia = carpetas_mod.copiar_archivo_local(
                             carpeta_reusable / nombre_eerr, carpeta, nombre_eerr
                         )
-                        eerr_reusado_contador += 1
+                        eerr_copiado = resultado_copia["copiado"]
+                        if eerr_copiado:
+                            eerr_reusado_contador += 1
 
         # El resumen narrativo solo hace falta para la fila del Excel — Preunic y
         # Salcobrand nunca tienen fila (ver EMPRESAS_SIN_EXCEL), así que ni siquiera
@@ -189,9 +195,10 @@ def correr(
 
         documentos_solicitados: list[str] = []
         draft_id = None
-        if demanda_guardada:
-            documentos_solicitados = _armar_lista_documentos(ajustes, eerr_reusado=bool(eerr_reusable))
-            if not gmail_client.listar_borradores_de_hilo(thread_id):
+        if demanda_disponible:
+            documentos_solicitados = _armar_lista_documentos(ajustes, eerr_reusado=eerr_copiado)
+            existentes = gmail_client.listar_borradores_de_hilo(thread_id)
+            if not existentes:
                 destinatario = extraer_direccion(primer_mensaje.get("sender", ""))
                 asunto = f"Re: {primer_mensaje.get('subject', '')}"
                 cuerpo_html = _cuerpo_html_lista(documentos_solicitados)
@@ -200,6 +207,8 @@ def correr(
                 )
                 draft_id = borrador.get("id")
                 borradores_creados += 1
+            else:
+                draft_id = existentes[0]["id"]
 
         registro_mod.registrar_causa(
             rit,
@@ -227,7 +236,13 @@ def correr(
         bitacora_mod.registrar(
             f"Causa nueva registrada ({empresa}), carpeta '{carpeta.name}'"
             + ("" if demanda_guardada else " — sin demanda adjunta, súbela a mano")
-            + (f"; borrador de documentos creado ({len(documentos_solicitados)} items)" if draft_id else ""),
+            + (f"; borrador de documentos creado ({len(documentos_solicitados)} items)" if draft_id else "")
+            + (
+                "; ADVERTENCIA: no se pudieron detectar ajustes de la demanda automáticamente, "
+                "revisar a mano si hay conceptos atípicos"
+                if ajustes.get("error")
+                else ""
+            ),
             rit=rit,
         )
 
@@ -283,7 +298,7 @@ def _cuerpo_html_lista(documentos: list[str]) -> str:
     (`<ol><li>`) para que Gmail la reciba como lista numerada nativa — así
     se puede insertar o quitar un documento en el medio sin renumerar el
     resto a mano."""
-    items = "".join(f"<li>{documento}</li>" for documento in documentos)
+    items = "".join(f"<li>{html.escape(documento)}</li>" for documento in documentos)
     return f"<ol>{items}</ol>"
 
 

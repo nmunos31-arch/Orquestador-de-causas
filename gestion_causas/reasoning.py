@@ -148,7 +148,13 @@ def _ejecutar_claude(prompt: str, ruta_archivo=None) -> str:
 
     argv = [ejecutable, "-p"]
     if ruta_archivo is not None:
-        argv += ["--allowedTools", "Read", "--add-dir", str(Path(ruta_archivo).parent)]
+        settings_lectura_acotada = json.dumps({"permissions": {"deny": ["Bash", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch"]}})
+        argv += [
+            "--allowedTools", "Read",
+            "--add-dir", str(Path(ruta_archivo).parent),
+            "--settings", settings_lectura_acotada,
+            "--strict-mcp-config",
+        ]
 
     resultado = subprocess.run(
         argv,

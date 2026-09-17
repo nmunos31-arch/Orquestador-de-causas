@@ -185,10 +185,13 @@ class TestEjecutarClaudeConRutaArchivo:
         reasoning_mod._ejecutar_claude("un prompt", ruta_archivo=ruta_demanda)
 
         args, kwargs = llamadas[0]
+        settings_esperados = json.dumps({"permissions": {"deny": ["Bash", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch"]}})
         assert args == [
             "C:\\ruta\\falsa\\claude.CMD", "-p",
             "--allowedTools", "Read",
             "--add-dir", str(carpeta),
+            "--settings", settings_esperados,
+            "--strict-mcp-config",
         ]
         assert kwargs.get("input") == "un prompt"
 
