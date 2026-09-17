@@ -239,6 +239,135 @@ class TestDeteccionDeAcuerdoYPago:
             "urgencia": "media",
         }]
 
+    def test_recorta_texto_citado_antes_de_enviar_el_contexto_a_claude(self, tmp_path, monkeypatch):
+        _registrar_causa_activa(tmp_path, carpeta=str(tmp_path / "Perez con Alvi"))
+
+        ruta_mapa = tmp_path / "mapa_hilos.json"
+        ruta_mapa.write_text(json.dumps({
+            "rit_a_hilos": {"M-1-2026": ["thread-1"]},
+            "hilos": {
+                "thread-1": [{
+                    "id": "msg-1", "thread_id": "thread-1", "sender": "nmunoz@gomezyriesco.cl",
+                    "subject": "Re: Acuerdo",
+                    "cuerpo_texto": "Todo listo.\n\n> El día 1, X escribió:\n> contenido citado repetido",
+                    "adjuntos": [],
+                }],
+            },
+        }), encoding="utf-8")
+
+        llamadas = []
+
+        def preguntar_falso(tarea, contexto, schema):
+            llamadas.append(contexto)
+            return {"acuerdo_cerrado": False, "pago_confirmado": False, "justificacion": ""}
+
+        monkeypatch.setattr(goteo.reasoning, "preguntar", preguntar_falso)
+
+        contexto = {
+            "fecha_hoy": "2026-09-15",
+            "mapa_hilos": {"ruta": str(ruta_mapa)},
+            "mapa_audiencias": {"ruta": str(tmp_path / "no_existe.json")},
+        }
+
+        _correr_goteo(contexto, tmp_path)
+
+        assert llamadas[0]["mensajes"][0]["cuerpo"] == "Todo listo."
+
+    def test_anota_accion_si_el_contexto_tuvo_que_truncarse_por_tamano(self, tmp_path, monkeypatch):
+        _registrar_causa_activa(tmp_path, carpeta=str(tmp_path / "Perez con Alvi"))
+
+        ruta_mapa = tmp_path / "mapa_hilos.json"
+        ruta_mapa.write_text(json.dumps({
+            "rit_a_hilos": {"M-1-2026": ["thread-1"]},
+            "hilos": {
+                "thread-1": [{
+                    "id": "msg-1", "thread_id": "thread-1", "sender": "nmunoz@gomezyriesco.cl",
+                    "subject": "Re: Acuerdo", "cuerpo_texto": "x" * 200, "adjuntos": [],
+                }],
+            },
+        }), encoding="utf-8")
+
+        monkeypatch.setattr(goteo, "LIMITE_CONTEXTO_CHARS", 50)
+        monkeypatch.setattr(
+            goteo.reasoning, "preguntar",
+            lambda tarea, contexto, schema: {"acuerdo_cerrado": False, "pago_confirmado": False, "justificacion": ""},
+        )
+
+        contexto = {
+            "fecha_hoy": "2026-09-15",
+            "mapa_hilos": {"ruta": str(ruta_mapa)},
+            "mapa_audiencias": {"ruta": str(tmp_path / "no_existe.json")},
+        }
+
+        resumen = _correr_goteo(contexto, tmp_path)
+
+        assert resumen["acciones"] == [{
+            "rit": "M-1-2026",
+            "que": (
+                "El hilo de correo es muy largo y se truncaron mensajes antiguos "
+                "antes de evaluarlo con Claude — revisar manualmente si hay dudas."
+            ),
+            "urgencia": "media",
+        }]
+
+
+class TestQuitarTextoCitado:
+    def test_corta_en_primera_linea_de_cita_con_gt(self):
+        cuerpo = "Hola,\nGracias por la info.\n\n> El día 1, X escribió:\n> contenido citado\n> mas citado"
+        assert goteo._quitar_texto_citado(cuerpo) == "Hola,\nGracias por la info."
+
+    def test_corta_en_encabezado_el_fecha_nombre_escribio(self):
+        cuerpo = (
+            "Confirmado, gracias.\n\n"
+            "El mar, 1 sept 2026 a las 10:00, Juan Perez <juan@x.cl> escribió:\n\n"
+            "Historial anterior..."
+        )
+        assert goteo._quitar_texto_citado(cuerpo) == "Confirmado, gracias."
+
+    def test_corta_en_bloque_outlook_de_enviado_para_asunto(self):
+        cuerpo = (
+            "Ya lo revisamos.\n\n"
+            "De: Juan Perez\n"
+            "Enviado: martes, 1 de septiembre de 2026\n"
+            "Para: Nico\n"
+            "Asunto: Re: Acuerdo\n\n"
+            "Texto anterior"
+        )
+        assert goteo._quitar_texto_citado(cuerpo) == "Ya lo revisamos."
+
+    def test_corta_en_separador_mensaje_original(self):
+        cuerpo = "Todo bien.\n\n-----Mensaje original-----\nDe: alguien\nTexto"
+        assert goteo._quitar_texto_citado(cuerpo) == "Todo bien."
+
+    def test_sin_patron_no_modifica_el_cuerpo(self):
+        cuerpo = "Este mensaje no tiene nada citado, solo texto normal en varias líneas.\nSegunda línea."
+        assert goteo._quitar_texto_citado(cuerpo) == cuerpo
+
+
+class TestAcotarMensajesPorTamano:
+    def test_no_trunca_si_esta_bajo_el_limite(self):
+        mensajes = [{"cuerpo": "a" * 100}, {"cuerpo": "b" * 100}]
+        hubo = goteo._acotar_mensajes_por_tamano(mensajes, limite=1000)
+        assert hubo is False
+        assert mensajes[0]["cuerpo"] == "a" * 100
+        assert mensajes[1]["cuerpo"] == "b" * 100
+
+    def test_trunca_el_mensaje_mas_antiguo_cuando_excede_el_limite(self):
+        mensajes = [{"cuerpo": "a" * 300}, {"cuerpo": "b" * 300}]
+        hubo = goteo._acotar_mensajes_por_tamano(mensajes, limite=400)
+        assert hubo is True
+        assert mensajes[0]["cuerpo"] == "a" * 100
+        assert mensajes[1]["cuerpo"] == "b" * 300
+        assert sum(len(m["cuerpo"]) for m in mensajes) == 400
+
+    def test_omite_completamente_un_mensaje_antiguo_si_hace_falta(self):
+        mensajes = [{"cuerpo": "a" * 100}, {"cuerpo": "b" * 100}, {"cuerpo": "c" * 100}]
+        hubo = goteo._acotar_mensajes_por_tamano(mensajes, limite=150)
+        assert hubo is True
+        assert mensajes[0]["cuerpo"] == ""
+        assert mensajes[1]["cuerpo"] == "b" * 50
+        assert mensajes[2]["cuerpo"] == "c" * 100
+
 
 class TestDeteccionDeEerr:
     def test_registra_eerr_cuando_el_nombre_del_adjunto_calza_y_hay_ceco_y_fecha_despido(self, tmp_path, monkeypatch):

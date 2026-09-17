@@ -11,6 +11,7 @@ del plan de implementación)."""
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from gestion_causas import bitacora as bitacora_mod
@@ -22,6 +23,60 @@ from gestion_causas.carpetas import carpeta_destino_por_tipo_audiencia
 from gestion_causas.seguimiento import es_remitente_confiable
 
 NOMBRES_ADJUNTO_EXCLUIDOS = {"invite.ics"}
+
+# Cota de seguridad para el tamaño total del contexto que le mandamos a
+# claude -p: un hilo de correo real de 29 mensajes (~800KB) hizo que
+# claude -p rechazara el prompt con "Prompt is too long" (confirmado en una
+# corrida real). El recorte de texto citado (_quitar_texto_citado) resuelve
+# la causa de fondo (el historial repetido en cada respuesta), pero esta
+# cota es la última red de seguridad para que un hilo igual de largo nunca
+# vuelva a tumbar la evaluación por completo.
+LIMITE_CONTEXTO_CHARS = 400_000
+
+# Patrones de inicio de texto citado en clientes de correo en español
+# (Gmail y Outlook en modo texto plano) — cada correo de un hilo suele
+# repetir el historial completo de los anteriores, que ya está disponible
+# en el mensaje original respectivo.
+_PATRONES_INICIO_CITA = [
+    re.compile(r"^>", re.MULTILINE),
+    re.compile(r"^El .+ escribió:\s*$", re.MULTILINE),
+    re.compile(r"^De:.*\n(?:Enviado|Para|Asunto):", re.MULTILINE),
+    re.compile(r"^-{3,}\s*Mensaje original\s*-{3,}", re.MULTILINE | re.IGNORECASE),
+    re.compile(r"^_{10,}\s*$", re.MULTILINE),
+]
+
+
+def _quitar_texto_citado(cuerpo_texto: str) -> str:
+    """Corta `cuerpo_texto` en la primera línea que marca el inicio del
+    historial citado (la respuesta anterior, que el correo repite aunque ya
+    esté disponible en su mensaje original). Si no encuentra ningún patrón
+    conocido, devuelve el cuerpo intacto — un recorte conservador que nunca
+    descarta contenido de un formato no reconocido."""
+    primer_inicio = min(
+        (m.start() for patron in _PATRONES_INICIO_CITA for m in [patron.search(cuerpo_texto)] if m),
+        default=None,
+    )
+    if primer_inicio is None:
+        return cuerpo_texto
+    return cuerpo_texto[:primer_inicio].rstrip()
+
+
+def _acotar_mensajes_por_tamano(mensajes: list[dict], limite: int) -> bool:
+    """Si la suma de las longitudes de `cuerpo` en `mensajes` supera
+    `limite`, trunca por el principio (se asume orden cronológico
+    ascendente, mensajes más antiguos primero) hasta bajar del límite. Muta
+    `mensajes` in place. Devuelve si hubo truncado."""
+    exceso = sum(len(m["cuerpo"]) for m in mensajes) - limite
+    if exceso <= 0:
+        return False
+    for mensaje in mensajes:
+        if exceso <= 0:
+            break
+        recorte = min(len(mensaje["cuerpo"]), exceso)
+        mensaje["cuerpo"] = mensaje["cuerpo"][recorte:]
+        exceso -= recorte
+    return True
+
 
 SCHEMA_ACUERDO = {
     "type": "object",
@@ -44,11 +99,12 @@ def _detectar_acuerdo_y_pago(mensajes_hilos: list[dict]) -> dict:
             {
                 "remitente": m.get("sender", ""),
                 "asunto": m.get("subject", ""),
-                "cuerpo": m.get("cuerpo_texto", ""),
+                "cuerpo": _quitar_texto_citado(m.get("cuerpo_texto", "")),
             }
             for m in mensajes_hilos
         ]
     }
+    hubo_truncado = _acotar_mensajes_por_tamano(contexto["mensajes"], LIMITE_CONTEXTO_CHARS)
     tarea = (
         "Estos son los mensajes de un hilo de correo sobre una causa laboral. "
         "Decidí si el hilo confirma que se ALCANZÓ Y APROBÓ un acuerdo "
@@ -60,13 +116,27 @@ def _detectar_acuerdo_y_pago(mensajes_hilos: list[dict]) -> dict:
         "alguno de los mensajes trae un comprobante de pago o transferencia "
         "asociado a ese acuerdo."
     )
-    return reasoning.preguntar(tarea, contexto, SCHEMA_ACUERDO)
+    resultado = reasoning.preguntar(tarea, contexto, SCHEMA_ACUERDO)
+    if hubo_truncado:
+        resultado = {**resultado, "_contexto_truncado": True}
+    return resultado
 
 
 def _accion_error_deteccion(rit: str, error: str) -> dict:
     return {
         "rit": rit,
         "que": f"No se pudo evaluar acuerdo/pago automáticamente: {error}",
+        "urgencia": "media",
+    }
+
+
+def _accion_contexto_truncado(rit: str) -> dict:
+    return {
+        "rit": rit,
+        "que": (
+            "El hilo de correo es muy largo y se truncaron mensajes antiguos "
+            "antes de evaluarlo con Claude — revisar manualmente si hay dudas."
+        ),
         "urgencia": "media",
     }
 
@@ -88,6 +158,8 @@ def _evaluar_acuerdo_y_pago(
 
     if estado_actual not in ("pendiente_pago", "pago_recibido_pendiente_confirmar"):
         deteccion = _detectar_acuerdo_y_pago(mensajes_hilos)
+        if deteccion.get("_contexto_truncado"):
+            acciones.append(_accion_contexto_truncado(rit))
         if deteccion.get("error"):
             acciones.append(_accion_error_deteccion(rit, deteccion["error"]))
         elif deteccion.get("acuerdo_cerrado"):
@@ -96,6 +168,8 @@ def _evaluar_acuerdo_y_pago(
             acciones.append({"rit": rit, "que": "Acuerdo alcanzado, pendiente de pago", "urgencia": "alta"})
     elif estado_actual == "pendiente_pago":
         deteccion = _detectar_acuerdo_y_pago(mensajes_hilos)
+        if deteccion.get("_contexto_truncado"):
+            acciones.append(_accion_contexto_truncado(rit))
         if deteccion.get("error"):
             acciones.append(_accion_error_deteccion(rit, deteccion["error"]))
         elif deteccion.get("pago_confirmado"):
