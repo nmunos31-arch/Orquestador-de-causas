@@ -393,3 +393,46 @@ class TestReusoDeEerr:
         )
 
         assert list(carpeta_causa.iterdir()) == [carpeta_causa / "demanda.pdf"]
+
+
+class TestArmarListaDocumentos:
+    def test_lista_base_sin_ajustes_ni_reuso(self):
+        lista = smu._armar_lista_documentos({"ajuste_base_calculo": False, "otros_ajustes": []}, eerr_reusado=False)
+        assert lista == [
+            "Contrato de trabajo y anexos",
+            "Carta de despido",
+            "Finiquito",
+            "EERR del local de los años 2024, 2025 y 2026",
+            "Comparativa de dotación del local antes y después del despido",
+            "Testigos",
+            "Absolvente",
+        ]
+
+    def test_con_reuso_de_eerr_quita_el_punto_del_eerr(self):
+        lista = smu._armar_lista_documentos({"ajuste_base_calculo": False, "otros_ajustes": []}, eerr_reusado=True)
+        assert not any("EERR" in d for d in lista)
+        assert len(lista) == 6
+
+    def test_ajuste_base_calculo_agrega_liquidaciones_antes_de_testigos(self):
+        lista = smu._armar_lista_documentos({"ajuste_base_calculo": True, "otros_ajustes": []}, eerr_reusado=False)
+        indice = lista.index("Últimas 6 liquidaciones de remuneraciones")
+        assert indice == lista.index("Testigos") - 1
+
+    def test_otros_ajustes_se_agregan_antes_de_testigos_en_orden(self):
+        lista = smu._armar_lista_documentos(
+            {"ajuste_base_calculo": False, "otros_ajustes": ["Antecedentes del préstamo", "Registro de horas extra"]},
+            eerr_reusado=False,
+        )
+        indice_testigos = lista.index("Testigos")
+        assert lista[indice_testigos - 2] == "Antecedentes del préstamo"
+        assert lista[indice_testigos - 1] == "Registro de horas extra"
+
+    def test_ajuste_base_calculo_y_otros_ajustes_combinados(self):
+        lista = smu._armar_lista_documentos(
+            {"ajuste_base_calculo": True, "otros_ajustes": ["Antecedentes del préstamo"]},
+            eerr_reusado=True,
+        )
+        assert not any("EERR" in d for d in lista)
+        indice_testigos = lista.index("Testigos")
+        assert lista[indice_testigos - 2] == "Últimas 6 liquidaciones de remuneraciones"
+        assert lista[indice_testigos - 1] == "Antecedentes del préstamo"

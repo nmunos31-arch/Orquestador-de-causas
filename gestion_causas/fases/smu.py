@@ -32,6 +32,16 @@ QUERY_CANDIDATOS = (
     'after:2026/07/01 -label:"Procesado-GestionCausas"'
 )
 
+LISTA_DOCUMENTOS_BASE = [
+    "Contrato de trabajo y anexos",
+    "Carta de despido",
+    "Finiquito",
+    "EERR del local de los años 2024, 2025 y 2026",
+    "Comparativa de dotación del local antes y después del despido",
+    "Testigos",
+    "Absolvente",
+]
+
 
 def correr(
     contexto_corrida: dict,
@@ -221,6 +231,28 @@ def _armar_titular(causas_nuevas: int) -> str:
     if causas_nuevas == 0:
         return "Sin causas nuevas"
     return f"{causas_nuevas} causas nuevas registradas"
+
+
+def _armar_lista_documentos(ajustes: dict, eerr_reusado: bool) -> list[str]:
+    """Arma la lista de documentos a solicitar (ver subagentes/smu.md paso
+    2k.2-2k.4): parte de la lista base, quita el punto del EERR si se
+    reusó uno de una causa anterior del mismo CECO, y agrega los ajustes
+    que detectó Claude (base de cálculo distinta, u otros conceptos
+    atípicos) justo antes de Testigos y Absolvente."""
+    lista = list(LISTA_DOCUMENTOS_BASE)
+    if eerr_reusado:
+        lista = [documento for documento in lista if "EERR" not in documento]
+
+    ajustes_a_insertar = []
+    if ajustes.get("ajuste_base_calculo"):
+        ajustes_a_insertar.append("Últimas 6 liquidaciones de remuneraciones")
+    ajustes_a_insertar += list(ajustes.get("otros_ajustes", []))
+
+    if not ajustes_a_insertar:
+        return lista
+
+    indice_testigos = lista.index("Testigos")
+    return lista[:indice_testigos] + ajustes_a_insertar + lista[indice_testigos:]
 
 
 SCHEMA_RESUMEN = {
