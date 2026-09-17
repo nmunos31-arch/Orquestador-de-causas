@@ -66,3 +66,19 @@ class TestOrquestadorDespachaSmu:
 
         assert resultado["fases"]["smu"]["fase"] == "smu"
         assert resultado["fases"]["smu"]["titular"] == "Sin correos nuevos"
+
+    def test_smu_recibe_ruta_registro_ceco(self, tmp_path, monkeypatch):
+        ruta_contexto = tmp_path / "_contexto_corrida.json"
+        ruta_contexto.write_text(json.dumps({"fecha_hoy": "2026-09-16"}), encoding="utf-8")
+
+        llamadas = []
+        monkeypatch.setattr(orquestador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
+        monkeypatch.setattr(orquestador.fases_smu, "correr", lambda *a, **k: llamadas.append(k) or {"fase": "smu"})
+
+        orquestador.correr(
+            ruta_contexto=ruta_contexto,
+            ruta_registro_causas=tmp_path / "registro_causas.json",
+            ruta_registro_ceco=tmp_path / "registro_ceco.json",
+        )
+
+        assert llamadas[0]["ruta_registro_ceco"] == tmp_path / "registro_ceco.json"

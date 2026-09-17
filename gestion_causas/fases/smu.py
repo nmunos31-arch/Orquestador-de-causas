@@ -37,6 +37,7 @@ def correr(
     contexto_corrida: dict,
     *,
     ruta_registro_causas: Path = registro_mod.RUTA_REGISTRO_CAUSAS,
+    ruta_registro_ceco: Path = registro_mod.RUTA_REGISTRO_CECO,
 ) -> dict:
     hilos = gmail_client.buscar_hilos(QUERY_CANDIDATOS, max_resultados=50)
     if not hilos:
@@ -121,6 +122,29 @@ def correr(
                     "que": f"No se pudieron detectar los ajustes de la demanda automáticamente: {ajustes['error']}",
                     "urgencia": "media",
                 })
+
+        eerr_reusable = None
+        if demanda_guardada and ceco and ajustes.get("fecha_despido"):
+            eerr_reusable = registro_mod.buscar_eerr_reusable(
+                ceco, ajustes["fecha_despido"], ruta=ruta_registro_ceco
+            )
+            if eerr_reusable:
+                causa_reusable = registro_mod.obtener_causa(
+                    eerr_reusable["rit_causa"], ruta=ruta_registro_causas
+                )
+                if causa_reusable and causa_reusable.get("carpeta"):
+                    carpeta_reusable = Path(causa_reusable["carpeta"])
+                    nombre_eerr = next(
+                        (
+                            nombre for nombre in carpetas_mod.listar_archivos_carpeta(carpeta_reusable)
+                            if carpetas_mod.parece_eerr(nombre)
+                        ),
+                        None,
+                    )
+                    if nombre_eerr:
+                        carpetas_mod.copiar_archivo_local(
+                            carpeta_reusable / nombre_eerr, carpeta, nombre_eerr
+                        )
 
         # El resumen narrativo solo hace falta para la fila del Excel — Preunic y
         # Salcobrand nunca tienen fila (ver EMPRESAS_SIN_EXCEL), así que ni siquiera

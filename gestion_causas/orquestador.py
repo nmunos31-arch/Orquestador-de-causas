@@ -38,7 +38,7 @@ def correr(
 
     fases = {}
     for nombre, funcion, kwargs_extra in (
-        ("smu", fases_smu.correr, {}),
+        ("smu", fases_smu.correr, {"ruta_registro_ceco": ruta_registro_ceco}),
         ("goteo", fases_goteo.correr, {"ruta_registro_ceco": ruta_registro_ceco}),
     ):
         try:

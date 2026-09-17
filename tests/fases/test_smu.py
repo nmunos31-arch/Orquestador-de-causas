@@ -333,3 +333,63 @@ class TestAjustesDeLaDemanda:
         assert llamadas_ajustes == []
         entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
         assert entrada["fecha_despido"] is None
+
+
+class TestReusoDeEerr:
+    def _monkeypatch_comunes(self, monkeypatch, tmp_path, cuerpo_extra=""):
+        carpeta_causa = tmp_path / "Minutas" / "Perez con Alvi M-1-2026"
+        monkeypatch.setattr(smu.carpetas_mod, "buscar_carpeta_existente_por_rit", lambda rit: None)
+        monkeypatch.setattr(smu.carpetas_mod, "crear_carpeta_causa", lambda apellido, empresa, rit: carpeta_causa)
+        monkeypatch.setattr(smu.gmail_client, "descargar_adjunto", lambda message_id, attachment_id: b"contenido pdf falso")
+        monkeypatch.setattr(smu.gmail_client, "obtener_o_crear_etiqueta", lambda nombre, color=None: "label-id-1")
+        monkeypatch.setattr(smu.gmail_client, "aplicar_etiqueta_a_hilo", lambda thread_id, label_id: None)
+        monkeypatch.setattr(smu.gmail_client, "listar_borradores_de_hilo", lambda thread_id: [])
+        monkeypatch.setattr(smu.gmail_client, "crear_borrador", lambda *a, **k: {"id": "draft-1"})
+        monkeypatch.setattr(smu, "agregar_causa", lambda ruta_excel, datos: {"agregada": True, "fila": 10})
+        monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
+        monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: [{
+            "id": "msg-1", "thread_id": "thread-1", "sender": "persona@smu.cl", "subject": "DEMANDA",
+            "cuerpo_texto": CUERPO_CUADRO_ALVI + cuerpo_extra, "adjuntos": [
+                {"filename": "demanda.pdf", "attachment_id": "att-1", "mime_type": "application/pdf", "size": 50000},
+            ],
+        }])
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None: (
+            {"fecha_despido": "2026-01-08", "ajuste_base_calculo": False, "otros_ajustes": []}
+            if schema is smu.SCHEMA_AJUSTES_DEMANDA else {"resumen": "Texto de prueba."}
+        ))
+        return carpeta_causa
+
+    def test_copia_el_eerr_de_la_causa_anterior_cuando_hay_uno_reusable(self, tmp_path, monkeypatch):
+        carpeta_causa = self._monkeypatch_comunes(monkeypatch, tmp_path, cuerpo_extra="\nCECO: T-900\n")
+
+        carpeta_causa_anterior = tmp_path / "Minutas" / "Soto con Alvi M-9-2025"
+        carpeta_causa_anterior.mkdir(parents=True)
+        (carpeta_causa_anterior / "EERR 2025.pdf").write_bytes(b"eerr viejo")
+
+        ruta_registro = tmp_path / "registro_causas.json"
+        registro_mod.registrar_causa("M-9-2025", {"carpeta": str(carpeta_causa_anterior)}, ruta=ruta_registro)
+
+        ruta_ceco = tmp_path / "registro_ceco.json"
+        registro_mod.registrar_eerr_recibido("T-900", "2025-11-01", "M-9-2025", ruta=ruta_ceco)
+
+        smu.correr(
+            {"fecha_hoy": "2026-09-16"},
+            ruta_registro_causas=ruta_registro,
+            ruta_registro_ceco=ruta_ceco,
+        )
+
+        assert (carpeta_causa / "EERR 2025.pdf").exists()
+
+    def test_sin_eerr_reusable_no_copia_nada(self, tmp_path, monkeypatch):
+        carpeta_causa = self._monkeypatch_comunes(monkeypatch, tmp_path, cuerpo_extra="\nCECO: T-901\n")
+
+        ruta_registro = tmp_path / "registro_causas.json"
+        ruta_ceco = tmp_path / "registro_ceco.json"
+
+        smu.correr(
+            {"fecha_hoy": "2026-09-16"},
+            ruta_registro_causas=ruta_registro,
+            ruta_registro_ceco=ruta_ceco,
+        )
+
+        assert list(carpeta_causa.iterdir()) == [carpeta_causa / "demanda.pdf"]
