@@ -88,6 +88,8 @@ def correr(
         if registro_mod.causa_ya_registrada(rit, ruta=ruta_registro_causas):
             continue
 
+        ceco = _buscar_ceco_en_mensajes(mensajes)
+
         apellido = campos.get("demandante", "").split()[-1].title() if campos.get("demandante") else rit
 
         carpeta_existente = carpetas_mod.buscar_carpeta_existente_por_rit(rit)
@@ -109,6 +111,16 @@ def correr(
                 "tipo": "sin_demanda",
                 "detalle": f"{rit}: no se encontró un PDF de demanda en el correo — súbela a mano.",
             })
+
+        ajustes: dict = {}
+        if demanda_guardada:
+            ajustes = _evaluar_ajustes_demanda(campos, carpeta / "demanda.pdf")
+            if ajustes.get("error"):
+                acciones.append({
+                    "rit": rit,
+                    "que": f"No se pudieron detectar los ajustes de la demanda automáticamente: {ajustes['error']}",
+                    "urgencia": "media",
+                })
 
         # El resumen narrativo solo hace falta para la fila del Excel — Preunic y
         # Salcobrand nunca tienen fila (ver EMPRESAS_SIN_EXCEL), así que ni siquiera
@@ -147,6 +159,8 @@ def correr(
                 "thread_id": thread_id,
                 "tiene_demanda": demanda_guardada,
                 "aplica_excel": empresa not in EMPRESAS_SIN_EXCEL,
+                "ceco": ceco,
+                "fecha_despido": ajustes.get("fecha_despido"),
             },
             ruta=ruta_registro_causas,
         )
@@ -217,6 +231,47 @@ def _generar_resumen_narrativo(campos: dict, cuerpo_texto_completo: str) -> dict
         "sin repetir montos parciales."
     )
     return reasoning.preguntar(tarea, contexto, SCHEMA_RESUMEN)
+
+
+SCHEMA_AJUSTES_DEMANDA = {
+    "type": "object",
+    "properties": {
+        "fecha_despido": {"type": ["string", "null"]},
+        "ajuste_base_calculo": {"type": "boolean"},
+        "otros_ajustes": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["fecha_despido", "ajuste_base_calculo", "otros_ajustes"],
+}
+
+
+def _evaluar_ajustes_demanda(campos: dict, ruta_demanda: Path) -> dict:
+    """Lee el PDF de la demanda (Claude la lee con su propia herramienta
+    Read, en modo visión si es un escaneo) para detectar, más allá de lo
+    que ya viene resumido en el cuadro: la fecha exacta de despido, si se
+    demanda una base de cálculo distinta de la indemnización (dispara
+    pedir las últimas 6 liquidaciones), y cualquier otro concepto atípico
+    que necesite un antecedente puntual para desvirtuarlo (ver
+    subagentes/smu.md paso 2k.1 y 2k.4)."""
+    contexto = {"campos_del_cuadro": campos}
+    tarea = (
+        "Leé el archivo de la demanda indicado más abajo con tu herramienta Read (si es "
+        "un PDF escaneado sin capa de texto, se lee en modo visión página por página — no "
+        "leas más de ~10-12 páginas salvo que el petitorio esté evidentemente más "
+        "adelante). Andá directo a la sección de Hechos/Antecedentes (primeras páginas, "
+        "después de la identificación de las partes) y a la sección final de "
+        "Petitorio/Por tanto — saltate el cuerpo intermedio de fundamentos de derecho "
+        "(citas de ley, doctrina, jurisprudencia), no aporta nada nuevo frente al cuadro.\n\n"
+        "De ahí extraé: (1) la fecha exacta de despido (formato AAAA-MM-DD, o null si no "
+        "se puede determinar con certeza); (2) si se demanda una diferencia en la base de "
+        "cálculo de la indemnización por años de servicio o de la sustitutiva de aviso "
+        "previo (ajuste_base_calculo=true en ese caso); (3) cualquier otro concepto "
+        "demandado atípico más allá de lo típico (ej. un descuento indebido en el "
+        "finiquito por un préstamo, una diferencia por horas extraordinarias) — por cada "
+        "uno, un string corto y escueto con el nombre del antecedente que permitiría "
+        "desvirtuarlo o estudiar su procedencia (ej. 'Antecedentes de la procedencia del "
+        "préstamo'), sin explicar por qué. Si no hay ninguno, devolvé una lista vacía."
+    )
+    return reasoning.preguntar(tarea, contexto, SCHEMA_AJUSTES_DEMANDA, ruta_archivo=ruta_demanda)
 
 
 SCHEMA_ORIGEN_CADENA = {

@@ -170,7 +170,7 @@ class TestResumenYExcel:
             return {"agregada": True, "fila": 10}
 
         monkeypatch.setattr(smu, "agregar_causa", agregar_causa_falso)
-        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema: {"resumen": "Texto de prueba del resumen."})
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None: {"resumen": "Texto de prueba del resumen."})
 
         smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=tmp_path / "registro_causas.json")
 
@@ -185,7 +185,7 @@ class TestResumenYExcel:
 
         llamadas_agregar_causa = []
         monkeypatch.setattr(smu, "agregar_causa", lambda ruta_excel, datos: llamadas_agregar_causa.append(datos))
-        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema: {"resumen": "Texto de prueba."})
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None: {"resumen": "Texto de prueba."})
 
         smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=tmp_path / "registro_causas.json")
 
@@ -199,7 +199,7 @@ class TestRegistrarEtiquetarYMarcarProcesado:
         monkeypatch.setattr(smu.carpetas_mod, "crear_carpeta_causa", lambda apellido, empresa, rit: carpeta_causa)
         monkeypatch.setattr(smu.gmail_client, "descargar_adjunto", lambda message_id, attachment_id: b"contenido pdf falso")
         monkeypatch.setattr(smu, "agregar_causa", lambda ruta_excel, datos: {"agregada": True, "fila": 10})
-        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema: {"resumen": "Texto de prueba."})
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None: {"resumen": "Texto de prueba."})
 
         etiquetas_aplicadas = []
         monkeypatch.setattr(smu.gmail_client, "obtener_o_crear_etiqueta", lambda nombre, color=None: f"label-{nombre}")
@@ -244,3 +244,92 @@ class TestBuscarCecoEnMensajes:
     def test_sin_ceco_en_ningun_mensaje_devuelve_none(self):
         mensajes = [{"cuerpo_texto": "No hay CECO mencionado acá."}]
         assert smu._buscar_ceco_en_mensajes(mensajes) is None
+
+
+class TestAjustesDeLaDemanda:
+    def _monkeypatch_comunes(self, monkeypatch, tmp_path):
+        carpeta_causa = tmp_path / "Minutas" / "Perez con Alvi M-1-2026"
+        monkeypatch.setattr(smu.carpetas_mod, "buscar_carpeta_existente_por_rit", lambda rit: None)
+        monkeypatch.setattr(smu.carpetas_mod, "crear_carpeta_causa", lambda apellido, empresa, rit: carpeta_causa)
+        monkeypatch.setattr(smu.gmail_client, "descargar_adjunto", lambda message_id, attachment_id: b"contenido pdf falso")
+        monkeypatch.setattr(smu.gmail_client, "obtener_o_crear_etiqueta", lambda nombre, color=None: "label-id-1")
+        monkeypatch.setattr(smu.gmail_client, "aplicar_etiqueta_a_hilo", lambda thread_id, label_id: None)
+        monkeypatch.setattr(smu.gmail_client, "listar_borradores_de_hilo", lambda thread_id: [])
+        monkeypatch.setattr(smu.gmail_client, "crear_borrador", lambda *a, **k: {"id": "draft-1"})
+        monkeypatch.setattr(smu, "agregar_causa", lambda ruta_excel, datos: {"agregada": True, "fila": 10})
+        monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
+        monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: [{
+            "id": "msg-1", "thread_id": "thread-1", "sender": "persona@smu.cl", "subject": "DEMANDA",
+            "cuerpo_texto": CUERPO_CUADRO_ALVI, "adjuntos": [
+                {"filename": "demanda.pdf", "attachment_id": "att-1", "mime_type": "application/pdf", "size": 50000},
+            ],
+        }])
+        return carpeta_causa
+
+    def test_llama_a_reasoning_con_ruta_archivo_y_guarda_fecha_despido_y_ceco(self, tmp_path, monkeypatch):
+        carpeta_causa = self._monkeypatch_comunes(monkeypatch, tmp_path)
+        llamadas = []
+
+        def preguntar_falso(tarea, contexto, schema, ruta_archivo=None):
+            if schema is smu.SCHEMA_AJUSTES_DEMANDA:
+                llamadas.append(ruta_archivo)
+                return {"fecha_despido": "2026-01-08", "ajuste_base_calculo": False, "otros_ajustes": []}
+            return {"resumen": "Texto de prueba."}
+
+        monkeypatch.setattr(smu.reasoning, "preguntar", preguntar_falso)
+
+        ruta_registro = tmp_path / "registro_causas.json"
+        smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=ruta_registro)
+
+        assert llamadas == [carpeta_causa / "demanda.pdf"]
+        entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
+        assert entrada["fecha_despido"] == "2026-01-08"
+
+    def test_guarda_el_ceco_encontrado_en_los_mensajes(self, tmp_path, monkeypatch):
+        self._monkeypatch_comunes(monkeypatch, tmp_path)
+        monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: [{
+            "id": "msg-1", "thread_id": "thread-1", "sender": "persona@smu.cl", "subject": "DEMANDA",
+            "cuerpo_texto": CUERPO_CUADRO_ALVI + "\nCECO: T-900\n", "adjuntos": [
+                {"filename": "demanda.pdf", "attachment_id": "att-1", "mime_type": "application/pdf", "size": 50000},
+            ],
+        }])
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None: (
+            {"fecha_despido": "2026-01-08", "ajuste_base_calculo": False, "otros_ajustes": []}
+            if schema is smu.SCHEMA_AJUSTES_DEMANDA else {"resumen": "Texto de prueba."}
+        ))
+
+        ruta_registro = tmp_path / "registro_causas.json"
+        smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=ruta_registro)
+
+        entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
+        assert entrada["ceco"] == "T-900"
+
+    def test_sin_demanda_guardada_no_llama_a_reasoning_de_ajustes(self, tmp_path, monkeypatch):
+        carpeta_causa = tmp_path / "Minutas" / "Perez con Alvi M-1-2026"
+        monkeypatch.setattr(smu.carpetas_mod, "buscar_carpeta_existente_por_rit", lambda rit: None)
+        monkeypatch.setattr(smu.carpetas_mod, "crear_carpeta_causa", lambda apellido, empresa, rit: carpeta_causa)
+        monkeypatch.setattr(smu.gmail_client, "obtener_o_crear_etiqueta", lambda nombre, color=None: "label-id-1")
+        monkeypatch.setattr(smu.gmail_client, "aplicar_etiqueta_a_hilo", lambda thread_id, label_id: None)
+        monkeypatch.setattr(smu, "agregar_causa", lambda ruta_excel, datos: {"agregada": True, "fila": 10})
+        monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
+        monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: [{
+            "id": "msg-1", "thread_id": "thread-1", "sender": "persona@smu.cl", "subject": "DEMANDA",
+            "cuerpo_texto": CUERPO_CUADRO_ALVI, "adjuntos": [],
+        }])
+
+        llamadas_ajustes = []
+
+        def preguntar_falso(tarea, contexto, schema, ruta_archivo=None):
+            if schema is smu.SCHEMA_AJUSTES_DEMANDA:
+                llamadas_ajustes.append(1)
+                return {"fecha_despido": None, "ajuste_base_calculo": False, "otros_ajustes": []}
+            return {"resumen": "Texto de prueba."}
+
+        monkeypatch.setattr(smu.reasoning, "preguntar", preguntar_falso)
+
+        ruta_registro = tmp_path / "registro_causas.json"
+        smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=ruta_registro)
+
+        assert llamadas_ajustes == []
+        entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
+        assert entrada["fecha_despido"] is None
