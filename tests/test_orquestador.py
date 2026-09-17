@@ -82,3 +82,20 @@ class TestOrquestadorDespachaSmu:
         )
 
         assert llamadas[0]["ruta_registro_ceco"] == tmp_path / "registro_ceco.json"
+
+
+class TestOrquestadorDespachaAgenda:
+    def test_corre_agenda_y_devuelve_su_resumen(self, tmp_path, monkeypatch):
+        ruta_contexto = tmp_path / "_contexto_corrida.json"
+        ruta_contexto.write_text(json.dumps({"fecha_hoy": "2026-09-17"}), encoding="utf-8")
+
+        monkeypatch.setattr(orquestador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
+
+        resultado = orquestador.correr(
+            ruta_contexto=ruta_contexto,
+            ruta_registro_causas=tmp_path / "registro_causas.json",
+            ruta_registro_ceco=tmp_path / "registro_ceco.json",
+        )
+
+        assert resultado["fases"]["agenda"]["fase"] == "agenda"
+        assert resultado["fases"]["agenda"]["titular"] == "Sin causas activas para revisar agenda"

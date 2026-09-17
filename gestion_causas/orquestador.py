@@ -16,6 +16,7 @@ from pathlib import Path
 
 from gestion_causas import bitacora as bitacora_mod
 from gestion_causas import registro as registro_mod
+from gestion_causas.fases import agenda as fases_agenda
 from gestion_causas.fases import goteo as fases_goteo
 from gestion_causas.fases import smu as fases_smu
 
@@ -40,6 +41,7 @@ def correr(
     for nombre, funcion, kwargs_extra in (
         ("smu", fases_smu.correr, {"ruta_registro_ceco": ruta_registro_ceco}),
         ("goteo", fases_goteo.correr, {"ruta_registro_ceco": ruta_registro_ceco}),
+        ("agenda", fases_agenda.correr, {}),
     ):
         try:
             fases[nombre] = funcion(
