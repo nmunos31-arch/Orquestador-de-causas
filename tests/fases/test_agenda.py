@@ -191,3 +191,148 @@ class TestArmarAsuntoOfrecimiento:
         asunto = agenda._armar_asunto_ofrecimiento(causa, "M-1-2026")
 
         assert asunto == 'Demanda laboral "Pérez con Alvi" Rit M-1-2026'
+
+
+class TestProcesarOfrecimientoIntegracion:
+    """Prueba _procesar_ofrecimiento (y por lo tanto correr()) de punta a
+    punta, mockeando solo gmail_client y reasoning.preguntar — nunca la red
+    real."""
+
+    def _causa_lista_para_ofrecimiento(self, tmp_path, **extra):
+        carpeta = tmp_path / "Perez con Alvi"
+        carpeta.mkdir()
+        (carpeta / "demanda.pdf").write_bytes(b"%PDF-1.4 contenido falso")
+        return _registrar_causa_activa(tmp_path, carpeta=str(carpeta), **extra)
+
+    def _mock_evaluacion(self, monkeypatch, **overrides):
+        resultado = {
+            "demandantes": [{"apellido": "Pérez", "monto_recargo_30": 500000, "monto_afc": 200000}],
+            "hay_discrepancia": False,
+            "detalle_discrepancia": "",
+        }
+        resultado.update(overrides)
+        monkeypatch.setattr(agenda.reasoning, "preguntar", lambda *a, **k: resultado)
+
+    def test_responde_dentro_de_la_cadena_interna_si_existe(self, tmp_path, monkeypatch):
+        ruta_registro = self._causa_lista_para_ofrecimiento(tmp_path)
+        ruta_mapa = _mapa_audiencias(tmp_path, {
+            "M-1-2026": {"fecha": "2026-10-01", "resumen": "Audiencia única", "tipo": "Única"},
+        })
+        self._mock_evaluacion(monkeypatch)
+
+        monkeypatch.setattr(
+            agenda.gmail_client, "buscar_hilos",
+            lambda query, **k: [{"id": "thread-interno"}] if "gomezyriesco.cl" in query else [],
+        )
+        monkeypatch.setattr(
+            agenda.gmail_client, "leer_hilo",
+            lambda thread_id, **k: [
+                {"sender": "Cristina Gil <cgil@gomezyriesco.cl>", "cuerpo_texto": "Cuadro original", "subject": "Demanda laboral \"Perez con Alvi\" M-1-2026"},
+                {"sender": "Nico Muñoz <nmunoz@gomezyriesco.cl>", "cuerpo_texto": "ok", "subject": "Re: ..."},
+            ],
+        )
+        monkeypatch.setattr(agenda.gmail_client, "listar_borradores_de_hilo", lambda thread_id, **k: [])
+
+        llamadas_crear = []
+        monkeypatch.setattr(
+            agenda.gmail_client, "crear_borrador",
+            lambda destinatario, asunto, cuerpo, **k: llamadas_crear.append((destinatario, asunto, cuerpo, k)) or {"id": "draft-1"},
+        )
+
+        contexto = {"fecha_hoy": "2026-09-17", "mapa_audiencias": {"ruta": str(ruta_mapa)}}
+        resumen = _correr_agenda(contexto, tmp_path, ruta_registro_causas=ruta_registro)
+
+        assert len(llamadas_crear) == 1
+        destinatario, asunto, cuerpo, kwargs = llamadas_crear[0]
+        assert destinatario == "cgil@gomezyriesco.cl"
+        assert kwargs["thread_id"] == "thread-interno"
+        assert asunto.startswith("Re: ")
+
+        entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
+        assert entrada["oferta_borrador_creado"] is True
+        assert resumen["metricas"][1] == {"etiqueta": "Borradores de ofrecimiento creados", "valor": 1}
+        assert resumen["items"] == [{"rit": "M-1-2026", "titulo": "Perez con Alvi", "detalle": "Borrador de ofrecimiento creado"}]
+
+    def test_crea_correo_nuevo_si_no_encuentra_la_cadena_interna(self, tmp_path, monkeypatch):
+        ruta_registro = self._causa_lista_para_ofrecimiento(tmp_path)
+        ruta_mapa = _mapa_audiencias(tmp_path, {
+            "M-1-2026": {"fecha": "2026-10-01", "resumen": "Audiencia única", "tipo": "Única"},
+        })
+        self._mock_evaluacion(monkeypatch)
+
+        monkeypatch.setattr(agenda.gmail_client, "buscar_hilos", lambda query, **k: [])
+        monkeypatch.setattr(agenda.gmail_client, "buscar_borrador_por_asunto", lambda fragmento, **k: [])
+        monkeypatch.setattr(agenda.gmail_client, "leer_hilo", lambda thread_id, **k: [])
+
+        llamadas_crear = []
+        monkeypatch.setattr(
+            agenda.gmail_client, "crear_borrador",
+            lambda destinatario, asunto, cuerpo, **k: llamadas_crear.append((destinatario, asunto, cuerpo, k)) or {"id": "draft-2"},
+        )
+
+        contexto = {"fecha_hoy": "2026-09-17", "mapa_audiencias": {"ruta": str(ruta_mapa)}}
+        _correr_agenda(contexto, tmp_path, ruta_registro_causas=ruta_registro)
+
+        assert len(llamadas_crear) == 1
+        destinatario, asunto, cuerpo, kwargs = llamadas_crear[0]
+        assert destinatario == "rgomez@gomezyriesco.cl"
+        assert kwargs.get("thread_id") is None
+        assert asunto == 'Demanda laboral "Perez con Alvi" Rit M-1-2026'
+
+    def test_no_duplica_si_ya_existe_un_borrador_en_la_cadena(self, tmp_path, monkeypatch):
+        ruta_registro = self._causa_lista_para_ofrecimiento(tmp_path)
+        ruta_mapa = _mapa_audiencias(tmp_path, {
+            "M-1-2026": {"fecha": "2026-10-01", "resumen": "Audiencia única", "tipo": "Única"},
+        })
+        self._mock_evaluacion(monkeypatch)
+
+        monkeypatch.setattr(agenda.gmail_client, "buscar_hilos", lambda query, **k: [{"id": "thread-interno"}])
+        monkeypatch.setattr(
+            agenda.gmail_client, "leer_hilo",
+            lambda thread_id, **k: [{"sender": "cgil@gomezyriesco.cl", "cuerpo_texto": "x", "subject": "x"}],
+        )
+        monkeypatch.setattr(agenda.gmail_client, "listar_borradores_de_hilo", lambda thread_id, **k: [{"id": "draft-existente"}])
+
+        llamadas_crear = []
+        monkeypatch.setattr(agenda.gmail_client, "crear_borrador", lambda *a, **k: llamadas_crear.append(1))
+
+        contexto = {"fecha_hoy": "2026-09-17", "mapa_audiencias": {"ruta": str(ruta_mapa)}}
+        _correr_agenda(contexto, tmp_path, ruta_registro_causas=ruta_registro)
+
+        assert llamadas_crear == []
+        entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
+        assert entrada["oferta_borrador_creado"] is True
+
+    def test_anota_accion_si_no_hay_demanda_pdf_en_la_carpeta(self, tmp_path, monkeypatch):
+        carpeta = tmp_path / "Perez con Alvi"
+        carpeta.mkdir()
+        ruta_registro = _registrar_causa_activa(tmp_path, carpeta=str(carpeta))
+        ruta_mapa = _mapa_audiencias(tmp_path, {
+            "M-1-2026": {"fecha": "2026-10-01", "resumen": "Audiencia única", "tipo": "Única"},
+        })
+
+        contexto = {"fecha_hoy": "2026-09-17", "mapa_audiencias": {"ruta": str(ruta_mapa)}}
+        resumen = _correr_agenda(contexto, tmp_path, ruta_registro_causas=ruta_registro)
+
+        assert len(resumen["acciones"]) == 1
+        assert "demanda.pdf" in resumen["acciones"][0]["que"]
+        assert resumen["acciones"][0]["urgencia"] == "media"
+
+    def test_anota_accion_de_urgencia_alta_si_hay_discrepancia(self, tmp_path, monkeypatch):
+        ruta_registro = self._causa_lista_para_ofrecimiento(tmp_path)
+        ruta_mapa = _mapa_audiencias(tmp_path, {
+            "M-1-2026": {"fecha": "2026-10-01", "resumen": "Audiencia única", "tipo": "Única"},
+        })
+        self._mock_evaluacion(monkeypatch, hay_discrepancia=True, detalle_discrepancia="Demanda dice $500.000, cuadro decía $400.000")
+
+        monkeypatch.setattr(agenda.gmail_client, "buscar_hilos", lambda query, **k: [])
+        monkeypatch.setattr(agenda.gmail_client, "buscar_borrador_por_asunto", lambda fragmento, **k: [])
+        monkeypatch.setattr(agenda.gmail_client, "leer_hilo", lambda thread_id, **k: [])
+        monkeypatch.setattr(agenda.gmail_client, "crear_borrador", lambda *a, **k: {"id": "draft-3"})
+
+        contexto = {"fecha_hoy": "2026-09-17", "mapa_audiencias": {"ruta": str(ruta_mapa)}}
+        resumen = _correr_agenda(contexto, tmp_path, ruta_registro_causas=ruta_registro)
+
+        accion_discrepancia = next(a for a in resumen["acciones"] if "Discrepancia" in a["que"])
+        assert accion_discrepancia["urgencia"] == "alta"
+        assert "500.000" in accion_discrepancia["que"]

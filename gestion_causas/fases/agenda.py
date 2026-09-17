@@ -15,11 +15,16 @@ from datetime import date
 from pathlib import Path
 
 from gestion_causas import agenda as dias_mod
+from gestion_causas import bitacora as bitacora_mod
+from gestion_causas import gmail_client
 from gestion_causas import mapas as mapas_mod
 from gestion_causas import reasoning
 from gestion_causas import registro as registro_mod
+from gestion_causas.seguimiento import extraer_direccion
 
 TIPOS_CON_OFRECIMIENTO = {"Única", "Juicio"}
+
+CUENTA_TRABAJO = "nmunoz@gomezyriesco.cl"
 
 _MESES_ES = {
     1: "enero", 2: "febrero", 3: "marzo", 4: "abril", 5: "mayo", 6: "junio",
@@ -169,6 +174,121 @@ def _armar_asunto_ofrecimiento(causa: dict, rit: str) -> str:
     return f'Demanda laboral "{apellido} con {empresa}" Rit {rit}'
 
 
+def _buscar_cadena_interna(rit: str) -> str | None:
+    """Busca la cadena interna que Nico abre con Román al llegar la demanda
+    (asunto 'Demanda laboral ... [RIT]', primer mensaje de
+    @gomezyriesco.cl — la misma que gestion-causas-smu detecta como interna
+    y deja sin tocar). Devuelve su thread_id, o None si todavía no existe
+    (causa nueva, ver agenda.md paso 3g). Si la búsqueda acotada por asunto
+    no encuentra nada, reintenta sin restringir el asunto (causas RIT
+    T-/O-, cuyo primer mensaje no necesariamente sigue el patrón "Demanda
+    laboral...")."""
+    hilos = gmail_client.buscar_hilos(f'from:gomezyriesco.cl subject:"{rit}"')
+    if not hilos:
+        hilos = gmail_client.buscar_hilos(f"from:gomezyriesco.cl {rit}")
+    for hilo in hilos:
+        mensajes = gmail_client.leer_hilo(hilo["id"])
+        if mensajes and extraer_direccion(mensajes[0].get("sender", "")).endswith("@gomezyriesco.cl"):
+            return hilo["id"]
+    return None
+
+
+def _destinatarios_respuesta(thread_id: str) -> str:
+    """Todos los participantes internos (@gomezyriesco.cl) de la cadena,
+    salvo el propio Nico — el borrador de ofrecimiento debe ir a todos, no
+    solo a Román (memoria gestion_causas_borrador_ofrecimiento_formato,
+    corrección del 18.08.2026)."""
+    mensajes = gmail_client.leer_hilo(thread_id)
+    direcciones: list[str] = []
+    for mensaje in mensajes:
+        direccion = extraer_direccion(mensaje.get("sender", ""))
+        if direccion.endswith("@gomezyriesco.cl") and direccion != CUENTA_TRABAJO and direccion not in direcciones:
+            direcciones.append(direccion)
+    return ", ".join(direcciones) if direcciones else "rgomez@gomezyriesco.cl"
+
+
+def _crear_borrador_ofrecimiento(rit: str, cuerpo: str, asunto: str) -> str:
+    """Crea el borrador de ofrecimiento: responde dentro de la cadena
+    interna si ya existe, o crea un correo nuevo como respaldo si Nico
+    todavía no la abrió (agenda.md paso 3g). Nunca duplica un borrador ya
+    existente — devuelve su id en vez de crear uno nuevo."""
+    cuerpo_html = cuerpo.replace("\n", "<br>\n")
+    thread_id = _buscar_cadena_interna(rit)
+    if thread_id:
+        existentes = gmail_client.listar_borradores_de_hilo(thread_id)
+        if existentes:
+            return existentes[0]["id"]
+        destinatarios = _destinatarios_respuesta(thread_id)
+        borrador = gmail_client.crear_borrador(
+            destinatarios, f"Re: {asunto}", cuerpo_html, thread_id=thread_id, html=True
+        )
+    else:
+        existentes = gmail_client.buscar_borrador_por_asunto(asunto)
+        if existentes:
+            return existentes[0]["id"]
+        borrador = gmail_client.crear_borrador("rgomez@gomezyriesco.cl", asunto, cuerpo_html, html=True)
+    return borrador["id"]
+
+
+def _procesar_ofrecimiento(
+    causa: dict, audiencia: dict, fecha_hoy: str, ruta_registro_causas: Path, acciones: list[dict]
+) -> bool:
+    """Ejecuta el paso 3 completo para una causa (si corresponde): evalúa
+    los montos con Claude, arma el correo con la plantilla fija, y lo deja
+    como borrador. Devuelve True si se creó (o reusó) un borrador."""
+    rit = causa["rit"]
+    if not _debe_generar_ofrecimiento(causa, audiencia, fecha_hoy):
+        return False
+
+    carpeta = causa.get("carpeta")
+    ruta_demanda = Path(carpeta) / "demanda.pdf" if carpeta else None
+    if not ruta_demanda or not ruta_demanda.exists():
+        acciones.append({
+            "rit": rit,
+            "que": (
+                "Tocó el hito de 14 días para el ofrecimiento, pero no se encontró "
+                "demanda.pdf en la carpeta de la causa — revisar a mano."
+            ),
+            "urgencia": "media",
+        })
+        return False
+
+    texto_cuadro = ""
+    thread_id_origen = causa.get("thread_id")
+    if thread_id_origen:
+        mensajes_origen = gmail_client.leer_hilo(thread_id_origen)
+        if mensajes_origen:
+            texto_cuadro = mensajes_origen[0].get("cuerpo_texto", "")
+
+    evaluacion = _evaluar_montos_ofrecimiento(texto_cuadro, ruta_demanda)
+    if evaluacion.get("error"):
+        acciones.append({
+            "rit": rit,
+            "que": f"No se pudo calcular el ofrecimiento automáticamente: {evaluacion['error']}",
+            "urgencia": "media",
+        })
+        return False
+
+    if evaluacion.get("hay_discrepancia"):
+        acciones.append({
+            "rit": rit,
+            "que": f"Discrepancia: {evaluacion.get('detalle_discrepancia', '')}",
+            "urgencia": "alta",
+        })
+
+    fecha_audiencia = audiencia["fecha"]
+    dias_hasta_audiencia = (date.fromisoformat(fecha_audiencia) - date.fromisoformat(fecha_hoy)).days
+    cuerpo = _armar_cuerpo_ofrecimiento(
+        evaluacion["demandantes"], audiencia["tipo"], fecha_audiencia, dias_hasta_audiencia
+    )
+    asunto = _armar_asunto_ofrecimiento(causa, rit)
+    draft_id = _crear_borrador_ofrecimiento(rit, cuerpo, asunto)
+
+    registro_mod.registrar_causa(rit, {"oferta_borrador_creado": True}, ruta=ruta_registro_causas)
+    bitacora_mod.registrar(f"Borrador de ofrecimiento creado (draft {draft_id})", rit=rit)
+    return True
+
+
 def correr(
     contexto_corrida: dict,
     *,
@@ -211,8 +331,13 @@ def correr(
             })
             continue
 
-        # Paso 3 (hito de 14 días — borrador de ofrecimiento) se agrega en
-        # una tarea siguiente de este plan.
+        if _procesar_ofrecimiento(causa, audiencia, contexto_corrida["fecha_hoy"], ruta_registro_causas, acciones):
+            ofrecimientos_creados += 1
+            items.append({
+                "rit": rit,
+                "titulo": f"{causa.get('demandante', '')} con {causa.get('empresa', '')}",
+                "detalle": "Borrador de ofrecimiento creado",
+            })
 
     resumen = {
         "fase": "agenda",
