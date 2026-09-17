@@ -13,6 +13,7 @@ ningún mapa previo, a diferencia de goteo."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from actualizar_informe_juicios import RUTA_EXCEL_JUICIOS, agregar_causa
@@ -251,6 +252,22 @@ def _evaluar_origen_gomezyriesco(primer_mensaje: dict) -> dict:
         "INTERNA, no válida para esta tarea."
     )
     return reasoning.preguntar(tarea, contexto, SCHEMA_ORIGEN_CADENA)
+
+
+_PATRON_CECO = re.compile(r"ceco\s*(?:[:=-]|\bes\b)?\s*(\d+|[A-Z]+[\d-]+)", re.IGNORECASE)
+
+
+def _buscar_ceco_en_mensajes(mensajes: list[dict]) -> str | None:
+    """Busca un CECO mencionado en cualquiera de los mensajes del hilo (ver
+    subagentes/smu.md paso 2f: puede venir en el primer mensaje o en una
+    respuesta posterior, ej. "nos confirme el CECO 8890"). Best-effort por
+    regex, sin Claude — si de verdad no está en ningún mensaje, se completa
+    en una corrida futura cuando llegue."""
+    for mensaje in mensajes:
+        coincidencia = _PATRON_CECO.search(mensaje.get("cuerpo_texto", ""))
+        if coincidencia:
+            return coincidencia.group(1).upper()
+    return None
 
 
 def _dominio(remitente: str) -> str:

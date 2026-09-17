@@ -227,3 +227,20 @@ class TestRegistrarEtiquetarYMarcarProcesado:
         assert ("thread-1", f"label-{smu.ETIQUETA_PROCESADO}") in etiquetas_aplicadas
 
         assert resumen["items"] == [{"rit": "M-1-2026", "titulo": "Alvi - Juan Perez"}]
+
+
+class TestBuscarCecoEnMensajes:
+    def test_encuentra_ceco_en_el_primer_mensaje(self):
+        mensajes = [{"cuerpo_texto": "Les confirmamos el CECO: T-4521 para esta causa."}]
+        assert smu._buscar_ceco_en_mensajes(mensajes) == "T-4521"
+
+    def test_encuentra_ceco_en_un_mensaje_posterior(self):
+        mensajes = [
+            {"cuerpo_texto": "Estimados, queda pendiente el CECO."},
+            {"cuerpo_texto": "El CECO es 8890."},
+        ]
+        assert smu._buscar_ceco_en_mensajes(mensajes) == "8890"
+
+    def test_sin_ceco_en_ningun_mensaje_devuelve_none(self):
+        mensajes = [{"cuerpo_texto": "No hay CECO mencionado acá."}]
+        assert smu._buscar_ceco_en_mensajes(mensajes) is None
