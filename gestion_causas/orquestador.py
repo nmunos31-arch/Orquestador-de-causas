@@ -1,12 +1,16 @@
 """Driver mínimo del orquestador de gestion_causas, en Python.
 
-Alcance de este archivo (ver plan
-docs/superpowers/plans/2026-09-15-driver-python-goteo-piloto.md): solo
-despacha la fase 'goteo'. Las demás fases (smu, agenda, seguimiento,
-calendario) se agregan en planes posteriores, una vez validado este patrón.
-No reemplaza todavía a la tarea programada `gestion-causas-orquestador` — se
+Alcance de este archivo (ver planes en docs/superpowers/plans/): despacha
+'smu', 'goteo', 'agenda' y 'seguimiento'. Solo falta 'calendario'. No
+reemplaza todavía a la tarea programada `gestion-causas-orquestador` — se
 corre a mano en paralelo para comparar resultados contra el subagente viejo.
-"""
+
+Nota para cuando se corte la tarea programada real a este driver:
+`seguimiento` solo debe despacharse en la corrida de la mañana (sus
+umbrales son en días hábiles — correrla 3 veces al día no adelanta ningún
+aviso, ver subagentes/seguimiento.md). Este driver todavía no distingue
+momento del día en `contexto_corrida`; quien arme ese cronograma real debe
+agregar ese filtro antes del corte."""
 
 from __future__ import annotations
 
@@ -18,6 +22,7 @@ from gestion_causas import bitacora as bitacora_mod
 from gestion_causas import registro as registro_mod
 from gestion_causas.fases import agenda as fases_agenda
 from gestion_causas.fases import goteo as fases_goteo
+from gestion_causas.fases import seguimiento as fases_seguimiento
 from gestion_causas.fases import smu as fases_smu
 
 RUTA_CONTEXTO_DEFAULT = Path(__file__).parent / "_contexto_corrida.json"
@@ -42,6 +47,7 @@ def correr(
         ("smu", fases_smu.correr, {"ruta_registro_ceco": ruta_registro_ceco}),
         ("goteo", fases_goteo.correr, {"ruta_registro_ceco": ruta_registro_ceco}),
         ("agenda", fases_agenda.correr, {}),
+        ("seguimiento", fases_seguimiento.correr, {}),
     ):
         try:
             fases[nombre] = funcion(

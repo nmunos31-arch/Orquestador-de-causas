@@ -10,7 +10,6 @@ del plan de implementación)."""
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
@@ -200,7 +199,7 @@ def correr(
             "notas": [],
         }
 
-    mapa_hilos = _leer_mapa_hilos(contexto_corrida)
+    mapa_hilos = mapas_mod.leer_mapa_hilos(contexto_corrida)
     mapa_audiencias = mapas_mod.leer_mapa_audiencias(contexto_corrida)
 
     items: list[dict] = []
@@ -306,20 +305,6 @@ def _guardar_adjuntos_confiables(mensajes_hilos: list[dict], carpeta_destino: Pa
     return guardados
 
 
-def _leer_mapa_hilos(contexto_corrida: dict) -> dict:
-    info = contexto_corrida.get("mapa_hilos") or {}
-    ruta = info.get("ruta")
-    if not ruta or not Path(ruta).exists():
-        return {"rit_a_hilos": {}, "hilos": {}, "_notas": []}
-    mapa = json.loads(Path(ruta).read_text(encoding="utf-8"))
-    notas = []
-    for entrada in mapa.get("truncado", []):
-        notas.append({
-            "tipo": "busqueda_truncada",
-            "detalle": f"Búsqueda de {entrada['grupo']} quedó truncada ({entrada['total']} resultados)",
-        })
-    mapa["_notas"] = notas
-    return mapa
 
 
 def _armar_titular(con_documentos_nuevos: int, identificados_eerr: int) -> str:

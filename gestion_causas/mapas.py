@@ -21,3 +21,25 @@ def leer_mapa_audiencias(contexto_corrida: dict) -> dict:
     if not ruta or not Path(ruta).exists():
         return {"rit_a_audiencia": {}}
     return json.loads(Path(ruta).read_text(encoding="utf-8"))
+
+
+def leer_mapa_hilos(contexto_corrida: dict) -> dict:
+    """Lee el barrido combinado de Gmail que el orquestador ya armó para toda
+    la corrida (`rit_a_hilos`, `hilos`) — mismo mapa que usa `goteo.py` paso 2
+    y `seguimiento.py` paso 3b para el cruce por RIT sin volver a golpear
+    Gmail. Si el contexto no trae la ruta, o el archivo no existe (ej.
+    corriendo la fase suelta sin orquestador), devuelve un mapa vacío en vez
+    de fallar; `_notas` trae una nota por cada búsqueda que quedó truncada."""
+    info = contexto_corrida.get("mapa_hilos") or {}
+    ruta = info.get("ruta")
+    if not ruta or not Path(ruta).exists():
+        return {"rit_a_hilos": {}, "hilos": {}, "_notas": []}
+    mapa = json.loads(Path(ruta).read_text(encoding="utf-8"))
+    notas = []
+    for entrada in mapa.get("truncado", []):
+        notas.append({
+            "tipo": "busqueda_truncada",
+            "detalle": f"Búsqueda de {entrada['grupo']} quedó truncada ({entrada['total']} resultados)",
+        })
+    mapa["_notas"] = notas
+    return mapa
