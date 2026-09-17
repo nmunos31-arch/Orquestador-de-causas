@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from gestion_causas import registro as registro_mod
 from gestion_causas.fases import agenda
@@ -101,3 +102,37 @@ class TestDebeGenerarOfrecimiento:
     def test_false_cuando_ya_tiene_oferta_borrador_creado(self):
         causa = {"oferta_borrador_creado": True}
         assert agenda._debe_generar_ofrecimiento(causa, self.AUDIENCIA_UNICA, "2026-10-02") is False
+
+
+class TestEvaluarMontosOfrecimiento:
+    def test_pasa_ruta_archivo_y_texto_del_cuadro_a_reasoning(self, tmp_path, monkeypatch):
+        ruta_demanda = tmp_path / "demanda.pdf"
+        llamadas = []
+
+        def preguntar_falso(tarea, contexto, schema, ruta_archivo=None):
+            llamadas.append((tarea, contexto, schema, ruta_archivo))
+            return {
+                "demandantes": [{"apellido": "Pérez", "monto_recargo_30": 500000, "monto_afc": 200000}],
+                "hay_discrepancia": False,
+                "detalle_discrepancia": "",
+            }
+
+        monkeypatch.setattr(agenda.reasoning, "preguntar", preguntar_falso)
+
+        resultado = agenda._evaluar_montos_ofrecimiento("Conceptos demandados: Recargo 30%, AFC", ruta_demanda)
+
+        assert resultado["demandantes"][0]["apellido"] == "Pérez"
+        tarea, contexto, schema, ruta_archivo = llamadas[0]
+        assert contexto == {"texto_cuadro_original": "Conceptos demandados: Recargo 30%, AFC"}
+        assert schema == agenda.SCHEMA_OFRECIMIENTO
+        assert ruta_archivo == ruta_demanda
+
+    def test_propaga_el_error_de_reasoning_sin_modificarlo(self, tmp_path, monkeypatch):
+        def preguntar_falso(tarea, contexto, schema, ruta_archivo=None):
+            return {"error": "Claude no devolvió JSON válido"}
+
+        monkeypatch.setattr(agenda.reasoning, "preguntar", preguntar_falso)
+
+        resultado = agenda._evaluar_montos_ofrecimiento("texto", tmp_path / "demanda.pdf")
+
+        assert resultado == {"error": "Claude no devolvió JSON válido"}

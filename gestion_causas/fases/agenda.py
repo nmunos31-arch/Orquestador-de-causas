@@ -16,9 +16,62 @@ from pathlib import Path
 
 from gestion_causas import agenda as dias_mod
 from gestion_causas import mapas as mapas_mod
+from gestion_causas import reasoning
 from gestion_causas import registro as registro_mod
 
 TIPOS_CON_OFRECIMIENTO = {"Única", "Juicio"}
+
+SCHEMA_OFRECIMIENTO = {
+    "type": "object",
+    "properties": {
+        "demandantes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "apellido": {"type": "string"},
+                    "monto_recargo_30": {"type": "integer"},
+                    "monto_afc": {"type": "integer"},
+                },
+                "required": ["apellido", "monto_recargo_30", "monto_afc"],
+            },
+        },
+        "hay_discrepancia": {"type": "boolean"},
+        "detalle_discrepancia": {"type": "string"},
+    },
+    "required": ["demandantes", "hay_discrepancia", "detalle_discrepancia"],
+}
+
+
+def _evaluar_montos_ofrecimiento(texto_cuadro_original: str, ruta_demanda: Path) -> dict:
+    """Lee el PDF de la demanda (Claude la lee con su propia herramienta
+    Read, en modo visión si es un escaneo sin capa de texto) para extraer,
+    por cada demandante de la causa (puede ser uno o varios — no hay ningún
+    campo estructurado con la lista de demandantes hoy), los montos exactos
+    de Recargo legal 30% y Devolución de AFC. Coteja contra
+    `texto_cuadro_original` (el cuerpo del correo con el cuadro resumen
+    original, que trae "Conceptos demandados" como texto libre) y avisa si
+    hay una discrepancia entre ambos, en vez de ocultarla — la demanda es
+    la fuente legal (ver agenda.md paso 3c)."""
+    contexto = {"texto_cuadro_original": texto_cuadro_original}
+    tarea = (
+        "Leé el archivo de la demanda indicado más abajo con tu herramienta Read (si es "
+        "un PDF escaneado sin capa de texto, se lee en modo visión). Andá a la sección de "
+        "Petitorio/Por tanto (normalmente al final) y extraé, por CADA demandante que "
+        "aparezca en la causa: su apellido (tal como aparece en la identificación de las "
+        "partes; si hay dos demandantes con el mismo apellido, agregá la inicial del "
+        "nombre para distinguirlos), el monto exacto del Recargo legal 30% (recargo por "
+        "término injustificado, art. 168 del Código del Trabajo), y el monto exacto de la "
+        "Devolución de AFC (aporte al seguro de cesantía). Si la causa tiene un solo "
+        "demandante, la lista trae un único elemento.\n\n"
+        "Además, compará estos montos contra 'texto_cuadro_original' de más abajo (el "
+        "cuerpo del correo con el cuadro resumen original de la demanda): si hay una "
+        "diferencia entre lo que dice la demanda y lo que traía el cuadro, marcá "
+        "hay_discrepancia=true y describila brevemente en detalle_discrepancia (si no hay "
+        "diferencia — o el cuadro no menciona montos —, hay_discrepancia=false y "
+        "detalle_discrepancia vacío)."
+    )
+    return reasoning.preguntar(tarea, contexto, SCHEMA_OFRECIMIENTO, ruta_archivo=ruta_demanda)
 
 
 def _debe_generar_ofrecimiento(causa: dict, audiencia: dict, fecha_hoy: str) -> bool:
