@@ -12,6 +12,7 @@ calendario."""
 from __future__ import annotations
 
 from datetime import date
+from email.utils import getaddresses
 from pathlib import Path
 
 from gestion_causas import agenda as dias_mod
@@ -197,11 +198,20 @@ def _destinatarios_respuesta(thread_id: str) -> str:
     """Todos los participantes internos (@gomezyriesco.cl) de la cadena,
     salvo el propio Nico — el borrador de ofrecimiento debe ir a todos, no
     solo a Román (memoria gestion_causas_borrador_ofrecimiento_formato,
-    corrección del 18.08.2026)."""
+    corrección del 18.08.2026). "Todos" incluye a quien solo aparece como
+    destinatario (to/cc) y nunca escribió un mensaje propio — no alcanza
+    con mirar el remitente de cada mensaje."""
     mensajes = gmail_client.leer_hilo(thread_id)
-    direcciones: list[str] = []
+    encabezados = []
     for mensaje in mensajes:
-        direccion = extraer_direccion(mensaje.get("sender", ""))
+        for campo in ("sender", "to", "cc"):
+            valor = mensaje.get(campo, "")
+            if valor:
+                encabezados.append(valor)
+
+    direcciones: list[str] = []
+    for _nombre, direccion in getaddresses(encabezados):
+        direccion = direccion.strip().lower()
         if direccion.endswith("@gomezyriesco.cl") and direccion != CUENTA_TRABAJO and direccion not in direcciones:
             direcciones.append(direccion)
     return ", ".join(direcciones) if direcciones else "rgomez@gomezyriesco.cl"

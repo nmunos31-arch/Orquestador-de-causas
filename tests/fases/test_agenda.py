@@ -193,6 +193,45 @@ class TestArmarAsuntoOfrecimiento:
         assert asunto == 'Demanda laboral "Pérez con Alvi" Rit M-1-2026'
 
 
+class TestDestinatariosRespuesta:
+    def test_incluye_participante_que_solo_aparece_en_to_o_cc(self, monkeypatch):
+        monkeypatch.setattr(
+            agenda.gmail_client, "leer_hilo",
+            lambda thread_id, **k: [
+                {
+                    "sender": "Cristina Gil <cgil@gomezyriesco.cl>",
+                    "to": "Román Gómez <rgomez@gomezyriesco.cl>, Cristina Gil <cgil@gomezyriesco.cl>",
+                    "cc": "Otro Interno <ointerno@gomezyriesco.cl>",
+                },
+            ],
+        )
+
+        destinatarios = agenda._destinatarios_respuesta("thread-1")
+
+        assert destinatarios == "cgil@gomezyriesco.cl, rgomez@gomezyriesco.cl, ointerno@gomezyriesco.cl"
+
+    def test_excluye_cuenta_de_trabajo_y_externos_y_dedupe(self, monkeypatch):
+        monkeypatch.setattr(
+            agenda.gmail_client, "leer_hilo",
+            lambda thread_id, **k: [
+                {
+                    "sender": "Nico Muñoz <nmunoz@gomezyriesco.cl>",
+                    "to": "Román Gómez <rgomez@gomezyriesco.cl>, Cliente Externo <cliente@externo.cl>",
+                    "cc": "",
+                },
+                {
+                    "sender": "Román Gómez <rgomez@gomezyriesco.cl>",
+                    "to": "Nico Muñoz <nmunoz@gomezyriesco.cl>",
+                    "cc": "",
+                },
+            ],
+        )
+
+        destinatarios = agenda._destinatarios_respuesta("thread-1")
+
+        assert destinatarios == "rgomez@gomezyriesco.cl"
+
+
 class TestProcesarOfrecimientoIntegracion:
     """Prueba _procesar_ofrecimiento (y por lo tanto correr()) de punta a
     punta, mockeando solo gmail_client y reasoning.preguntar — nunca la red
@@ -219,6 +258,7 @@ class TestProcesarOfrecimientoIntegracion:
             "M-1-2026": {"fecha": "2026-10-01", "resumen": "Audiencia única", "tipo": "Única"},
         })
         self._mock_evaluacion(monkeypatch)
+        monkeypatch.setattr(agenda.bitacora_mod, "registrar", lambda *a, **k: None)
 
         monkeypatch.setattr(
             agenda.gmail_client, "buscar_hilos",
@@ -259,6 +299,7 @@ class TestProcesarOfrecimientoIntegracion:
             "M-1-2026": {"fecha": "2026-10-01", "resumen": "Audiencia única", "tipo": "Única"},
         })
         self._mock_evaluacion(monkeypatch)
+        monkeypatch.setattr(agenda.bitacora_mod, "registrar", lambda *a, **k: None)
 
         monkeypatch.setattr(agenda.gmail_client, "buscar_hilos", lambda query, **k: [])
         monkeypatch.setattr(agenda.gmail_client, "buscar_borrador_por_asunto", lambda fragmento, **k: [])
@@ -285,6 +326,7 @@ class TestProcesarOfrecimientoIntegracion:
             "M-1-2026": {"fecha": "2026-10-01", "resumen": "Audiencia única", "tipo": "Única"},
         })
         self._mock_evaluacion(monkeypatch)
+        monkeypatch.setattr(agenda.bitacora_mod, "registrar", lambda *a, **k: None)
 
         monkeypatch.setattr(agenda.gmail_client, "buscar_hilos", lambda query, **k: [{"id": "thread-interno"}])
         monkeypatch.setattr(
@@ -324,6 +366,7 @@ class TestProcesarOfrecimientoIntegracion:
             "M-1-2026": {"fecha": "2026-10-01", "resumen": "Audiencia única", "tipo": "Única"},
         })
         self._mock_evaluacion(monkeypatch, hay_discrepancia=True, detalle_discrepancia="Demanda dice $500.000, cuadro decía $400.000")
+        monkeypatch.setattr(agenda.bitacora_mod, "registrar", lambda *a, **k: None)
 
         monkeypatch.setattr(agenda.gmail_client, "buscar_hilos", lambda query, **k: [])
         monkeypatch.setattr(agenda.gmail_client, "buscar_borrador_por_asunto", lambda fragmento, **k: [])
