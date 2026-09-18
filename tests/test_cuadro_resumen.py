@@ -1,4 +1,9 @@
-from gestion_causas.cuadro_resumen import CAMPOS_OBLIGATORIOS, cuadro_completo, extraer_campos_cuadro
+from gestion_causas.cuadro_resumen import (
+    CAMPOS_OBLIGATORIOS,
+    buscar_ceco_en_mensajes,
+    cuadro_completo,
+    extraer_campos_cuadro,
+)
 
 CUERPO_EJEMPLO = """\
 Estimado Nico:
@@ -68,3 +73,20 @@ class TestExtraerCamposCuadro:
         cuerpo = "Fecha audiencia: 15:30 hrs, 15 de octubre de 2026\n"
         campos = extraer_campos_cuadro(cuerpo)
         assert campos["fecha_audiencia"] == "15:30 hrs, 15 de octubre de 2026"
+
+
+class TestBuscarCecoEnMensajes:
+    def test_encuentra_ceco_en_el_primer_mensaje(self):
+        mensajes = [{"cuerpo_texto": "Les confirmamos el CECO: T-4521 para esta causa."}]
+        assert buscar_ceco_en_mensajes(mensajes) == "T-4521"
+
+    def test_encuentra_ceco_en_un_mensaje_posterior(self):
+        mensajes = [
+            {"cuerpo_texto": "Estimados, queda pendiente el CECO."},
+            {"cuerpo_texto": "El CECO es 8890."},
+        ]
+        assert buscar_ceco_en_mensajes(mensajes) == "8890"
+
+    def test_sin_ceco_en_ningun_mensaje_devuelve_none(self):
+        mensajes = [{"cuerpo_texto": "No hay CECO mencionado acá."}]
+        assert buscar_ceco_en_mensajes(mensajes) is None

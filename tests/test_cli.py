@@ -511,7 +511,7 @@ class TestMapaAudiencias:
 
         assert codigo == 0
         contenido = json.loads(salida.read_text(encoding="utf-8"))
-        assert contenido["rit_a_audiencia"]["M-643-2026"]["tipo"] == "Unica"
+        assert contenido["rit_a_audiencia"]["M-643-2026"]["tipo"] == "Única"
         assert "O-1-2026" not in contenido["rit_a_audiencia"]
 
     def test_dry_run_no_llama_a_calendar(self, tmp_path, monkeypatch, capsys):

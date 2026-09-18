@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import html
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -24,7 +23,11 @@ from gestion_causas import carpetas as carpetas_mod
 from gestion_causas import gmail_client
 from gestion_causas import registro as registro_mod
 from gestion_causas import reasoning
-from gestion_causas.cuadro_resumen import cuadro_completo, extraer_campos_cuadro
+from gestion_causas.cuadro_resumen import (
+    buscar_ceco_en_mensajes as _buscar_ceco_en_mensajes,
+    cuadro_completo,
+    extraer_campos_cuadro,
+)
 from gestion_causas.empresas import normalizar_empresa
 from gestion_causas.gmail_client import COLOR_POR_EMPRESA, EMPRESAS_SIN_EXCEL, ETIQUETA_PROCESADO
 from gestion_causas.seguimiento import extraer_direccion
@@ -440,20 +443,6 @@ def _evaluar_origen_gomezyriesco(primer_mensaje: dict) -> dict:
     return reasoning.preguntar(tarea, contexto, SCHEMA_ORIGEN_CADENA)
 
 
-_PATRON_CECO = re.compile(r"ceco\s*(?:[:=-]|\bes\b)?\s*(\d+|[A-Z]+[\d-]+)", re.IGNORECASE)
-
-
-def _buscar_ceco_en_mensajes(mensajes: list[dict]) -> str | None:
-    """Busca un CECO mencionado en cualquiera de los mensajes del hilo (ver
-    subagentes/smu.md paso 2f: puede venir en el primer mensaje o en una
-    respuesta posterior, ej. "nos confirme el CECO 8890"). Best-effort por
-    regex, sin Claude — si de verdad no está en ningún mensaje, se completa
-    en una corrida futura cuando llegue."""
-    for mensaje in mensajes:
-        coincidencia = _PATRON_CECO.search(mensaje.get("cuerpo_texto", ""))
-        if coincidencia:
-            return coincidencia.group(1).upper()
-    return None
 
 
 def _dominio(remitente: str) -> str:

@@ -99,3 +99,39 @@ class TestOrquestadorDespachaAgenda:
 
         assert resultado["fases"]["agenda"]["fase"] == "agenda"
         assert resultado["fases"]["agenda"]["titular"] == "Sin causas activas para revisar agenda"
+
+
+class TestOrquestadorDespachaSeguimientoYCalendarioSoloEnLaManana:
+    def test_no_despacha_seguimiento_ni_calendario_fuera_de_la_manana(self, tmp_path, monkeypatch):
+        ruta_contexto = tmp_path / "_contexto_corrida.json"
+        ruta_contexto.write_text(
+            json.dumps({"fecha_hoy": "2026-09-18", "corrida": "resto"}), encoding="utf-8"
+        )
+        monkeypatch.setattr(orquestador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
+
+        resultado = orquestador.correr(
+            ruta_contexto=ruta_contexto,
+            ruta_registro_causas=tmp_path / "registro_causas.json",
+            ruta_registro_ceco=tmp_path / "registro_ceco.json",
+        )
+
+        assert "seguimiento" not in resultado["fases"]
+        assert "calendario" not in resultado["fases"]
+
+    def test_despacha_seguimiento_y_calendario_en_la_manana(self, tmp_path, monkeypatch):
+        ruta_contexto = tmp_path / "_contexto_corrida.json"
+        ruta_contexto.write_text(
+            json.dumps({"fecha_hoy": "2026-09-21", "corrida": "manana", "es_lunes": True}), encoding="utf-8"
+        )
+        monkeypatch.setattr(orquestador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
+        monkeypatch.setattr(orquestador.fases_seguimiento, "correr", lambda *a, **k: {"fase": "seguimiento"})
+        monkeypatch.setattr(orquestador.fases_calendario, "correr", lambda *a, **k: {"fase": "calendario"})
+
+        resultado = orquestador.correr(
+            ruta_contexto=ruta_contexto,
+            ruta_registro_causas=tmp_path / "registro_causas.json",
+            ruta_registro_ceco=tmp_path / "registro_ceco.json",
+        )
+
+        assert resultado["fases"]["seguimiento"]["fase"] == "seguimiento"
+        assert resultado["fases"]["calendario"]["fase"] == "calendario"

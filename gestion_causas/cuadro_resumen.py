@@ -62,3 +62,21 @@ def cuadro_completo(campos: dict) -> bool:
     (ver docs/2026-07-07-informe-juicios-email-design.md, "Manejo de
     errores")."""
     return all(campos.get(clave) for clave in CAMPOS_OBLIGATORIOS)
+
+
+PATRON_CECO = re.compile(r"ceco\s*(?:[:=-]|\bes\b)?\s*(\d+|[A-Z]+[\d-]+)", re.IGNORECASE)
+
+
+def buscar_ceco_en_mensajes(mensajes: list[dict]) -> str | None:
+    """Busca un CECO mencionado en cualquiera de los mensajes de un hilo (ver
+    subagentes/smu.md paso 2f: puede venir en el primer mensaje o en una
+    respuesta posterior, ej. "nos confirme el CECO 8890"). Best-effort por
+    regex, sin Claude — si de verdad no está en ningún mensaje, se completa
+    en una corrida futura cuando llegue. Compartido por `fases/smu.py` (causas
+    nuevas por correo) y `fases/calendario.py` (causas detectadas por
+    calendario) para no divergir en el criterio."""
+    for mensaje in mensajes:
+        coincidencia = PATRON_CECO.search(mensaje.get("cuerpo_texto", ""))
+        if coincidencia:
+            return coincidencia.group(1).upper()
+    return None

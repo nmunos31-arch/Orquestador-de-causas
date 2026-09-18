@@ -279,10 +279,10 @@ class TestClasificarTipoAudiencia:
         assert calendar_client.clasificar_tipo_audiencia("Aud. de juicio Iturriaga con Rendic") == "Juicio"
 
     def test_audiencia_unica(self):
-        assert calendar_client.clasificar_tipo_audiencia('Audiencia única "Rebolledo con Salcobrand" M-637-2026') == "Unica"
+        assert calendar_client.clasificar_tipo_audiencia('Audiencia única "Rebolledo con Salcobrand" M-637-2026') == "Única"
 
     def test_aud_unica_abreviado(self):
-        assert calendar_client.clasificar_tipo_audiencia("Aud. única M-1-2026") == "Unica"
+        assert calendar_client.clasificar_tipo_audiencia("Aud. única M-1-2026") == "Única"
 
     def test_audiencia_preparatoria(self):
         assert calendar_client.clasificar_tipo_audiencia("Audiencia preparatoria RIT O-1-2026") == "Preparatoria"
@@ -299,7 +299,7 @@ class TestClasificarTipoAudiencia:
     def test_no_confunde_unica_con_juicio(self):
         # "audiencia de juicio" contiene la palabra "audiencia" pero no debe
         # calzar con el chequeo de "unica".
-        assert calendar_client.clasificar_tipo_audiencia("Audiencia de Juicio M-1-2026") != "Unica"
+        assert calendar_client.clasificar_tipo_audiencia("Audiencia de Juicio M-1-2026") != "Única"
 
 
 class TestEsEventoNoAudiencia:
@@ -359,7 +359,7 @@ class TestMapaAudienciasPorRit:
         assert mapa["M-643-2026"] == {
             "fecha": "2026-09-10",
             "resumen": "Audiencia Unica M-643-2026 Iturriaga con Rendic",
-            "tipo": "Unica",
+            "tipo": "Única",
         }
         assert mapa["O-1-2026"]["fecha"] == "2026-09-20"
         assert mapa["O-1-2026"]["tipo"] == "Juicio"

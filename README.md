@@ -17,10 +17,10 @@ diseño completo, y `docs/superpowers/plans/` para el historial de planes de imp
 | `smu` | ✅ migrada (ingesta + borrador de documentos), validada en vivo |
 | `agenda` | ✅ migrada (Plan A: borrador de ofrecimiento; Plan B: invocación de `/minuta-laboral`) |
 | `seguimiento` | ✅ migrada |
-| `calendario` | ⏳ pendiente |
+| `calendario` | ✅ migrada |
 
-La tarea programada real (`gestion-causas-orquestador`) todavía corre el flujo viejo de
-subagentes — el corte a este driver es una decisión pendiente, una vez migradas las 5 fases.
+Las 5 fases están migradas. La tarea programada real (`gestion-causas-orquestador`) todavía
+corre el flujo viejo de subagentes — el corte a este driver es una decisión pendiente.
 
 ## Setup
 
@@ -42,9 +42,9 @@ cada máquina donde corra esto:
 
 ### Dependencia con `actualizar_informe_juicios.py` (repo `Scripts-varios`)
 
-La fase `smu` escribe filas en el Excel "Informe de Juicios Vigentes" reusando
-`agregar_causa`/`RUTA_EXCEL_JUICIOS` de `actualizar_informe_juicios.py`, que vive en el
-otro repo (`Scripts-varios/Actualizador de informes/`). `gestion_causas/fases/smu.py`
+Las fases `smu` y `calendario` escriben filas en el Excel "Informe de Juicios Vigentes"
+reusando `agregar_causa`/`RUTA_EXCEL_JUICIOS` de `actualizar_informe_juicios.py`, que vive
+en el otro repo (`Scripts-varios/Actualizador de informes/`). `gestion_causas/fases/smu.py`
 agrega esa carpeta a `sys.path` en vez de duplicar la lógica de escritura de Excel —
 por defecto asume la ruta de siempre en esta máquina; en otra máquina, seteá:
 

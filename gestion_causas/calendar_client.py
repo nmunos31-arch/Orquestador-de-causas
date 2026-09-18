@@ -265,7 +265,7 @@ def clasificar_tipo_audiencia(resumen: str) -> str:
     if "audiencia de juicio" in texto or "aud de juicio" in texto:
         return "Juicio"
     if "audiencia unica" in texto or "aud unica" in texto:
-        return "Unica"
+        return "Única"
     if "audiencia preparatoria" in texto or "aud preparatoria" in texto:
         return "Preparatoria"
     if "reunion preparatoria" in texto:

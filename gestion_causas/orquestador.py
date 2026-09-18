@@ -1,16 +1,16 @@
 """Driver mínimo del orquestador de gestion_causas, en Python.
 
 Alcance de este archivo (ver planes en docs/superpowers/plans/): despacha
-'smu', 'goteo', 'agenda' y 'seguimiento'. Solo falta 'calendario'. No
+las 5 fases ('smu', 'goteo', 'agenda', 'seguimiento', 'calendario'). No
 reemplaza todavía a la tarea programada `gestion-causas-orquestador` — se
 corre a mano en paralelo para comparar resultados contra el subagente viejo.
 
-Nota para cuando se corte la tarea programada real a este driver:
-`seguimiento` solo debe despacharse en la corrida de la mañana (sus
-umbrales son en días hábiles — correrla 3 veces al día no adelanta ningún
-aviso, ver subagentes/seguimiento.md). Este driver todavía no distingue
-momento del día en `contexto_corrida`; quien arme ese cronograma real debe
-agregar ese filtro antes del corte."""
+`seguimiento` y `calendario` solo se despachan en la corrida de la mañana
+(`contexto_corrida["corrida"] == "manana"`, campo que ya arma
+`cli.cmd_contexto_corrida`): sus umbrales son en días hábiles (seguimiento)
+o solo corren los lunes (calendario, que además se autoevalúa internamente
+con `es_lunes` — este filtro por "corrida" es una capa extra para no
+llamarlas de más en las corridas de la tarde/noche)."""
 
 from __future__ import annotations
 
@@ -21,11 +21,14 @@ from pathlib import Path
 from gestion_causas import bitacora as bitacora_mod
 from gestion_causas import registro as registro_mod
 from gestion_causas.fases import agenda as fases_agenda
+from gestion_causas.fases import calendario as fases_calendario
 from gestion_causas.fases import goteo as fases_goteo
 from gestion_causas.fases import seguimiento as fases_seguimiento
 from gestion_causas.fases import smu as fases_smu
 
 RUTA_CONTEXTO_DEFAULT = Path(__file__).parent / "_contexto_corrida.json"
+
+FASES_SOLO_CORRIDA_MANANA = {"seguimiento", "calendario"}
 
 
 def correr(
@@ -41,6 +44,7 @@ def correr(
             "`python -m gestion_causas.cli contexto-corrida` antes de correrlo."
         )
     contexto_corrida = json.loads(Path(ruta_contexto).read_text(encoding="utf-8"))
+    es_corrida_manana = contexto_corrida.get("corrida") == "manana"
 
     fases = {}
     for nombre, funcion, kwargs_extra in (
@@ -48,7 +52,10 @@ def correr(
         ("goteo", fases_goteo.correr, {"ruta_registro_ceco": ruta_registro_ceco}),
         ("agenda", fases_agenda.correr, {}),
         ("seguimiento", fases_seguimiento.correr, {}),
+        ("calendario", fases_calendario.correr, {}),
     ):
+        if nombre in FASES_SOLO_CORRIDA_MANANA and not es_corrida_manana:
+            continue
         try:
             fases[nombre] = funcion(
                 contexto_corrida,
