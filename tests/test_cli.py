@@ -507,7 +507,10 @@ class TestMapaAudiencias:
         }), encoding="utf-8")
         salida = tmp_path / "audiencias.json"
 
-        codigo = main(["mapa-audiencias", "--ruta-cache", str(ruta_cache), "--salida", str(salida)])
+        codigo = main([
+            "mapa-audiencias", "--ruta-cache", str(ruta_cache), "--salida", str(salida),
+            "--hoy", "2026-09-05",
+        ])
 
         assert codigo == 0
         contenido = json.loads(salida.read_text(encoding="utf-8"))
