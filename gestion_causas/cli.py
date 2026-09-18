@@ -439,7 +439,13 @@ def cmd_registrar_pedido(args) -> int:
     if args.dry_run:
         _imprimir_json({"simulado": True, "accion": "registrar-pedido", "thread_id": args.thread_id})
         return 0
-    datos = {"rit": args.rit, "tipo": args.tipo, "origen": args.origen}
+    datos = {}
+    if args.rit:
+        datos["rit"] = args.rit
+    if args.tipo:
+        datos["tipo"] = args.tipo
+    if args.origen:
+        datos["origen"] = args.origen
     if args.fecha_envio:
         datos["fecha_envio"] = args.fecha_envio
     if args.destinatario:
@@ -747,12 +753,17 @@ def cmd_mapa_hilos_por_rit(args) -> int:
     return 0
 
 
-def _generar_mapa_audiencias(ruta_cache, ruta_salida) -> dict:
+def _generar_mapa_audiencias(ruta_cache, ruta_salida, hoy=None) -> dict:
     """Mapa RIT -> audiencia para toda la corrida (ver goteo.md paso 3a y
     agenda.md paso 2): en vez de que cada fase busque y clasifique el tipo de
     audiencia de cada causa activa por separado, se resuelve una sola vez acá
     con `calendar_client.mapa_audiencias_por_rit`, misma clasificación para
     las dos fases.
+
+    `hoy` (date, opcional) fija "hoy" para elegir la primera audiencia futura
+    -- por defecto la fecha real (ver `calendar_client.primer_evento_futuro`).
+    Solo para tests: sin esto, un cache con fechas fijas queda time-bombed
+    en cuanto el reloj real las supera.
 
     Escribe `{"generado_en", "rit_a_audiencia"}` en `ruta_salida`. Usada tanto
     por el comando suelto `mapa-audiencias` como por `contexto-corrida` (paso
@@ -761,7 +772,7 @@ def _generar_mapa_audiencias(ruta_cache, ruta_salida) -> dict:
     causas = registro_mod.causas_para_goteo()
     rits = [c["rit"] for c in causas]
     cache = calendar_client.cargar_cache_eventos(ruta_cache)
-    mapa = calendar_client.mapa_audiencias_por_rit(rits, cache["eventos"])
+    mapa = calendar_client.mapa_audiencias_por_rit(rits, cache["eventos"], hoy=hoy)
     contenido = {
         "generado_en": datetime.datetime.now().isoformat(),
         "rit_a_audiencia": mapa,
@@ -778,7 +789,8 @@ def cmd_mapa_audiencias(args) -> int:
     if args.dry_run:
         _imprimir_json({"simulado": True, "accion": "mapa-audiencias", "salida": args.salida})
         return 0
-    resumen = _generar_mapa_audiencias(args.ruta_cache, args.salida)
+    hoy = date.fromisoformat(args.hoy) if args.hoy else None
+    resumen = _generar_mapa_audiencias(args.ruta_cache, args.salida, hoy=hoy)
     _imprimir_json({"escrito": True, **resumen})
     return 0
 
@@ -1070,7 +1082,7 @@ def construir_parser() -> argparse.ArgumentParser:
     p.add_argument("--thread-id", required=True)
     p.add_argument("--rit", default=None)
     p.add_argument("--tipo", default=None, choices=["documentos", "acuerdo"])
-    p.add_argument("--origen", default="manual", choices=["manual", "etiqueta", "borrador_enviado"])
+    p.add_argument("--origen", default=None, choices=["manual", "etiqueta", "borrador_enviado"])
     p.add_argument("--fecha-envio", default=None, help="AAAA-MM-DD")
     p.add_argument("--destinatario", default=None)
     p.add_argument("--items-json", default=None, help="Ruta a un JSON con la lista de items pedidos")
@@ -1186,6 +1198,7 @@ def construir_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--ruta-cache", default=str(calendar_client.RUTA_CACHE_EVENTOS_CALENDARIO))
     p.add_argument("--salida", default=str(RUTA_MAPA_AUDIENCIAS_CORRIDA))
+    p.add_argument("--hoy", default=None, help="AAAA-MM-DD, para tests; por defecto hoy")
     p.set_defaults(func=cmd_mapa_audiencias)
 
     p = sub.add_parser(
