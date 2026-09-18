@@ -267,7 +267,7 @@ def cmd_crear_borrador(args) -> int:
     return 0
 
 
-def cmd_verificar_borradores_pendientes(args) -> int:
+def verificar_borradores_pendientes(dry_run: bool = False) -> dict:
     """Para cada causa con un borrador de documentos registrado (campo
     borrador_documentos_draft_id), consulta si ese borrador sigue existiendo
     en Gmail. Los que siguen ahí son borradores que Nico todavía no revisó ni
@@ -284,7 +284,11 @@ def cmd_verificar_borradores_pendientes(args) -> int:
       registrar como pedido — se reporta en 'descartados'.
 
     En ambos casos se limpia `borrador_documentos_draft_id` del registro de
-    causas para no volver a chequearlo."""
+    causas para no volver a chequearlo.
+
+    Función pura (sin argparse ni stdout) para que tanto la CLI
+    (`cmd_verificar_borradores_pendientes`) como `orquestador.py` la llamen
+    directo, sin pasar por un subprocess."""
     causas = registro_mod.causas_con_borrador_pendiente()
     pendientes = []
     enviados = []
@@ -313,7 +317,7 @@ def cmd_verificar_borradores_pendientes(args) -> int:
         if ultimo_propio is not None:
             destinatarios = seguimiento_mod.destinatarios_de_ultimo_propio(ultimo_propio, CUENTA_TRABAJO)
             fecha_envio = str(seguimiento_mod.parsear_fecha(ultimo_propio["date"]).date())
-            if not args.dry_run:
+            if not dry_run:
                 registro_mod.registrar_pedido(thread_id, {
                     "rit": rit,
                     "tipo": "documentos",
@@ -328,9 +332,13 @@ def cmd_verificar_borradores_pendientes(args) -> int:
         else:
             descartados.append(rit)
 
-        if not args.dry_run:
+        if not dry_run:
             registro_mod.registrar_causa(rit, {"borrador_documentos_draft_id": None})
-    _imprimir_json({"pendientes": pendientes, "enviados": enviados, "descartados": descartados})
+    return {"pendientes": pendientes, "enviados": enviados, "descartados": descartados}
+
+
+def cmd_verificar_borradores_pendientes(args) -> int:
+    _imprimir_json(verificar_borradores_pendientes(dry_run=args.dry_run))
     return 0
 
 

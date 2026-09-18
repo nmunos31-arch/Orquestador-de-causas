@@ -1,9 +1,21 @@
-"""Driver mínimo del orquestador de gestion_causas, en Python.
+"""Driver del orquestador de gestion_causas, en Python.
 
-Alcance de este archivo (ver planes en docs/superpowers/plans/): despacha
-las 5 fases ('smu', 'goteo', 'agenda', 'seguimiento', 'calendario'). No
-reemplaza todavía a la tarea programada `gestion-causas-orquestador` — se
-corre a mano en paralelo para comparar resultados contra el subagente viejo.
+Reemplazo completo de la tarea programada `gestion-causas-orquestador`
+(ver docs en docs/superpowers/plans/ y, como referencia histórica del
+contrato paso a paso, orquestador/SKILL.md), salvo el paso 1 ("contexto de
+la corrida"), que sigue siendo un comando de CLI aparte
+(`python -m gestion_causas.cli contexto-corrida`) — `correr()` requiere que
+ya se haya corrido antes.
+
+`correr_y_enviar_panel()` es el punto de entrada completo: despacha las 5
+fases ('smu', 'goteo', 'agenda', 'seguimiento', 'calendario'), arma el
+resumen de la corrida, revisa si quedaron borradores de documentos sin
+enviar de corridas anteriores, genera el HTML del panel y lo envía por
+correo a nmunoz@gomezyriesco.cl — igual que hacían los pasos 3 a 6 del
+SKILL.md viejo, pero llamando directo a las funciones puro-Python
+(`panel.generar_panel_html`, `gmail_personal_client.enviar_panel_estado`)
+en vez de escribir archivos temporales intermedios entre llamadas de CLI
+por separado (ya no hace falta: todo corre en el mismo proceso).
 
 `seguimiento` y `calendario` solo se despachan en la corrida de la mañana
 (`contexto_corrida["corrida"] == "manana"`, campo que ya arma
@@ -16,9 +28,13 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import date
 from pathlib import Path
 
 from gestion_causas import bitacora as bitacora_mod
+from gestion_causas import cli as cli_mod
+from gestion_causas import gmail_personal_client
+from gestion_causas import panel as panel_mod
 from gestion_causas import registro as registro_mod
 from gestion_causas.fases import agenda as fases_agenda
 from gestion_causas.fases import calendario as fases_calendario
@@ -29,6 +45,12 @@ from gestion_causas.fases import smu as fases_smu
 RUTA_CONTEXTO_DEFAULT = Path(__file__).parent / "_contexto_corrida.json"
 
 FASES_SOLO_CORRIDA_MANANA = {"seguimiento", "calendario"}
+
+# Orden fijo en el que el panel muestra el resumen de cada fase — mismo
+# contrato que ya documentaban subagentes/*.md ("Resumen final"), sin
+# relación con el orden de despacho de `correr()` (que corre smu antes que
+# goteo/agenda/seguimiento por las razones de paralelismo del docstring).
+ORDEN_PANEL = ("calendario", "smu", "goteo", "agenda", "seguimiento")
 
 
 def correr(
@@ -67,11 +89,120 @@ def correr(
             bitacora_mod.registrar(f"Fase '{nombre}' falló: {mensaje}")
             fases[nombre] = {"fase": nombre, "error": mensaje}
 
-    return {"fecha_hoy": contexto_corrida.get("fecha_hoy"), "fases": fases}
+    return {
+        "fecha_hoy": contexto_corrida.get("fecha_hoy"),
+        "corrida": contexto_corrida.get("corrida"),
+        "fases": fases,
+    }
+
+
+def _resumen_como_lista(fases: dict, es_corrida_manana: bool) -> list[dict]:
+    """Convierte el dict {nombre: resultado} que devuelve `correr()` en la
+    lista ordenada (calendario, smu, goteo, agenda, seguimiento) que espera
+    `panel.generar_panel_html` — mismo contrato "Resumen final" que ya
+    documentaban subagentes/*.md. Una fase ausente del dict solo puede ser
+    'calendario'/'seguimiento' en una corrida que no era de mañana (la única
+    forma en que `correr()` se salta una fase), así que se completa con el
+    mismo objeto "No aplica" que armaba el paso 3 del SKILL.md viejo."""
+    lista = []
+    for nombre in ORDEN_PANEL:
+        if nombre in fases:
+            lista.append(fases[nombre])
+        else:
+            lista.append({
+                "fase": nombre,
+                "resultado": "No aplica: solo corre en la corrida de la mañana.",
+                "error": None,
+            })
+    return lista
+
+
+def _armar_y_enviar_panel(fases: dict, fecha_hoy: str, es_corrida_manana: bool, *, ruta_registro_causas: Path) -> dict:
+    """Pasos 3 a 5 del SKILL.md original: arma el resumen de la corrida,
+    revisa si quedaron borradores de documentos sin enviar de corridas
+    anteriores, genera el HTML del panel y lo envía por correo. Nunca lanza
+    — cualquier falla en este tramo se anota en la bitácora y se devuelve en
+    el resultado en vez de propagarse, porque para cuando se llega acá las 5
+    fases ya corrieron y no tiene sentido perder ese trabajo por un problema
+    de esta última parte."""
+    resultado: dict = {"borradores": None, "panel_generado": False, "correo_enviado": False, "error": None}
+
+    try:
+        resultado["borradores"] = cli_mod.verificar_borradores_pendientes()
+    except Exception as e:
+        mensaje = f"{type(e).__name__}: {e}"
+        bitacora_mod.registrar(f"Orquestador: no se pudo revisar borradores pendientes ({mensaje})")
+        resultado["borradores"] = {"error": mensaje}
+
+    borradores_pendientes = (
+        resultado["borradores"].get("pendientes")
+        if isinstance(resultado["borradores"], dict)
+        else None
+    )
+
+    try:
+        html = panel_mod.generar_panel_html(
+            _resumen_como_lista(fases, es_corrida_manana),
+            hoy=date.fromisoformat(fecha_hoy) if fecha_hoy else None,
+            ruta_registro=ruta_registro_causas,
+            borradores_pendientes=borradores_pendientes,
+        )
+        resultado["panel_generado"] = True
+    except Exception as e:
+        mensaje = f"{type(e).__name__}: {e}"
+        bitacora_mod.registrar(f"Orquestador: fallo al generar el panel de estado ({mensaje})")
+        resultado["error"] = mensaje
+        return resultado
+
+    try:
+        # `permitir_login=False`: una corrida desatendida no puede quedarse
+        # esperando a que alguien complete un login interactivo en el
+        # navegador (mismo criterio que usa `cli._diagnosticar_token` para
+        # los otros 3 tokens) — si el token personal no sirve, esto falla
+        # rápido en vez de colgar la tarea para siempre.
+        servicio = gmail_personal_client.construir_servicio(permitir_login=False)
+        gmail_personal_client.enviar_panel_estado(
+            f"Panel de gestión de causas - {fecha_hoy}", html, servicio=servicio
+        )
+        resultado["correo_enviado"] = True
+    except Exception as e:
+        mensaje = f"{type(e).__name__}: {e}"
+        bitacora_mod.registrar(f"Orquestador: fallo al enviar el panel de estado ({mensaje})")
+        resultado["error"] = mensaje
+
+    return resultado
+
+
+def correr_y_enviar_panel(
+    ruta_contexto: Path = RUTA_CONTEXTO_DEFAULT,
+    *,
+    ruta_registro_causas: Path = registro_mod.RUTA_REGISTRO_CAUSAS,
+    ruta_registro_ceco: Path = registro_mod.RUTA_REGISTRO_CECO,
+) -> dict:
+    """Punto de entrada completo: `correr()` (las 5 fases) + `panel` (armar
+    y enviar el panel de estado). Borra `ruta_contexto` al final, como hacía
+    el paso 6 del SKILL.md viejo — best-effort, un archivo temporal que no
+    se pudo borrar no es motivo para reportar la corrida como fallida."""
+    resultado = correr(
+        ruta_contexto, ruta_registro_causas=ruta_registro_causas, ruta_registro_ceco=ruta_registro_ceco
+    )
+    resultado["panel"] = _armar_y_enviar_panel(
+        resultado["fases"],
+        resultado["fecha_hoy"],
+        resultado["corrida"] == "manana",
+        ruta_registro_causas=ruta_registro_causas,
+    )
+
+    try:
+        Path(ruta_contexto).unlink(missing_ok=True)
+    except OSError as e:
+        bitacora_mod.registrar(f"Orquestador: no se pudo borrar el contexto temporal de la corrida ({e})")
+
+    return resultado
 
 
 def main(argv=None) -> int:
-    resultado = correr()
+    resultado = correr_y_enviar_panel()
     print(json.dumps(resultado, ensure_ascii=False, indent=2))
     return 0
 
