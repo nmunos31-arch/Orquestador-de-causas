@@ -246,14 +246,19 @@ def acciones_consolidadas(
     ver `registro.pedidos_abiertos`). Devuelve una lista de
     {"origen", "rit", "que", "urgencia"}, sin ordenar (el llamador ordena)."""
     acciones = []
+    rits_gestion_manual_reportados = set()
     for item in resumen_corrida:
+        fase = item.get("fase", "")
         for accion in item.get("acciones") or []:
+            rit = accion.get("rit", "")
             acciones.append({
-                "origen": item.get("fase", ""),
-                "rit": accion.get("rit", ""),
+                "origen": fase,
+                "rit": rit,
                 "que": accion.get("que", ""),
                 "urgencia": accion.get("urgencia") or "media",
             })
+            if fase == "seguimiento":
+                rits_gestion_manual_reportados.add(rit)
     for b in (borradores_pendientes or []):
         detalle_empresa = f" ({b['empresa']} - {b['demandante']})" if b.get("empresa") else ""
         acciones.append({
@@ -271,7 +276,7 @@ def acciones_consolidadas(
                 "urgencia": "alta",
             })
     for p in pedidos:
-        if p.get("estado") == "gestion_manual":
+        if p.get("estado") == "gestion_manual" and p.get("rit") not in rits_gestion_manual_reportados:
             acciones.append({
                 "origen": "seguimiento",
                 "rit": p.get("rit", ""),

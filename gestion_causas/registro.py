@@ -454,6 +454,7 @@ def registrar_pedido(thread_id: str, datos: dict, ruta: Path = RUTA_REGISTRO_PED
         fusionada["thread_id"] = thread_id
         fusionada.setdefault("estado", "esperando")
         fusionada.setdefault("items_recibidos", [])
+        fusionada.setdefault("origen", "manual")
         fusionada.setdefault("primera_vez_registrado", datetime.now().isoformat())
         fusionada["ultima_revision"] = datetime.now().isoformat()
         registro[thread_id] = fusionada

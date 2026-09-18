@@ -157,6 +157,15 @@ d. **Clasifica el pedido**, según `tipo`:
      **algún** mensaje posterior de la contraparte (no un acuse de recibo): pasa a
      `completo`. Si no hay ninguno y pasaron **24 horas o más** desde `fecha_envio`:
      candidato a insistencia (texto A). Menos de 24 h: nada, sigue con el siguiente.
+     Antes de tratarlo como candidato, releé el hilo completo: si lo que hay ahí no es
+     realmente un pedido pendiente de respuesta sino solo información — típicamente el
+     tribunal comunicando las bases que propuso para un acuerdo, sin que las partes lo
+     estén negociando ni quede nada pendiente de que alguien conteste — no es candidato a
+     insistencia. Pasa el pedido a `completo` (con una nota en el resumen indicando que era
+     solo informativo, no un pedido real) en vez de insistir. Mismo criterio que usa
+     `goteo` para no marcar `estado_acuerdo` por esto (confirmado 2026-09-10 con
+     O-173-2026, O-348-2026 y O-192-2026: los tres eran solo el tribunal informando bases,
+     ver `subagentes/goteo.md`).
 
 e. **Para cada candidato** (insistencia o recordatorio), verifica la cadencia — usa el
    `thread_id` del pedido como clave, igual que siempre:

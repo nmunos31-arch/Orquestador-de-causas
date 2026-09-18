@@ -317,6 +317,34 @@ class TestAccionesConsolidadas:
         pedidos = [{"rit": "M-2-2026", "estado": "esperando"}]
         assert acciones_consolidadas([], causas, pedidos) == []
 
+    def test_no_duplica_pedido_ya_reportado_por_seguimiento(self):
+        # La fase `seguimiento` ya reporta en su resumen los pedidos que
+        # pasaron a gestion_manual en esta corrida; el barrido de
+        # registro_pedidos.json no debe volver a agregarlos.
+        resumen = [{
+            "fase": "seguimiento",
+            "acciones": [{
+                "rit": "M-744-2026",
+                "que": "2 avisos agotados sin respuesta (documentos) — requiere gestión manual",
+                "urgencia": "alta",
+            }],
+        }]
+        pedidos = [{"rit": "M-744-2026", "tipo": "documentos", "estado": "gestion_manual"}]
+
+        acciones = acciones_consolidadas(resumen, [], pedidos)
+
+        assert len([a for a in acciones if a["rit"] == "M-744-2026"]) == 1
+
+    def test_si_reporta_pedido_gestion_manual_de_corrida_anterior(self):
+        # Un pedido que paso a gestion_manual en una corrida previa (y por lo
+        # tanto no aparece en el resumen de esta corrida) debe seguir
+        # apareciendo via el barrido de registro_pedidos.json.
+        pedidos = [{"rit": "M-9-2026", "tipo": "acuerdo", "estado": "gestion_manual"}]
+
+        acciones = acciones_consolidadas([], [], pedidos)
+
+        assert [a["rit"] for a in acciones] == ["M-9-2026"]
+
 
 class TestBandejaAccionesEnPanel:
     def test_sin_acciones_muestra_nada_pendiente(self, tmp_path):
