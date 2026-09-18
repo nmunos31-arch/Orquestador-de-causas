@@ -17,6 +17,13 @@ from pathlib import Path
 TIMEOUT_SEGUNDOS = 180
 TIMEOUT_SKILL_SEGUNDOS = 1800
 
+# `_ejecutar_claude` no necesita nada de esto: ni skills (no se invoca
+# ninguna con /), ni la config de settings del proyecto/usuario (los
+# permisos ya se fijan explícitamente por llamada). Sin apagarlo, cada
+# proceso `claude -p` nuevo vuelve a cargar y cachear ese contexto fijo
+# desde cero (ver docstring de `_ejecutar_claude`).
+_FLAGS_MINIMOS = ["--disable-slash-commands", "--setting-sources", ""]
+
 
 def preguntar(
     tarea: str, contexto: dict, schema: dict, *, ejecutar=None, ruta_archivo=None
@@ -197,12 +204,23 @@ def _ejecutar_claude(prompt: str, ruta_archivo=None) -> str:
     pueda leer ESE archivo puntual con su herramienta Read (soporta PDFs,
     incluido modo visión para escaneos sin capa de texto) sin habilitar
     ninguna otra herramienta ni acceso a ningún otro directorio. Nunca se
-    usa `--dangerously-skip-permissions`."""
+    usa `--dangerously-skip-permissions`.
+
+    Siempre se agregan además los flags de `_FLAGS_MINIMOS`: esta llamada
+    solo necesita texto de entrada y JSON de salida (o, con `ruta_archivo`,
+    además `Read`) — nunca MCP servers, skills, ni la config de
+    settings/CLAUDE.md del proyecto o el usuario. Sin esto, cada invocación
+    de `claude -p` (un proceso nuevo y sin caché compartido con las demás)
+    paga de nuevo el costo de cargar todo ese contexto: confirmado en una
+    corrida real que ~99% de los tokens consumidos por 24 llamadas de
+    razonamiento (~1.3M) eran `cache_creation`/`cache_read` de ese contexto
+    fijo, no contenido de la tarea — con estos flags bajó a ~25% en una
+    prueba equivalente."""
     ejecutable = shutil.which("claude")
     if ejecutable is None:
         raise RuntimeError("No se encontró el ejecutable 'claude' en el PATH.")
 
-    argv = [ejecutable, "-p"]
+    argv = [ejecutable, "-p", *_FLAGS_MINIMOS]
     if ruta_archivo is not None:
         settings_lectura_acotada = json.dumps({"permissions": {"deny": ["Bash", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch"]}})
         argv += [
@@ -211,6 +229,8 @@ def _ejecutar_claude(prompt: str, ruta_archivo=None) -> str:
             "--settings", settings_lectura_acotada,
             "--strict-mcp-config",
         ]
+    else:
+        argv += ["--tools", "", "--strict-mcp-config"]
 
     resultado = subprocess.run(
         argv,

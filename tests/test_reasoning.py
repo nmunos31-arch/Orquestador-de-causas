@@ -97,7 +97,11 @@ class TestEjecutarClaudeResuelveRutaCompleta:
         assert resultado == "ok"
         assert llamadas_which == ["claude"]
         args, kwargs = llamadas_run[0]
-        assert args == ["C:\\ruta\\falsa\\claude.CMD", "-p"]
+        assert args == [
+            "C:\\ruta\\falsa\\claude.CMD", "-p",
+            "--disable-slash-commands", "--setting-sources", "",
+            "--tools", "", "--strict-mcp-config",
+        ]
         assert kwargs.get("input") == "un prompt cualquiera"
 
     def test_lanza_runtimeerror_si_claude_no_esta_en_el_path(self, monkeypatch):
@@ -222,6 +226,7 @@ class TestEjecutarClaudeConRutaArchivo:
         settings_esperados = json.dumps({"permissions": {"deny": ["Bash", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch"]}})
         assert args == [
             "C:\\ruta\\falsa\\claude.CMD", "-p",
+            "--disable-slash-commands", "--setting-sources", "",
             "--allowedTools", "Read",
             "--add-dir", str(carpeta),
             "--settings", settings_esperados,
@@ -245,7 +250,7 @@ class TestEjecutarClaudeConRutaArchivo:
         reasoning_mod._ejecutar_claude("un prompt")
 
         args, kwargs = llamadas[0]
-        assert args == ["C:\\ruta\\falsa\\claude.CMD", "-p"]
+        assert "--allowedTools" not in args
 
 
 class TestPreguntarConRutaArchivo:
