@@ -26,7 +26,9 @@ from gestion_causas import reasoning
 from gestion_causas.cuadro_resumen import (
     buscar_ceco_en_mensajes as _buscar_ceco_en_mensajes,
     cuadro_completo,
+    dominios_citados,
     extraer_campos_cuadro,
+    texto_citado,
 )
 from gestion_causas.empresas import normalizar_empresa
 from gestion_causas.gmail_client import COLOR_POR_EMPRESA, EMPRESAS_SIN_EXCEL, ETIQUETA_PROCESADO
@@ -106,15 +108,7 @@ def correr(
             continue
         primer_mensaje = mensajes[0]
 
-        origen = _origen_cadena(primer_mensaje)
-        if origen.get("error"):
-            acciones.append({
-                "rit": None,
-                "que": f"No se pudo evaluar el origen de un hilo automáticamente: {origen['error']}",
-                "urgencia": "media",
-            })
-            continue
-        if not origen["valida"]:
+        if not _origen_cadena(primer_mensaje)["valida"]:
             continue
 
         campos = extraer_campos_cuadro(primer_mensaje.get("cuerpo_texto", ""))
@@ -408,41 +402,27 @@ def _evaluar_ajustes_demanda(campos: dict, ruta_demanda: Path) -> dict:
     return reasoning.preguntar(tarea, contexto, SCHEMA_AJUSTES_DEMANDA, ruta_archivo=ruta_demanda)
 
 
-SCHEMA_ORIGEN_CADENA = {
-    "type": "object",
-    "properties": {
-        "es_reenvio_de_cuadro": {"type": "boolean"},
-        "justificacion": {"type": "string"},
-    },
-    "required": ["es_reenvio_de_cuadro", "justificacion"],
-}
+DOMINIOS_SMU = ("smu.cl", "sb.cl")
 
 
-def _evaluar_origen_gomezyriesco(primer_mensaje: dict) -> dict:
-    """El primer mensaje del hilo es de @gomezyriesco.cl — decide si es un
-    reenvío/acuse de recibo que cita (texto citado, ej. con '>') un
-    cuadro-resumen firmado por alguien de @smu.cl/@sb.cl (cadena VÁLIDA), o
-    si es Nico/Román iniciando una conversación interna (cadena NO válida,
-    la usa la fase 'agenda', no esta)."""
-    contexto = {
-        "remitente": primer_mensaje.get("sender", ""),
-        "asunto": primer_mensaje.get("subject", ""),
-        "cuerpo": primer_mensaje.get("cuerpo_texto", ""),
-    }
-    tarea = (
-        "El primer mensaje de este hilo de correo lo envió alguien de dominio "
-        "@gomezyriesco.cl. Decidí si es un reenvío o acuse de recibo corto que cita, "
-        "dentro del cuerpo (texto citado, típicamente con '>' o similar), un "
-        "cuadro-resumen completo de una causa laboral (campos como Rit, Tribunal, "
-        "Demandante, etc.) firmado originalmente por alguien de dominio @smu.cl o "
-        "@sb.cl — en ese caso es una cadena VÁLIDA. Si en cambio es alguien de "
-        "gomezyriesco.cl iniciando una conversación (ej. preguntando sobre estrategia "
-        "de una causa ya conocida), sin ningún cuadro-resumen citado, es una cadena "
-        "INTERNA, no válida para esta tarea."
-    )
-    return reasoning.preguntar(tarea, contexto, SCHEMA_ORIGEN_CADENA)
-
-
+def _es_reenvio_de_cuadro_confiable(primer_mensaje: dict) -> bool:
+    """El primer mensaje del hilo es de @gomezyriesco.cl — decide, sin
+    Claude, si es un reenvío/acuse de recibo que cita un cuadro-resumen
+    completo firmado originalmente por alguien de @smu.cl/@sb.cl (cadena
+    VÁLIDA), en vez de Nico/Román iniciando una conversación interna (cadena
+    NO válida, la usa la fase 'agenda', no esta). Antes esto se lo
+    preguntábamos a Claude (`_evaluar_origen_gomezyriesco`); el mismo
+    criterio ("¿el texto citado trae un cuadro completo Y viene de ese
+    dominio?") ya se puede resolver con las herramientas puro-Python que
+    `cuadro_resumen.py` usa para todo lo demás de esta fase — sin llamar a
+    Claude para una pregunta que es estructural, no de interpretación de
+    lenguaje libre."""
+    citado = texto_citado(primer_mensaje.get("cuerpo_texto", ""))
+    if not citado:
+        return False
+    if not cuadro_completo(extraer_campos_cuadro(citado)):
+        return False
+    return bool(dominios_citados(citado) & set(DOMINIOS_SMU))
 
 
 def _dominio(remitente: str) -> str:
@@ -451,13 +431,12 @@ def _dominio(remitente: str) -> str:
 
 
 def _origen_cadena(primer_mensaje: dict) -> dict:
-    """Devuelve {"valida": True|False, "error": <str, opcional>}."""
+    """Devuelve {"valida": True|False}. Sin Claude (ver
+    `_es_reenvio_de_cuadro_confiable`) — nunca falla, así que ya no hay un
+    caso de error que el llamador deba manejar aparte."""
     dominio = _dominio(primer_mensaje.get("sender", ""))
-    if dominio in ("smu.cl", "sb.cl"):
+    if dominio in DOMINIOS_SMU:
         return {"valida": True}
     if dominio == "gomezyriesco.cl":
-        deteccion = _evaluar_origen_gomezyriesco(primer_mensaje)
-        if deteccion.get("error"):
-            return {"valida": False, "error": deteccion["error"]}
-        return {"valida": bool(deteccion.get("es_reenvio_de_cuadro"))}
+        return {"valida": _es_reenvio_de_cuadro_confiable(primer_mensaje)}
     return {"valida": False}

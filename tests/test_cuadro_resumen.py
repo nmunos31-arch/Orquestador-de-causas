@@ -2,7 +2,9 @@ from gestion_causas.cuadro_resumen import (
     CAMPOS_OBLIGATORIOS,
     buscar_ceco_en_mensajes,
     cuadro_completo,
+    dominios_citados,
     extraer_campos_cuadro,
+    texto_citado,
 )
 
 CUERPO_EJEMPLO = """\
@@ -73,6 +75,41 @@ class TestExtraerCamposCuadro:
         cuerpo = "Fecha audiencia: 15:30 hrs, 15 de octubre de 2026\n"
         campos = extraer_campos_cuadro(cuerpo)
         assert campos["fecha_audiencia"] == "15:30 hrs, 15 de octubre de 2026"
+
+
+class TestTextoCitado:
+    def test_sin_marcador_de_cita_devuelve_vacio(self):
+        assert texto_citado("Román, ¿cómo contestamos esta?") == ""
+
+    def test_corta_desde_el_primer_marcador_y_quita_el_prefijo_de_cita(self):
+        cuerpo = "Te reenvío esto.\n\n> Rit: M-1-2026\n> Tribunal: Temuco"
+        assert texto_citado(cuerpo) == "Rit: M-1-2026\nTribunal: Temuco"
+
+    def test_corta_desde_mensaje_original(self):
+        cuerpo = (
+            "Román, te paso esto.\n\n"
+            "---------- Mensaje original ----------\n"
+            "De: Persona <persona@smu.cl>\n"
+            "Rit: M-1-2026\n"
+        )
+        citado = texto_citado(cuerpo)
+        assert citado.startswith("---------- Mensaje original ----------")
+
+    def test_usa_el_marcador_que_aparece_primero(self):
+        cuerpo = "> cita temprana\n\nDe: x\nEnviado: y"
+        assert texto_citado(cuerpo).startswith("cita temprana")
+
+
+class TestDominiosCitados:
+    def test_encuentra_dominio_de_una_direccion(self):
+        assert dominios_citados("De: Persona <persona@smu.cl>") == {"smu.cl"}
+
+    def test_varias_direcciones_de_distintos_dominios(self):
+        texto = "De: a@smu.cl\nPara: b@gomezyriesco.cl"
+        assert dominios_citados(texto) == {"smu.cl", "gomezyriesco.cl"}
+
+    def test_sin_direcciones_devuelve_vacio(self):
+        assert dominios_citados("sin ningún correo acá") == set()
 
 
 class TestBuscarCecoEnMensajes:

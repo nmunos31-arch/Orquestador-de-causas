@@ -46,24 +46,19 @@ class TestOrigenDeLaCadena:
 
         assert llamadas_reasoning == []
 
-    def test_dominio_gomezyriesco_ambiguo_llama_a_claude(self, tmp_path, monkeypatch):
-        llamadas = []
-
-        def preguntar_falso(tarea, contexto, schema):
-            llamadas.append(contexto)
-            return {"es_reenvio_de_cuadro": False, "justificacion": "Nico iniciando una conversación"}
-
-        monkeypatch.setattr(smu.reasoning, "preguntar", preguntar_falso)
+    def test_dominio_gomezyriesco_sin_cita_no_llama_a_claude_y_es_invalida(self, tmp_path, monkeypatch):
+        llamadas_reasoning = []
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda *a, **k: llamadas_reasoning.append(1))
         monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
         monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: _hilo_falso([
             {"id": "msg-1", "thread_id": "thread-1", "sender": "nmunoz@gomezyriesco.cl", "subject": "Re: causa",
              "cuerpo_texto": "Román, ¿cómo contestamos esta?", "adjuntos": []},
         ]))
 
-        smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=tmp_path / "registro_causas.json")
+        resumen = smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=tmp_path / "registro_causas.json")
 
-        assert len(llamadas) == 1
-        assert llamadas[0]["remitente"] == "nmunoz@gomezyriesco.cl"
+        assert llamadas_reasoning == []
+        assert resumen["items"] == []
 
     def test_otro_dominio_no_llama_a_claude_ni_se_procesa(self, tmp_path, monkeypatch):
         llamadas = []
@@ -88,6 +83,50 @@ Demandada: Alvi
 Cuantía: $500.000
 Materia: Despido injustificado
 """
+
+
+class TestEsReenvioDeCuadroConfiable:
+    def test_sin_texto_citado_no_es_reenvio(self):
+        mensaje = {"cuerpo_texto": "Román, ¿cómo contestamos esta?"}
+        assert smu._es_reenvio_de_cuadro_confiable(mensaje) is False
+
+    def test_cita_cuadro_completo_de_smu_cl_es_reenvio(self):
+        mensaje = {"cuerpo_texto": (
+            "Román, te reenvío esto.\n\n"
+            "---------- Mensaje original ----------\n"
+            "De: Persona SMU <persona@smu.cl>\n"
+            + CUERPO_CUADRO_ALVI
+        )}
+        assert smu._es_reenvio_de_cuadro_confiable(mensaje) is True
+
+    def test_cita_cuadro_completo_de_sb_cl_es_reenvio(self):
+        mensaje = {"cuerpo_texto": (
+            "> De: Persona <persona@sb.cl>\n> " + CUERPO_CUADRO_ALVI.replace("\n", "\n> ")
+        )}
+        assert smu._es_reenvio_de_cuadro_confiable(mensaje) is True
+
+    def test_cita_cuadro_completo_pero_de_dominio_no_confiable_no_es_reenvio(self):
+        mensaje = {"cuerpo_texto": (
+            "---------- Mensaje original ----------\n"
+            "De: Alguien <alguien@gmail.com>\n"
+            + CUERPO_CUADRO_ALVI
+        )}
+        assert smu._es_reenvio_de_cuadro_confiable(mensaje) is False
+
+    def test_cita_de_smu_cl_pero_cuadro_incompleto_no_es_reenvio(self):
+        mensaje = {"cuerpo_texto": (
+            "---------- Mensaje original ----------\n"
+            "De: Persona SMU <persona@smu.cl>\n"
+            "Demandada: Alvi\n"
+        )}
+        assert smu._es_reenvio_de_cuadro_confiable(mensaje) is False
+
+    def test_origen_cadena_dominio_smu_cl_directo_no_necesita_evaluar_cita(self):
+        assert smu._origen_cadena({"sender": "persona@smu.cl", "cuerpo_texto": ""}) == {"valida": True}
+
+    def test_origen_cadena_gomezyriesco_delega_en_es_reenvio_de_cuadro_confiable(self):
+        mensaje = {"sender": "nmunoz@gomezyriesco.cl", "cuerpo_texto": "sin citas"}
+        assert smu._origen_cadena(mensaje) == {"valida": False}
 
 
 class TestFiltroDeEmpresaYDuplicados:
