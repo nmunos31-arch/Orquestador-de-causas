@@ -1,6 +1,6 @@
 """Caché de respuestas de razonamiento entre corridas.
 
-El orquestador corre 3 veces al día y `cli._generar_mapa_hilos_por_rit`
+El disparador corre 3 veces al día y `cli._generar_mapa_hilos_por_rit`
 guarda TODOS los mensajes de cada hilo activo (no solo los nuevos), así que
 una causa cuyo hilo no cambió produce un prompt idéntico byte por byte en
 las 3 corridas. Este módulo cachea el resultado por hash del par

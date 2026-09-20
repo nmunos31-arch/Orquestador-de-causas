@@ -69,7 +69,7 @@ def _lock(ruta: Path):
     """Serializa el ciclo leer-modificar-escribir de un registro entre
     procesos distintos.
 
-    Existe porque el orquestador corre los subagentes `goteo` y `agenda` en
+    Existe porque el disparador corre los subagentes `goteo` y `agenda` en
     paralelo y los dos actualizan `registro_causas.json` (campos distintos,
     pero el archivo se reescribe entero en cada `registrar_causa`, asi que sin
     esto una escritura pisa a la otra). Cada llamada del CLI es un proceso

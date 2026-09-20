@@ -1,11 +1,18 @@
-"""Driver del orquestador de gestion_causas, en Python.
+"""Disparador de la corrida completa de gestion_causas, en Python.
 
-Reemplazo completo de la tarea programada `gestion-causas-orquestador`
-(ver docs en docs/superpowers/plans/ y, como referencia histórica del
-contrato paso a paso, orquestador/SKILL.md), salvo el paso 1 ("contexto de
-la corrida"), que sigue siendo un comando de CLI aparte
+Punto de entrada que la tarea programada `gestion-causas-orquestador`
+invoca con un único comando (`python -m gestion_causas.disparador`) —
+reemplazo completo del despacho de subagentes que documentaba
+`orquestador/SKILL.md` (ver docs en docs/superpowers/plans/ y ese archivo
+como referencia histórica del contrato paso a paso), salvo el paso 1
+("contexto de la corrida"), que sigue siendo un comando de CLI aparte
 (`python -m gestion_causas.cli contexto-corrida`) — `correr()` requiere que
 ya se haya corrido antes.
+
+Se llama "disparador" y no "orquestador" a propósito, aunque la tarea
+programada que lo invoca sí conserve ese nombre (`gestion-causas-orquestador`,
+fuera del repo): la tarea programada es quien orquesta el ciclo completo;
+este módulo es solo lo que ella dispara para que corra.
 
 `correr_y_enviar_panel()` es el punto de entrada completo: despacha las 5
 fases ('smu', 'goteo', 'agenda', 'seguimiento', 'calendario'), arma el
@@ -132,7 +139,7 @@ def _armar_y_enviar_panel(fases: dict, fecha_hoy: str, es_corrida_manana: bool, 
         resultado["borradores"] = cli_mod.verificar_borradores_pendientes()
     except Exception as e:
         mensaje = f"{type(e).__name__}: {e}"
-        bitacora_mod.registrar(f"Orquestador: no se pudo revisar borradores pendientes ({mensaje})")
+        bitacora_mod.registrar(f"Disparador: no se pudo revisar borradores pendientes ({mensaje})")
         resultado["borradores"] = {"error": mensaje}
 
     borradores_pendientes = (
@@ -151,7 +158,7 @@ def _armar_y_enviar_panel(fases: dict, fecha_hoy: str, es_corrida_manana: bool, 
         resultado["panel_generado"] = True
     except Exception as e:
         mensaje = f"{type(e).__name__}: {e}"
-        bitacora_mod.registrar(f"Orquestador: fallo al generar el panel de estado ({mensaje})")
+        bitacora_mod.registrar(f"Disparador: fallo al generar el panel de estado ({mensaje})")
         resultado["error"] = mensaje
         return resultado
 
@@ -168,7 +175,7 @@ def _armar_y_enviar_panel(fases: dict, fecha_hoy: str, es_corrida_manana: bool, 
         resultado["correo_enviado"] = True
     except Exception as e:
         mensaje = f"{type(e).__name__}: {e}"
-        bitacora_mod.registrar(f"Orquestador: fallo al enviar el panel de estado ({mensaje})")
+        bitacora_mod.registrar(f"Disparador: fallo al enviar el panel de estado ({mensaje})")
         resultado["error"] = mensaje
 
     return resultado
@@ -197,7 +204,7 @@ def correr_y_enviar_panel(
     try:
         Path(ruta_contexto).unlink(missing_ok=True)
     except OSError as e:
-        bitacora_mod.registrar(f"Orquestador: no se pudo borrar el contexto temporal de la corrida ({e})")
+        bitacora_mod.registrar(f"Disparador: no se pudo borrar el contexto temporal de la corrida ({e})")
 
     return resultado
 
@@ -208,7 +215,7 @@ def _asegurar_contexto(ruta_contexto: Path = RUTA_CONTEXTO_DEFAULT) -> bool:
     Devuelve si el contexto quedó utilizable (`listo`).
 
     Con esto la tarea programada es un único comando
-    (`python -m gestion_causas.orquestador`) en vez de dos pasos
+    (`python -m gestion_causas.disparador`) en vez de dos pasos
     encadenados a mano por un agente — que era la última razón por la que
     el SKILL.md seguía necesitando un modelo para orquestar."""
     ruta = Path(ruta_contexto)
@@ -234,7 +241,7 @@ def main(argv=None) -> int:
     mostrar en error."""
     if not _asegurar_contexto():
         bitacora_mod.registrar(
-            "Orquestador: contexto de corrida no listo (token caído) — se corre igual "
+            "Disparador: contexto de corrida no listo (token caído) — se corre igual "
             "para que el panel avise"
         )
 
@@ -256,7 +263,7 @@ def main(argv=None) -> int:
     }
     uso = resultado["uso_tokens"]
     bitacora_mod.registrar(
-        f"Orquestador: corrida terminada — {uso['llamadas']} llamadas a Claude, "
+        f"Disparador: corrida terminada — {uso['llamadas']} llamadas a Claude, "
         f"{uso['input_tokens']} tokens de entrada, {uso['output_tokens']} de salida, "
         f"USD {uso['costo_usd']}"
     )

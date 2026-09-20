@@ -4,7 +4,7 @@ como referencia histórica de las reglas, subagentes/goteo.md).
 
 Revisa las causas activas por si llegaron documentos nuevos en su cadena de
 correo. Nunca envía correos ni borra nada, y no toca el calendario. Depende
-de que `orquestador.py` ya haya armado `_contexto_corrida.json` antes de
+de que `disparador.py` ya haya armado `_contexto_corrida.json` antes de
 llamar a `correr()` — este módulo no arma su propio contexto (ver "Alcance"
 del plan de implementación)."""
 

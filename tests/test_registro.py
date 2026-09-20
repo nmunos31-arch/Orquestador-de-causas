@@ -364,7 +364,7 @@ class TestPuedeInsistir:
 
 
 class TestEscrituraConcurrente:
-    """El orquestador corre los subagentes `goteo` y `agenda` en paralelo y los
+    """El disparador corre los subagentes `goteo` y `agenda` en paralelo y los
     dos actualizan registro_causas.json (campos distintos, pero el archivo se
     reescribe entero). Sin el lock de registro._lock, la escritura de uno pisa
     la del otro."""

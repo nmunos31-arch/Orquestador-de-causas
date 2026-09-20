@@ -20,7 +20,7 @@ diseño completo, y `docs/superpowers/plans/` para el historial de planes de imp
 | `calendario` | ✅ migrada |
 
 Las 5 fases están migradas y la tarea programada corre este driver
-(`python -m gestion_causas.orquestador`, ver `gestion_causas/orquestador/SKILL.md`).
+(`python -m gestion_causas.disparador`, ver `gestion_causas/orquestador/SKILL.md`).
 `gestion_causas/subagentes/*.md` se conservan como referencia histórica de las
 reglas de negocio de cada fase — ya no los ejecuta nadie.
 

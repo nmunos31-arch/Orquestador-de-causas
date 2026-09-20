@@ -8,7 +8,7 @@ correos nuevos de demandas de las 6 empresas del proyecto, extrae el
 cuadro-resumen, filtra duplicados, crea la carpeta, guarda la demanda,
 escribe la fila del Excel de Juicios Vigentes, registra la causa, etiqueta
 el hilo y lo marca procesado. NO arma el borrador de documentos a solicitar
-(ver Plan B, un plan separado) — no requiere que orquestador.py haya armado
+(ver Plan B, un plan separado) — no requiere que disparador.py haya armado
 ningún mapa previo, a diferencia de goteo."""
 
 from __future__ import annotations

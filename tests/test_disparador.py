@@ -2,10 +2,10 @@ import json
 
 import pytest
 
-from gestion_causas import orquestador
+from gestion_causas import disparador
 
 
-class TestCorrerOrquestador:
+class TestCorrerDisparador:
     def test_corre_goteo_y_devuelve_su_resumen(self, tmp_path, monkeypatch):
         ruta_contexto = tmp_path / "_contexto_corrida.json"
         ruta_contexto.write_text(json.dumps({
@@ -14,9 +14,9 @@ class TestCorrerOrquestador:
             "mapa_audiencias": {"ruta": str(tmp_path / "no_existe.json")},
         }), encoding="utf-8")
 
-        monkeypatch.setattr(orquestador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
+        monkeypatch.setattr(disparador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
 
-        resultado = orquestador.correr(
+        resultado = disparador.correr(
             ruta_contexto=ruta_contexto,
             ruta_registro_causas=tmp_path / "registro_causas.json",
             ruta_registro_ceco=tmp_path / "registro_ceco.json",
@@ -32,10 +32,10 @@ class TestCorrerOrquestador:
         def goteo_falla(contexto_corrida, **kwargs):
             raise RuntimeError("boom")
 
-        monkeypatch.setattr(orquestador.fases_goteo, "correr", goteo_falla)
-        monkeypatch.setattr(orquestador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
+        monkeypatch.setattr(disparador.fases_goteo, "correr", goteo_falla)
+        monkeypatch.setattr(disparador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
 
-        resultado = orquestador.correr(
+        resultado = disparador.correr(
             ruta_contexto=ruta_contexto,
             ruta_registro_causas=tmp_path / "registro_causas.json",
             ruta_registro_ceco=tmp_path / "registro_ceco.json",
@@ -48,17 +48,17 @@ class TestCorrerOrquestador:
         ruta_contexto = tmp_path / "no_existe.json"
 
         with pytest.raises(FileNotFoundError):
-            orquestador.correr(ruta_contexto=ruta_contexto)
+            disparador.correr(ruta_contexto=ruta_contexto)
 
 
-class TestOrquestadorDespachaSmu:
+class TestDisparadorDespachaSmu:
     def test_corre_smu_y_devuelve_su_resumen(self, tmp_path, monkeypatch):
         ruta_contexto = tmp_path / "_contexto_corrida.json"
         ruta_contexto.write_text(json.dumps({"fecha_hoy": "2026-09-16"}), encoding="utf-8")
 
-        monkeypatch.setattr(orquestador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
+        monkeypatch.setattr(disparador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
 
-        resultado = orquestador.correr(
+        resultado = disparador.correr(
             ruta_contexto=ruta_contexto,
             ruta_registro_causas=tmp_path / "registro_causas.json",
             ruta_registro_ceco=tmp_path / "registro_ceco.json",
@@ -72,10 +72,10 @@ class TestOrquestadorDespachaSmu:
         ruta_contexto.write_text(json.dumps({"fecha_hoy": "2026-09-16"}), encoding="utf-8")
 
         llamadas = []
-        monkeypatch.setattr(orquestador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
-        monkeypatch.setattr(orquestador.fases_smu, "correr", lambda *a, **k: llamadas.append(k) or {"fase": "smu"})
+        monkeypatch.setattr(disparador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
+        monkeypatch.setattr(disparador.fases_smu, "correr", lambda *a, **k: llamadas.append(k) or {"fase": "smu"})
 
-        orquestador.correr(
+        disparador.correr(
             ruta_contexto=ruta_contexto,
             ruta_registro_causas=tmp_path / "registro_causas.json",
             ruta_registro_ceco=tmp_path / "registro_ceco.json",
@@ -84,14 +84,14 @@ class TestOrquestadorDespachaSmu:
         assert llamadas[0]["ruta_registro_ceco"] == tmp_path / "registro_ceco.json"
 
 
-class TestOrquestadorDespachaAgenda:
+class TestDisparadorDespachaAgenda:
     def test_corre_agenda_y_devuelve_su_resumen(self, tmp_path, monkeypatch):
         ruta_contexto = tmp_path / "_contexto_corrida.json"
         ruta_contexto.write_text(json.dumps({"fecha_hoy": "2026-09-17"}), encoding="utf-8")
 
-        monkeypatch.setattr(orquestador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
+        monkeypatch.setattr(disparador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
 
-        resultado = orquestador.correr(
+        resultado = disparador.correr(
             ruta_contexto=ruta_contexto,
             ruta_registro_causas=tmp_path / "registro_causas.json",
             ruta_registro_ceco=tmp_path / "registro_ceco.json",
@@ -110,12 +110,12 @@ class TestResumenComoLista:
             "seguimiento": {"fase": "seguimiento"},
             "calendario": {"fase": "calendario"},
         }
-        lista = orquestador._resumen_como_lista(fases, es_corrida_manana=True)
+        lista = disparador._resumen_como_lista(fases, es_corrida_manana=True)
         assert [f["fase"] for f in lista] == ["calendario", "smu", "goteo", "agenda", "seguimiento"]
 
     def test_completa_seguimiento_y_calendario_como_no_aplica_fuera_de_la_manana(self):
         fases = {"smu": {"fase": "smu"}, "goteo": {"fase": "goteo"}, "agenda": {"fase": "agenda"}}
-        lista = orquestador._resumen_como_lista(fases, es_corrida_manana=False)
+        lista = disparador._resumen_como_lista(fases, es_corrida_manana=False)
         por_fase = {f["fase"]: f for f in lista}
 
         assert por_fase["seguimiento"]["resultado"] == "No aplica: solo corre en la corrida de la mañana."
@@ -126,29 +126,29 @@ class TestResumenComoLista:
         fases = {
             "smu": {"fase": "smu"}, "goteo": {"fase": "goteo", "error": "boom"}, "agenda": {"fase": "agenda"},
         }
-        lista = orquestador._resumen_como_lista(fases, es_corrida_manana=False)
+        lista = disparador._resumen_como_lista(fases, es_corrida_manana=False)
         assert next(f for f in lista if f["fase"] == "goteo") == {"fase": "goteo", "error": "boom"}
 
 
 class TestArmarYEnviarPanel:
     def _mockear_camino_feliz(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(orquestador.cli_mod, "verificar_borradores_pendientes", lambda: {
+        monkeypatch.setattr(disparador.cli_mod, "verificar_borradores_pendientes", lambda: {
             "pendientes": [{"rit": "M-1-2026"}], "enviados": [], "descartados": [],
         })
-        monkeypatch.setattr(orquestador.panel_mod, "generar_panel_html", lambda *a, **k: "<html>panel</html>")
-        monkeypatch.setattr(orquestador.gmail_personal_client, "construir_servicio", lambda permitir_login: object())
+        monkeypatch.setattr(disparador.panel_mod, "generar_panel_html", lambda *a, **k: "<html>panel</html>")
+        monkeypatch.setattr(disparador.gmail_personal_client, "construir_servicio", lambda permitir_login: object())
         llamadas_envio = []
         monkeypatch.setattr(
-            orquestador.gmail_personal_client, "enviar_panel_estado",
+            disparador.gmail_personal_client, "enviar_panel_estado",
             lambda asunto, html, servicio=None: llamadas_envio.append((asunto, html)) or {"id": "msg-1"},
         )
-        monkeypatch.setattr(orquestador.bitacora_mod, "registrar", lambda *a, **k: None)
+        monkeypatch.setattr(disparador.bitacora_mod, "registrar", lambda *a, **k: None)
         return llamadas_envio
 
     def test_camino_feliz_genera_y_envia_el_panel(self, tmp_path, monkeypatch):
         llamadas_envio = self._mockear_camino_feliz(monkeypatch, tmp_path)
 
-        resultado = orquestador._armar_y_enviar_panel(
+        resultado = disparador._armar_y_enviar_panel(
             {"smu": {"fase": "smu"}}, "2026-09-18", False, ruta_registro_causas=tmp_path / "registro_causas.json"
         )
 
@@ -162,11 +162,11 @@ class TestArmarYEnviarPanel:
         self._mockear_camino_feliz(monkeypatch, tmp_path)
         llamadas_panel = []
         monkeypatch.setattr(
-            orquestador.panel_mod, "generar_panel_html",
+            disparador.panel_mod, "generar_panel_html",
             lambda resumen, **k: llamadas_panel.append(k) or "<html></html>",
         )
 
-        orquestador._armar_y_enviar_panel(
+        disparador._armar_y_enviar_panel(
             {}, "2026-09-18", False, ruta_registro_causas=tmp_path / "registro_causas.json"
         )
 
@@ -175,11 +175,11 @@ class TestArmarYEnviarPanel:
     def test_fallo_al_revisar_borradores_no_bloquea_el_panel(self, tmp_path, monkeypatch):
         llamadas_envio = self._mockear_camino_feliz(monkeypatch, tmp_path)
         monkeypatch.setattr(
-            orquestador.cli_mod, "verificar_borradores_pendientes",
+            disparador.cli_mod, "verificar_borradores_pendientes",
             lambda: (_ for _ in ()).throw(RuntimeError("token vencido")),
         )
 
-        resultado = orquestador._armar_y_enviar_panel(
+        resultado = disparador._armar_y_enviar_panel(
             {}, "2026-09-18", False, ruta_registro_causas=tmp_path / "registro_causas.json"
         )
 
@@ -191,11 +191,11 @@ class TestArmarYEnviarPanel:
     def test_fallo_al_generar_el_panel_no_intenta_enviar_correo(self, tmp_path, monkeypatch):
         llamadas_envio = self._mockear_camino_feliz(monkeypatch, tmp_path)
         monkeypatch.setattr(
-            orquestador.panel_mod, "generar_panel_html",
+            disparador.panel_mod, "generar_panel_html",
             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
         )
 
-        resultado = orquestador._armar_y_enviar_panel(
+        resultado = disparador._armar_y_enviar_panel(
             {}, "2026-09-18", False, ruta_registro_causas=tmp_path / "registro_causas.json"
         )
 
@@ -207,11 +207,11 @@ class TestArmarYEnviarPanel:
     def test_token_personal_no_listo_no_bloquea_el_resultado(self, tmp_path, monkeypatch):
         self._mockear_camino_feliz(monkeypatch, tmp_path)
         monkeypatch.setattr(
-            orquestador.gmail_personal_client, "construir_servicio",
+            disparador.gmail_personal_client, "construir_servicio",
             lambda permitir_login: (_ for _ in ()).throw(RuntimeError("sin token")),
         )
 
-        resultado = orquestador._armar_y_enviar_panel(
+        resultado = disparador._armar_y_enviar_panel(
             {}, "2026-09-18", False, ruta_registro_causas=tmp_path / "registro_causas.json"
         )
 
@@ -224,15 +224,15 @@ class TestCorrerYEnviarPanel:
     def test_corre_las_fases_arma_el_panel_y_borra_el_contexto(self, tmp_path, monkeypatch):
         ruta_contexto = tmp_path / "_contexto_corrida.json"
         ruta_contexto.write_text(json.dumps({"fecha_hoy": "2026-09-18", "corrida": "resto"}), encoding="utf-8")
-        monkeypatch.setattr(orquestador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
-        monkeypatch.setattr(orquestador.cli_mod, "verificar_borradores_pendientes", lambda: {"pendientes": []})
-        monkeypatch.setattr(orquestador.panel_mod, "generar_panel_html", lambda *a, **k: "<html></html>")
-        monkeypatch.setattr(orquestador.gmail_personal_client, "construir_servicio", lambda permitir_login: object())
+        monkeypatch.setattr(disparador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
+        monkeypatch.setattr(disparador.cli_mod, "verificar_borradores_pendientes", lambda: {"pendientes": []})
+        monkeypatch.setattr(disparador.panel_mod, "generar_panel_html", lambda *a, **k: "<html></html>")
+        monkeypatch.setattr(disparador.gmail_personal_client, "construir_servicio", lambda permitir_login: object())
         monkeypatch.setattr(
-            orquestador.gmail_personal_client, "enviar_panel_estado", lambda *a, **k: {"id": "msg-1"}
+            disparador.gmail_personal_client, "enviar_panel_estado", lambda *a, **k: {"id": "msg-1"}
         )
 
-        resultado = orquestador.correr_y_enviar_panel(
+        resultado = disparador.correr_y_enviar_panel(
             ruta_contexto=ruta_contexto,
             ruta_registro_causas=tmp_path / "registro_causas.json",
             ruta_registro_ceco=tmp_path / "registro_ceco.json",
@@ -249,9 +249,9 @@ class TestAsegurarContexto:
         ruta.write_text(json.dumps({"listo": True, "fecha_hoy": "2026-09-20"}), encoding="utf-8")
 
         llamadas = []
-        monkeypatch.setattr(orquestador.cli_mod, "main", lambda argv: llamadas.append(argv) or 0)
+        monkeypatch.setattr(disparador.cli_mod, "main", lambda argv: llamadas.append(argv) or 0)
 
-        assert orquestador._asegurar_contexto(ruta) is True
+        assert disparador._asegurar_contexto(ruta) is True
         assert llamadas == []
 
     def test_arma_el_contexto_si_falta(self, tmp_path, monkeypatch):
@@ -263,9 +263,9 @@ class TestAsegurarContexto:
             ruta.write_text(json.dumps({"listo": True}), encoding="utf-8")
             return 0
 
-        monkeypatch.setattr(orquestador.cli_mod, "main", main_falso)
+        monkeypatch.setattr(disparador.cli_mod, "main", main_falso)
 
-        assert orquestador._asegurar_contexto(ruta) is True
+        assert disparador._asegurar_contexto(ruta) is True
         assert llamadas == [["contexto-corrida", "--salida", str(ruta)]]
 
     def test_devuelve_false_si_contexto_corrida_sale_con_codigo_1(self, tmp_path, monkeypatch):
@@ -275,20 +275,20 @@ class TestAsegurarContexto:
             ruta.write_text(json.dumps({"listo": False}), encoding="utf-8")
             return 1
 
-        monkeypatch.setattr(orquestador.cli_mod, "main", main_falso)
+        monkeypatch.setattr(disparador.cli_mod, "main", main_falso)
 
-        assert orquestador._asegurar_contexto(ruta) is False
+        assert disparador._asegurar_contexto(ruta) is False
 
 
-class TestOrquestadorDespachaSeguimientoYCalendarioSoloEnLaManana:
+class TestDisparadorDespachaSeguimientoYCalendarioSoloEnLaManana:
     def test_no_despacha_seguimiento_ni_calendario_fuera_de_la_manana(self, tmp_path, monkeypatch):
         ruta_contexto = tmp_path / "_contexto_corrida.json"
         ruta_contexto.write_text(
             json.dumps({"fecha_hoy": "2026-09-18", "corrida": "resto"}), encoding="utf-8"
         )
-        monkeypatch.setattr(orquestador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
+        monkeypatch.setattr(disparador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
 
-        resultado = orquestador.correr(
+        resultado = disparador.correr(
             ruta_contexto=ruta_contexto,
             ruta_registro_causas=tmp_path / "registro_causas.json",
             ruta_registro_ceco=tmp_path / "registro_ceco.json",
@@ -302,11 +302,11 @@ class TestOrquestadorDespachaSeguimientoYCalendarioSoloEnLaManana:
         ruta_contexto.write_text(
             json.dumps({"fecha_hoy": "2026-09-21", "corrida": "manana", "es_lunes": True}), encoding="utf-8"
         )
-        monkeypatch.setattr(orquestador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
-        monkeypatch.setattr(orquestador.fases_seguimiento, "correr", lambda *a, **k: {"fase": "seguimiento"})
-        monkeypatch.setattr(orquestador.fases_calendario, "correr", lambda *a, **k: {"fase": "calendario"})
+        monkeypatch.setattr(disparador.fases_smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [])
+        monkeypatch.setattr(disparador.fases_seguimiento, "correr", lambda *a, **k: {"fase": "seguimiento"})
+        monkeypatch.setattr(disparador.fases_calendario, "correr", lambda *a, **k: {"fase": "calendario"})
 
-        resultado = orquestador.correr(
+        resultado = disparador.correr(
             ruta_contexto=ruta_contexto,
             ruta_registro_causas=tmp_path / "registro_causas.json",
             ruta_registro_ceco=tmp_path / "registro_ceco.json",

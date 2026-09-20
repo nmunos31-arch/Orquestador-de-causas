@@ -1,5 +1,5 @@
-"""Lectura de los mapas que el orquestador arma una sola vez por corrida
-(ver orquestador.py) y que varias fases reusan, para que nunca diverjan en
+"""Lectura de los mapas que el disparador arma una sola vez por corrida
+(ver disparador.py) y que varias fases reusan, para que nunca diverjan en
 cómo resuelven la misma pregunta — ej. `goteo` y `agenda` deciden el tipo de
 audiencia (Única/Preparatoria/Juicio/Ambiguo) de un RIT con el mismo
 criterio, leyendo el mismo archivo."""
@@ -12,9 +12,9 @@ from pathlib import Path
 
 def leer_mapa_audiencias(contexto_corrida: dict) -> dict:
     """Lee el mapa RIT -> audiencia ({"fecha", "resumen", "tipo"}) que el
-    orquestador ya resolvió para toda la corrida (paso 0 de agenda.md / paso
+    disparador ya resolvió para toda la corrida (paso 0 de agenda.md / paso
     3a de goteo.md). Si el contexto no trae la ruta, o el archivo no existe
-    (ej. corriendo la fase suelta sin orquestador), devuelve un mapa vacío
+    (ej. corriendo la fase suelta sin disparador), devuelve un mapa vacío
     en vez de fallar."""
     info = contexto_corrida.get("mapa_audiencias") or {}
     ruta = info.get("ruta")
@@ -24,11 +24,11 @@ def leer_mapa_audiencias(contexto_corrida: dict) -> dict:
 
 
 def leer_mapa_hilos(contexto_corrida: dict) -> dict:
-    """Lee el barrido combinado de Gmail que el orquestador ya armó para toda
+    """Lee el barrido combinado de Gmail que el disparador ya armó para toda
     la corrida (`rit_a_hilos`, `hilos`) — mismo mapa que usa `goteo.py` paso 2
     y `seguimiento.py` paso 3b para el cruce por RIT sin volver a golpear
     Gmail. Si el contexto no trae la ruta, o el archivo no existe (ej.
-    corriendo la fase suelta sin orquestador), devuelve un mapa vacío en vez
+    corriendo la fase suelta sin disparador), devuelve un mapa vacío en vez
     de fallar; `_notas` trae una nota por cada búsqueda que quedó truncada."""
     info = contexto_corrida.get("mapa_hilos") or {}
     ruta = info.get("ruta")
