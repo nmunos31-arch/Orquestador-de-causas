@@ -15,6 +15,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from gestion_causas import cache_razonamiento
 from gestion_causas import uso_tokens
 
 TIMEOUT_SEGUNDOS = 180
@@ -35,7 +36,7 @@ _FLAGS_MINIMOS = ["--disable-slash-commands", "--setting-sources", "", "--output
 
 def preguntar(
     tarea: str, contexto: dict, schema: dict, *, ejecutar=None, ruta_archivo=None,
-    etiqueta: str | None = None,
+    etiqueta: str | None = None, cachear: bool = False,
 ) -> dict:
     """Le pide a Claude que resuelva `tarea` sobre `contexto`, devolviendo un
     dict que cumple `schema`. Reintenta una vez si la respuesta no es JSON
@@ -61,6 +62,16 @@ def preguntar(
     """
     ejecutar = ejecutar or functools.partial(_ejecutar_claude, etiqueta=etiqueta)
 
+    # El caché se consulta ANTES de armar el prompt: la clave depende de
+    # (tarea, contexto), no del prompt final, para que agregar un campo al
+    # formato del prompt (ej. la línea de `ruta_archivo`) no invalide todo
+    # el caché de golpe.
+    clave_cache = cache_razonamiento.clave(tarea, contexto) if cachear else None
+    if clave_cache is not None:
+        cacheado = cache_razonamiento.obtener(clave_cache, ruta=cache_razonamiento.RUTA_CACHE)
+        if cacheado is not None:
+            return cacheado
+
     error_previo: str | None = None
     salida = ""
     for intento in range(2):
@@ -76,6 +87,14 @@ def preguntar(
 
         resultado = _parsear_json(salida)
         if resultado is not None:
+            # Nunca se cachea un `{"error": ...}`: una entrada así
+            # envenenaría la causa por DIAS_VIGENCIA. Solo llegan acá
+            # respuestas que parsearon bien, pero el modelo puede haber
+            # devuelto un objeto con la clave "error" por su cuenta.
+            if clave_cache is not None and "error" not in resultado:
+                cache_razonamiento.guardar(
+                    clave_cache, resultado, ruta=cache_razonamiento.RUTA_CACHE
+                )
             return resultado
 
         error_previo = salida

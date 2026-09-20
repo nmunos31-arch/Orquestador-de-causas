@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from gestion_causas import cache_razonamiento
 from gestion_causas import reasoning
 from gestion_causas.reasoning import invocar_skill, preguntar
 
@@ -69,6 +70,73 @@ class TestPreguntar:
 
         assert "error" in resultado
         assert isinstance(resultado["error"], str)
+
+
+class TestPreguntarConCache:
+    def test_la_segunda_llamada_identica_no_invoca_a_claude(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(cache_razonamiento, "RUTA_CACHE", tmp_path / "cache.json")
+        llamadas = []
+
+        def ejecutar_falso(prompt):
+            llamadas.append(prompt)
+            return json.dumps({"ok": True})
+
+        primera = preguntar("tarea", {"x": 1}, SCHEMA_SIMPLE, ejecutar=ejecutar_falso, cachear=True)
+        segunda = preguntar("tarea", {"x": 1}, SCHEMA_SIMPLE, ejecutar=ejecutar_falso, cachear=True)
+
+        assert primera == segunda == {"ok": True}
+        assert len(llamadas) == 1
+
+    def test_un_contexto_distinto_si_invoca_a_claude(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(cache_razonamiento, "RUTA_CACHE", tmp_path / "cache.json")
+        llamadas = []
+
+        def ejecutar_falso(prompt):
+            llamadas.append(prompt)
+            return json.dumps({"ok": True})
+
+        preguntar("tarea", {"x": 1}, SCHEMA_SIMPLE, ejecutar=ejecutar_falso, cachear=True)
+        preguntar("tarea", {"x": 2}, SCHEMA_SIMPLE, ejecutar=ejecutar_falso, cachear=True)
+
+        assert len(llamadas) == 2
+
+    def test_sin_cachear_no_se_consulta_ni_se_guarda_el_cache(self, monkeypatch, tmp_path):
+        ruta = tmp_path / "cache.json"
+        monkeypatch.setattr(cache_razonamiento, "RUTA_CACHE", ruta)
+        llamadas = []
+
+        def ejecutar_falso(prompt):
+            llamadas.append(prompt)
+            return json.dumps({"ok": True})
+
+        preguntar("tarea", {"x": 1}, SCHEMA_SIMPLE, ejecutar=ejecutar_falso)
+        preguntar("tarea", {"x": 1}, SCHEMA_SIMPLE, ejecutar=ejecutar_falso)
+
+        assert len(llamadas) == 2
+        assert not ruta.exists()
+
+    def test_un_error_nunca_entra_al_cache(self, monkeypatch, tmp_path):
+        """Si se cacheara un fallo, la causa quedaría envenenada por
+        DIAS_VIGENCIA y dejaría de evaluarse en cada corrida."""
+        monkeypatch.setattr(cache_razonamiento, "RUTA_CACHE", tmp_path / "cache.json")
+        llamadas = []
+
+        def ejecutar_falso(prompt):
+            llamadas.append(prompt)
+            return "esto no es JSON"
+
+        primera = preguntar("tarea", {"x": 1}, SCHEMA_SIMPLE, ejecutar=ejecutar_falso, cachear=True)
+        assert "error" in primera
+
+        llamadas.clear()
+
+        def ejecutar_bueno(prompt):
+            llamadas.append(prompt)
+            return json.dumps({"ok": True})
+
+        segunda = preguntar("tarea", {"x": 1}, SCHEMA_SIMPLE, ejecutar=ejecutar_bueno, cachear=True)
+        assert segunda == {"ok": True}
+        assert len(llamadas) == 1
 
 
 class TestEjecutarClaudeResuelveRutaCompleta:

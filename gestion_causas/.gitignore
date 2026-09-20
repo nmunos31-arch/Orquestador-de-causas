@@ -18,6 +18,7 @@ _audiencias_corrida_test.json
 _panel_resumen_temp.json
 _panel_temp.html
 uso_tokens.jsonl
+cache_razonamiento.json
 *.lock
 *.tmp
 

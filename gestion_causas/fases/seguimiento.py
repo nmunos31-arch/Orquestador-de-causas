@@ -93,7 +93,8 @@ def _clasificar_pedido(pedido: dict, mensajes_posteriores_reales: list[dict]) ->
             "lo pedido). 'items_recibidos' siempre vacío para este tipo."
         )
     return reasoning.preguntar(
-        tarea, contexto, SCHEMA_CLASIFICAR_PEDIDO, etiqueta="seguimiento.clasificar_pedido"
+        tarea, contexto, SCHEMA_CLASIFICAR_PEDIDO,
+        etiqueta="seguimiento.clasificar_pedido", cachear=True,
     )
 
 
