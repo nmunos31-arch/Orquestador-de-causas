@@ -243,6 +243,43 @@ class TestCorrerYEnviarPanel:
         assert not ruta_contexto.exists()
 
 
+class TestAsegurarContexto:
+    def test_no_hace_nada_si_el_contexto_ya_existe(self, tmp_path, monkeypatch):
+        ruta = tmp_path / "_contexto_corrida.json"
+        ruta.write_text(json.dumps({"listo": True, "fecha_hoy": "2026-09-20"}), encoding="utf-8")
+
+        llamadas = []
+        monkeypatch.setattr(orquestador.cli_mod, "main", lambda argv: llamadas.append(argv) or 0)
+
+        assert orquestador._asegurar_contexto(ruta) is True
+        assert llamadas == []
+
+    def test_arma_el_contexto_si_falta(self, tmp_path, monkeypatch):
+        ruta = tmp_path / "_contexto_corrida.json"
+        llamadas = []
+
+        def main_falso(argv):
+            llamadas.append(argv)
+            ruta.write_text(json.dumps({"listo": True}), encoding="utf-8")
+            return 0
+
+        monkeypatch.setattr(orquestador.cli_mod, "main", main_falso)
+
+        assert orquestador._asegurar_contexto(ruta) is True
+        assert llamadas == [["contexto-corrida", "--salida", str(ruta)]]
+
+    def test_devuelve_false_si_contexto_corrida_sale_con_codigo_1(self, tmp_path, monkeypatch):
+        ruta = tmp_path / "_contexto_corrida.json"
+
+        def main_falso(argv):
+            ruta.write_text(json.dumps({"listo": False}), encoding="utf-8")
+            return 1
+
+        monkeypatch.setattr(orquestador.cli_mod, "main", main_falso)
+
+        assert orquestador._asegurar_contexto(ruta) is False
+
+
 class TestOrquestadorDespachaSeguimientoYCalendarioSoloEnLaManana:
     def test_no_despacha_seguimiento_ni_calendario_fuera_de_la_manana(self, tmp_path, monkeypatch):
         ruta_contexto = tmp_path / "_contexto_corrida.json"

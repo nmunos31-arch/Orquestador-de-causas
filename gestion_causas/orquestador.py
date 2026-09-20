@@ -36,6 +36,7 @@ from gestion_causas import cli as cli_mod
 from gestion_causas import gmail_personal_client
 from gestion_causas import panel as panel_mod
 from gestion_causas import registro as registro_mod
+from gestion_causas import uso_tokens
 from gestion_causas.fases import agenda as fases_agenda
 from gestion_causas.fases import calendario as fases_calendario
 from gestion_causas.fases import goteo as fases_goteo
@@ -201,8 +202,65 @@ def correr_y_enviar_panel(
     return resultado
 
 
+def _asegurar_contexto(ruta_contexto: Path = RUTA_CONTEXTO_DEFAULT) -> bool:
+    """Arma `_contexto_corrida.json` si no existe (paso 1 del SKILL.md
+    viejo), reusando `cli.main` en vez de duplicar `cmd_contexto_corrida`.
+    Devuelve si el contexto quedó utilizable (`listo`).
+
+    Con esto la tarea programada es un único comando
+    (`python -m gestion_causas.orquestador`) en vez de dos pasos
+    encadenados a mano por un agente — que era la última razón por la que
+    el SKILL.md seguía necesitando un modelo para orquestar."""
+    ruta = Path(ruta_contexto)
+    if not ruta.exists():
+        cli_mod.main(["contexto-corrida", "--salida", str(ruta)])
+    if not ruta.exists():
+        return False
+    try:
+        return bool(json.loads(ruta.read_text(encoding="utf-8")).get("listo"))
+    except ValueError:
+        return False
+
+
 def main(argv=None) -> int:
+    """Punto de entrada de la tarea programada. Arma el contexto si falta,
+    corre las 5 fases, arma y envía el panel, y anota en la bitácora cuántos
+    tokens costó la corrida (ver uso_tokens.py).
+
+    Un contexto no listo (Gmail de trabajo o Calendar caídos) NO aborta: es
+    exactamente el caso que el paso 1 del SKILL.md viejo mandaba igual, para
+    que Nico se entere por el panel de que hay un token que reautorizar.
+    `correr()` va a fallar cada fase por su cuenta y el panel las va a
+    mostrar en error."""
+    if not _asegurar_contexto():
+        bitacora_mod.registrar(
+            "Orquestador: contexto de corrida no listo (token caído) — se corre igual "
+            "para que el panel avise"
+        )
+
+    antes = uso_tokens.resumen()
     resultado = correr_y_enviar_panel()
+    despues = uso_tokens.resumen()
+
+    resultado["uso_tokens"] = {
+        "llamadas": despues["llamadas"] - antes["llamadas"],
+        "input_tokens": despues["input_tokens"] - antes["input_tokens"],
+        "output_tokens": despues["output_tokens"] - antes["output_tokens"],
+        "cache_creation_input_tokens": (
+            despues["cache_creation_input_tokens"] - antes["cache_creation_input_tokens"]
+        ),
+        "cache_read_input_tokens": (
+            despues["cache_read_input_tokens"] - antes["cache_read_input_tokens"]
+        ),
+        "costo_usd": round(despues["costo_usd"] - antes["costo_usd"], 4),
+    }
+    uso = resultado["uso_tokens"]
+    bitacora_mod.registrar(
+        f"Orquestador: corrida terminada — {uso['llamadas']} llamadas a Claude, "
+        f"{uso['input_tokens']} tokens de entrada, {uso['output_tokens']} de salida, "
+        f"USD {uso['costo_usd']}"
+    )
+
     print(json.dumps(resultado, ensure_ascii=False, indent=2))
     return 0
 
