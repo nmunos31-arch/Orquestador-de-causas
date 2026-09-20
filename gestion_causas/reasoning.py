@@ -9,10 +9,13 @@ filtrar) y un schema de salida JSON fijo.
 
 from __future__ import annotations
 
+import functools
 import json
 import shutil
 import subprocess
 from pathlib import Path
+
+from gestion_causas import uso_tokens
 
 TIMEOUT_SEGUNDOS = 180
 TIMEOUT_SKILL_SEGUNDOS = 1800
@@ -22,11 +25,17 @@ TIMEOUT_SKILL_SEGUNDOS = 1800
 # permisos ya se fijan explícitamente por llamada). Sin apagarlo, cada
 # proceso `claude -p` nuevo vuelve a cargar y cachear ese contexto fijo
 # desde cero (ver docstring de `_ejecutar_claude`).
-_FLAGS_MINIMOS = ["--disable-slash-commands", "--setting-sources", ""]
+#
+# `--output-format json` devuelve un envoltorio con el `usage` real de la
+# llamada (ver uso_tokens.py). Sin esto no hay forma de saber qué cuesta
+# cada punto de razonamiento — y todo lo que se optimice encima es una
+# estimación a ciegas.
+_FLAGS_MINIMOS = ["--disable-slash-commands", "--setting-sources", "", "--output-format", "json"]
 
 
 def preguntar(
-    tarea: str, contexto: dict, schema: dict, *, ejecutar=None, ruta_archivo=None
+    tarea: str, contexto: dict, schema: dict, *, ejecutar=None, ruta_archivo=None,
+    etiqueta: str | None = None,
 ) -> dict:
     """Le pide a Claude que resuelva `tarea` sobre `contexto`, devolviendo un
     dict que cumple `schema`. Reintenta una vez si la respuesta no es JSON
@@ -50,7 +59,7 @@ def preguntar(
     entrega, `ejecutar` se llama igual que siempre (`ejecutar(prompt)`), así
     que ningún llamador existente que no use `ruta_archivo` se ve afectado.
     """
-    ejecutar = ejecutar or _ejecutar_claude
+    ejecutar = ejecutar or functools.partial(_ejecutar_claude, etiqueta=etiqueta)
 
     error_previo: str | None = None
     salida = ""
@@ -118,6 +127,7 @@ def _ejecutar_claude_skill(prompt: str, carpeta: Path, *, timeout: int) -> str:
 
     argv = [
         ejecutable, "-p",
+        "--output-format", "json",
         "--allowedTools", "Read,Write,Bash",
         "--add-dir", str(carpeta),
         "--strict-mcp-config",
@@ -131,7 +141,7 @@ def _ejecutar_claude_skill(prompt: str, carpeta: Path, *, timeout: int) -> str:
     if resultado.returncode != 0:
         detalle = resultado.stderr[:500] or resultado.stdout[:500]
         raise RuntimeError(f"claude -p (skill) terminó con código {resultado.returncode}: {detalle}")
-    return resultado.stdout
+    return _desenvolver_salida(resultado.stdout, etiqueta="minuta-laboral")
 
 
 def _armar_prompt(
@@ -173,7 +183,7 @@ def _parsear_json(texto: str) -> dict | None:
         return None
 
 
-def _ejecutar_claude(prompt: str, ruta_archivo=None) -> str:
+def _ejecutar_claude(prompt: str, ruta_archivo=None, etiqueta: str | None = None) -> str:
     """Corre `claude -p`, pasando el prompt por stdin (no como argumento de
     línea de comandos) — en Windows, un prompt largo (el contexto de una
     causa con muchos correos puede ser de decenas de miles de caracteres)
@@ -246,4 +256,42 @@ def _ejecutar_claude(prompt: str, ruta_archivo=None) -> str:
         # contenido (suele ser más específico), y caemos a stdout si no.
         detalle = resultado.stderr[:500] or resultado.stdout[:500]
         raise RuntimeError(f"claude -p terminó con código {resultado.returncode}: {detalle}")
-    return resultado.stdout
+    return _desenvolver_salida(resultado.stdout, etiqueta=etiqueta)
+
+
+def _desenvolver_salida(stdout: str, *, etiqueta: str | None = None) -> str:
+    """Parsea el envoltorio de `--output-format json`: registra el `usage` y
+    devuelve el texto de `result`.
+
+    Dos casos que NO son "la respuesta del modelo":
+    - `is_error: true` con exit code 0 — un rechazo o un prompt demasiado
+      largo no siempre sale con código distinto de cero, y sin esto el texto
+      del error se devolvería como si fuera la respuesta (y después fallaría
+      como "JSON inválido", gatillando el reintento, que lo paga de nuevo).
+    - stdout que no es JSON — si una versión del CLI deja de envolver la
+      salida, se devuelve el stdout crudo en vez de perder la respuesta.
+    """
+    try:
+        envoltorio = json.loads(stdout)
+    except ValueError:
+        return stdout
+    if not isinstance(envoltorio, dict) or "result" not in envoltorio:
+        return stdout
+
+    uso = envoltorio.get("usage") or {}
+    uso_tokens.registrar(
+        {
+            "llamada": etiqueta or "desconocida",
+            "input_tokens": uso.get("input_tokens"),
+            "output_tokens": uso.get("output_tokens"),
+            "cache_creation_input_tokens": uso.get("cache_creation_input_tokens"),
+            "cache_read_input_tokens": uso.get("cache_read_input_tokens"),
+            "costo_usd": envoltorio.get("total_cost_usd"),
+            "modelo": envoltorio.get("model"),
+        },
+        ruta=uso_tokens.RUTA_USO_TOKENS,
+    )
+
+    if envoltorio.get("is_error"):
+        raise RuntimeError(f"claude -p devolvió is_error: {str(envoltorio.get('result'))[:500]}")
+    return envoltorio["result"]

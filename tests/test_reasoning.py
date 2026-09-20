@@ -1,8 +1,10 @@
 import json
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
+from gestion_causas import reasoning
 from gestion_causas.reasoning import invocar_skill, preguntar
 
 
@@ -100,6 +102,7 @@ class TestEjecutarClaudeResuelveRutaCompleta:
         assert args == [
             "C:\\ruta\\falsa\\claude.CMD", "-p",
             "--disable-slash-commands", "--setting-sources", "",
+            "--output-format", "json",
             "--tools", "", "--strict-mcp-config",
         ]
         assert kwargs.get("input") == "un prompt cualquiera"
@@ -227,6 +230,7 @@ class TestEjecutarClaudeConRutaArchivo:
         assert args == [
             "C:\\ruta\\falsa\\claude.CMD", "-p",
             "--disable-slash-commands", "--setting-sources", "",
+            "--output-format", "json",
             "--allowedTools", "Read",
             "--add-dir", str(carpeta),
             "--settings", settings_esperados,
@@ -342,6 +346,72 @@ class TestInvocarSkill:
         invocar_skill("/minuta-laboral X", tmp_path, ejecutar=ejecutar_falso, timeout=42)
 
         assert llamadas == [42]
+
+
+class TestEjecutarClaude:
+    def _correr_falso(self, salida_stdout, returncode=0):
+        def correr(argv, **kwargs):
+            self.argv = argv
+            return SimpleNamespace(returncode=returncode, stdout=salida_stdout, stderr="")
+        return correr
+
+    def test_devuelve_solo_el_texto_de_result(self, monkeypatch, tmp_path):
+        envoltorio = json.dumps({
+            "type": "result", "is_error": False, "result": '{"ok": true}',
+            "total_cost_usd": 0.01,
+            "usage": {"input_tokens": 100, "output_tokens": 5,
+                      "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0},
+        })
+        monkeypatch.setattr(reasoning.shutil, "which", lambda _: "/usr/bin/claude")
+        monkeypatch.setattr(reasoning.subprocess, "run", self._correr_falso(envoltorio))
+        monkeypatch.setattr(reasoning.uso_tokens, "RUTA_USO_TOKENS", tmp_path / "uso.jsonl")
+
+        assert reasoning._ejecutar_claude("prompt") == '{"ok": true}'
+        assert "--output-format" in self.argv
+        assert "json" in self.argv
+
+    def test_registra_el_usage_de_la_llamada(self, monkeypatch, tmp_path):
+        ruta_uso = tmp_path / "uso.jsonl"
+        envoltorio = json.dumps({
+            "type": "result", "is_error": False, "result": "{}",
+            "total_cost_usd": 0.02,
+            "usage": {"input_tokens": 1234, "output_tokens": 7,
+                      "cache_creation_input_tokens": 88, "cache_read_input_tokens": 99},
+        })
+        monkeypatch.setattr(reasoning.shutil, "which", lambda _: "/usr/bin/claude")
+        monkeypatch.setattr(reasoning.subprocess, "run", self._correr_falso(envoltorio))
+        monkeypatch.setattr(reasoning.uso_tokens, "RUTA_USO_TOKENS", ruta_uso)
+
+        reasoning._ejecutar_claude("prompt")
+
+        evento = json.loads(ruta_uso.read_text(encoding="utf-8").strip())
+        assert evento["input_tokens"] == 1234
+        assert evento["cache_creation_input_tokens"] == 88
+        assert evento["cache_read_input_tokens"] == 99
+        assert evento["costo_usd"] == 0.02
+
+    def test_stdout_que_no_es_json_se_devuelve_tal_cual(self, monkeypatch, tmp_path):
+        """Red de seguridad: si una versión del CLI deja de envolver la
+        salida, no se pierde la respuesta — se devuelve el stdout crudo y
+        `preguntar` la parsea como siempre."""
+        monkeypatch.setattr(reasoning.shutil, "which", lambda _: "/usr/bin/claude")
+        monkeypatch.setattr(reasoning.subprocess, "run", self._correr_falso('{"ok": true}'))
+        monkeypatch.setattr(reasoning.uso_tokens, "RUTA_USO_TOKENS", tmp_path / "uso.jsonl")
+
+        assert reasoning._ejecutar_claude("prompt") == '{"ok": true}'
+
+    def test_is_error_true_con_exit_code_cero_es_un_fallo(self, monkeypatch, tmp_path):
+        envoltorio = json.dumps({
+            "type": "result", "subtype": "error_max_turns", "is_error": True,
+            "result": "Prompt is too long",
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        })
+        monkeypatch.setattr(reasoning.shutil, "which", lambda _: "/usr/bin/claude")
+        monkeypatch.setattr(reasoning.subprocess, "run", self._correr_falso(envoltorio))
+        monkeypatch.setattr(reasoning.uso_tokens, "RUTA_USO_TOKENS", tmp_path / "uso.jsonl")
+
+        with pytest.raises(RuntimeError, match="Prompt is too long"):
+            reasoning._ejecutar_claude("prompt")
 
 
 class TestEjecutarClaudeSkillResuelveRutaYPermisosAmplios:

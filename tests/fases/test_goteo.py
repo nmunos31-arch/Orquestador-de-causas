@@ -173,7 +173,7 @@ class TestDeteccionDeAcuerdoYPago:
 
         llamadas = []
 
-        def preguntar_falso(tarea, contexto, schema):
+        def preguntar_falso(tarea, contexto, schema, **_kwargs):
             llamadas.append(contexto)
             return {"acuerdo_cerrado": True, "pago_confirmado": False, "justificacion": "Acta de conciliación aprobada"}
 
@@ -257,7 +257,7 @@ class TestDeteccionDeAcuerdoYPago:
 
         llamadas = []
 
-        def preguntar_falso(tarea, contexto, schema):
+        def preguntar_falso(tarea, contexto, schema, **_kwargs):
             llamadas.append(contexto)
             return {"acuerdo_cerrado": False, "pago_confirmado": False, "justificacion": ""}
 
@@ -290,7 +290,7 @@ class TestDeteccionDeAcuerdoYPago:
         monkeypatch.setattr(goteo, "LIMITE_CONTEXTO_CHARS", 50)
         monkeypatch.setattr(
             goteo.reasoning, "preguntar",
-            lambda tarea, contexto, schema: {"acuerdo_cerrado": False, "pago_confirmado": False, "justificacion": ""},
+            lambda tarea, contexto, schema, **_kwargs: {"acuerdo_cerrado": False, "pago_confirmado": False, "justificacion": ""},
         )
 
         contexto = {

@@ -116,7 +116,7 @@ def _detectar_acuerdo_y_pago(mensajes_hilos: list[dict]) -> dict:
         "alguno de los mensajes trae un comprobante de pago o transferencia "
         "asociado a ese acuerdo."
     )
-    resultado = reasoning.preguntar(tarea, contexto, SCHEMA_ACUERDO)
+    resultado = reasoning.preguntar(tarea, contexto, SCHEMA_ACUERDO, etiqueta="goteo.acuerdo_y_pago")
     if hubo_truncado:
         resultado = {**resultado, "_contexto_truncado": True}
     return resultado

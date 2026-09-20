@@ -92,7 +92,9 @@ def _clasificar_pedido(pedido: dict, mensajes_posteriores_reales: list[dict]) ->
             "solo informativos (un aviso, un 'para su conocimiento', algo que no responde "
             "lo pedido). 'items_recibidos' siempre vacío para este tipo."
         )
-    return reasoning.preguntar(tarea, contexto, SCHEMA_CLASIFICAR_PEDIDO)
+    return reasoning.preguntar(
+        tarea, contexto, SCHEMA_CLASIFICAR_PEDIDO, etiqueta="seguimiento.clasificar_pedido"
+    )
 
 
 def _mensajes_posteriores(

@@ -178,7 +178,7 @@ class TestCrearCarpetaYGuardarDemanda:
         monkeypatch.setattr(smu.gmail_client, "aplicar_etiqueta_a_hilo", lambda thread_id, label_id: None)
         monkeypatch.setattr(smu.gmail_client, "listar_borradores_de_hilo", lambda thread_id: [])
         monkeypatch.setattr(smu.gmail_client, "crear_borrador", lambda *a, **k: {"id": "draft-1"})
-        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None: (
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None, **_kwargs: (
             {"fecha_despido": "2026-01-08", "ajuste_base_calculo": False, "otros_ajustes": []}
             if schema is smu.SCHEMA_AJUSTES_DEMANDA else {"resumen": "Texto de prueba."}
         ))
@@ -227,7 +227,7 @@ class TestDemandaYaEnCarpeta:
 
         llamadas_ajustes = []
 
-        def preguntar_falso(tarea, contexto, schema, ruta_archivo=None):
+        def preguntar_falso(tarea, contexto, schema, ruta_archivo=None, **_kwargs):
             if schema is smu.SCHEMA_AJUSTES_DEMANDA:
                 llamadas_ajustes.append(1)
                 return {"fecha_despido": "2026-01-08", "ajuste_base_calculo": False, "otros_ajustes": []}
@@ -264,7 +264,7 @@ class TestResumenYExcel:
         monkeypatch.setattr(smu.gmail_client, "aplicar_etiqueta_a_hilo", lambda thread_id, label_id: None)
         monkeypatch.setattr(smu.gmail_client, "listar_borradores_de_hilo", lambda thread_id: [])
         monkeypatch.setattr(smu.gmail_client, "crear_borrador", lambda *a, **k: {"id": "draft-1"})
-        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None: (
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None, **_kwargs: (
             {"fecha_despido": "2026-01-08", "ajuste_base_calculo": False, "otros_ajustes": []}
             if schema is smu.SCHEMA_AJUSTES_DEMANDA else {"resumen": "Texto de prueba."}
         ))
@@ -288,7 +288,7 @@ class TestResumenYExcel:
             return {"agregada": True, "fila": 10}
 
         monkeypatch.setattr(smu, "agregar_causa", agregar_causa_falso)
-        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None: {"resumen": "Texto de prueba del resumen."})
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None, **_kwargs: {"resumen": "Texto de prueba del resumen."})
 
         smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=tmp_path / "registro_causas.json")
 
@@ -303,7 +303,7 @@ class TestResumenYExcel:
 
         llamadas_agregar_causa = []
         monkeypatch.setattr(smu, "agregar_causa", lambda ruta_excel, datos: llamadas_agregar_causa.append(datos))
-        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None: {"resumen": "Texto de prueba."})
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None, **_kwargs: {"resumen": "Texto de prueba."})
 
         smu.correr({"fecha_hoy": "2026-09-16"}, ruta_registro_causas=tmp_path / "registro_causas.json")
 
@@ -317,7 +317,7 @@ class TestRegistrarEtiquetarYMarcarProcesado:
         monkeypatch.setattr(smu.carpetas_mod, "crear_carpeta_causa", lambda apellido, empresa, rit: carpeta_causa)
         monkeypatch.setattr(smu.gmail_client, "descargar_adjunto", lambda message_id, attachment_id: b"contenido pdf falso")
         monkeypatch.setattr(smu, "agregar_causa", lambda ruta_excel, datos: {"agregada": True, "fila": 10})
-        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None: {"resumen": "Texto de prueba."})
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None, **_kwargs: {"resumen": "Texto de prueba."})
 
         etiquetas_aplicadas = []
         monkeypatch.setattr(smu.gmail_client, "obtener_o_crear_etiqueta", lambda nombre, color=None: f"label-{nombre}")
@@ -390,7 +390,7 @@ class TestAjustesDeLaDemanda:
         carpeta_causa = self._monkeypatch_comunes(monkeypatch, tmp_path)
         llamadas = []
 
-        def preguntar_falso(tarea, contexto, schema, ruta_archivo=None):
+        def preguntar_falso(tarea, contexto, schema, ruta_archivo=None, **_kwargs):
             if schema is smu.SCHEMA_AJUSTES_DEMANDA:
                 llamadas.append(ruta_archivo)
                 return {"fecha_despido": "2026-01-08", "ajuste_base_calculo": False, "otros_ajustes": []}
@@ -413,7 +413,7 @@ class TestAjustesDeLaDemanda:
                 {"filename": "demanda.pdf", "attachment_id": "att-1", "mime_type": "application/pdf", "size": 50000},
             ],
         }])
-        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None: (
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None, **_kwargs: (
             {"fecha_despido": "2026-01-08", "ajuste_base_calculo": False, "otros_ajustes": []}
             if schema is smu.SCHEMA_AJUSTES_DEMANDA else {"resumen": "Texto de prueba."}
         ))
@@ -439,7 +439,7 @@ class TestAjustesDeLaDemanda:
 
         llamadas_ajustes = []
 
-        def preguntar_falso(tarea, contexto, schema, ruta_archivo=None):
+        def preguntar_falso(tarea, contexto, schema, ruta_archivo=None, **_kwargs):
             if schema is smu.SCHEMA_AJUSTES_DEMANDA:
                 llamadas_ajustes.append(1)
                 return {"fecha_despido": None, "ajuste_base_calculo": False, "otros_ajustes": []}
@@ -457,7 +457,7 @@ class TestAjustesDeLaDemanda:
     def test_error_al_evaluar_ajustes_sube_la_urgencia_a_alta_y_advierte_en_bitacora(self, tmp_path, monkeypatch):
         self._monkeypatch_comunes(monkeypatch, tmp_path)
 
-        def preguntar_falso(tarea, contexto, schema, ruta_archivo=None):
+        def preguntar_falso(tarea, contexto, schema, ruta_archivo=None, **_kwargs):
             if schema is smu.SCHEMA_AJUSTES_DEMANDA:
                 return {"error": "Claude no devolvió JSON válido tras 2 intentos."}
             return {"resumen": "Texto de prueba."}
@@ -499,7 +499,7 @@ class TestReusoDeEerr:
                 {"filename": "demanda.pdf", "attachment_id": "att-1", "mime_type": "application/pdf", "size": 50000},
             ],
         }])
-        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None: (
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None, **_kwargs: (
             {"fecha_despido": "2026-01-08", "ajuste_base_calculo": False, "otros_ajustes": []}
             if schema is smu.SCHEMA_AJUSTES_DEMANDA else {"resumen": "Texto de prueba."}
         ))
@@ -626,7 +626,7 @@ class TestCrearBorradorDeDocumentos:
                 {"filename": "demanda.pdf", "attachment_id": "att-1", "mime_type": "application/pdf", "size": 50000},
             ],
         }])
-        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None: (
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None, **_kwargs: (
             {"fecha_despido": "2026-01-08", "ajuste_base_calculo": False, "otros_ajustes": []}
             if schema is smu.SCHEMA_AJUSTES_DEMANDA else {"resumen": "Texto de prueba."}
         ))

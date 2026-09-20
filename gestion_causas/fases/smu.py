@@ -358,7 +358,7 @@ def _generar_resumen_narrativo(campos: dict, cuerpo_texto_completo: str) -> dict
         "de enero de 2026'). Conceptos demandados: solo las etiquetas de los conceptos, "
         "sin repetir montos parciales."
     )
-    return reasoning.preguntar(tarea, contexto, SCHEMA_RESUMEN)
+    return reasoning.preguntar(tarea, contexto, SCHEMA_RESUMEN, etiqueta="smu.resumen_narrativo")
 
 
 SCHEMA_AJUSTES_DEMANDA = {
@@ -399,7 +399,10 @@ def _evaluar_ajustes_demanda(campos: dict, ruta_demanda: Path) -> dict:
         "desvirtuarlo o estudiar su procedencia (ej. 'Antecedentes de la procedencia del "
         "préstamo'), sin explicar por qué. Si no hay ninguno, devolvé una lista vacía."
     )
-    return reasoning.preguntar(tarea, contexto, SCHEMA_AJUSTES_DEMANDA, ruta_archivo=ruta_demanda)
+    return reasoning.preguntar(
+        tarea, contexto, SCHEMA_AJUSTES_DEMANDA, ruta_archivo=ruta_demanda,
+        etiqueta="smu.ajustes_demanda",
+    )
 
 
 DOMINIOS_SMU = ("smu.cl", "sb.cl")

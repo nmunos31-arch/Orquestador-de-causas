@@ -85,7 +85,10 @@ def _evaluar_montos_ofrecimiento(texto_cuadro_original: str, ruta_demanda: Path)
         "diferencia — o el cuadro no menciona montos —, hay_discrepancia=false y "
         "detalle_discrepancia vacío)."
     )
-    return reasoning.preguntar(tarea, contexto, SCHEMA_OFRECIMIENTO, ruta_archivo=ruta_demanda)
+    return reasoning.preguntar(
+        tarea, contexto, SCHEMA_OFRECIMIENTO, ruta_archivo=ruta_demanda,
+        etiqueta="agenda.montos_ofrecimiento",
+    )
 
 
 def _demandantes_validos(evaluacion: dict) -> list | None:

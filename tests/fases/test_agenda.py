@@ -344,7 +344,7 @@ class TestEvaluarMontosOfrecimiento:
         ruta_demanda = tmp_path / "demanda.pdf"
         llamadas = []
 
-        def preguntar_falso(tarea, contexto, schema, ruta_archivo=None):
+        def preguntar_falso(tarea, contexto, schema, ruta_archivo=None, **_kwargs):
             llamadas.append((tarea, contexto, schema, ruta_archivo))
             return {
                 "demandantes": [{"apellido": "Pérez", "monto_recargo_30": 500000, "monto_afc": 200000}],
@@ -363,7 +363,7 @@ class TestEvaluarMontosOfrecimiento:
         assert ruta_archivo == ruta_demanda
 
     def test_propaga_el_error_de_reasoning_sin_modificarlo(self, tmp_path, monkeypatch):
-        def preguntar_falso(tarea, contexto, schema, ruta_archivo=None):
+        def preguntar_falso(tarea, contexto, schema, ruta_archivo=None, **_kwargs):
             return {"error": "Claude no devolvió JSON válido"}
 
         monkeypatch.setattr(agenda.reasoning, "preguntar", preguntar_falso)
