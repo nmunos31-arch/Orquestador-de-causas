@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -32,12 +33,19 @@ RUTA_CACHE = Path(__file__).parent / "cache_razonamiento.json"
 DIAS_VIGENCIA = 30
 
 
-def clave(tarea: str, contexto: dict) -> str:
-    """sha256 del par (tarea, contexto). `sort_keys=True` para que el orden
-    en que un llamador arme el dict no produzca claves distintas para el
-    mismo contenido."""
+def clave(tarea: str, contexto: dict, *, modelo: str | None = None) -> str:
+    """sha256 de (tarea, contexto, modelo). `sort_keys=True` para que el
+    orden en que un llamador arme el dict no produzca claves distintas para
+    el mismo contenido.
+
+    `modelo` entra en la clave: sin esto, cambiar
+    `GESTION_CAUSAS_MODELO_CLASIFICACION` para comparar calidad/costo entre
+    modelos (el caso de uso que documenta esa variable en reasoning.py)
+    serviría igual la respuesta cacheada del modelo viejo hasta por
+    DIAS_VIGENCIA, en vez de volver a preguntarle al modelo nuevo. `None` y
+    `""` (default del CLI, sin `--model`) se tratan igual."""
     material = json.dumps(
-        {"tarea": tarea, "contexto": contexto},
+        {"tarea": tarea, "contexto": contexto, "modelo": modelo or ""},
         ensure_ascii=False, sort_keys=True, default=str,
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
@@ -75,7 +83,13 @@ def obtener(clave_buscada: str, ruta: Path = RUTA_CACHE) -> dict | None:
 def guardar(clave_nueva: str, resultado: dict, ruta: Path = RUTA_CACHE) -> None:
     """Guarda `resultado` y poda de paso las entradas vencidas. Nunca lanza:
     no poder cachear es perder el ahorro de la próxima corrida, no un motivo
-    para tumbar esta."""
+    para tumbar esta.
+
+    Escritura atómica (mismo patrón que `registro._guardar`): se escribe a
+    un `.tmp` al lado y se reemplaza de una sola vez, para que un corte a
+    mitad de la escritura (kill, OOM, timeout) no deje el archivo truncado
+    — `_cargar` trataría un archivo así como caché vacío, perdiendo TODAS
+    las entradas previas, no solo la que se estaba escribiendo."""
     try:
         with _lock(Path(ruta)):
             contenido = {
@@ -86,8 +100,11 @@ def guardar(clave_nueva: str, resultado: dict, ruta: Path = RUTA_CACHE) -> None:
                 "guardado_en": datetime.now().isoformat(),
                 "resultado": resultado,
             }
-            Path(ruta).write_text(
+            ruta = Path(ruta)
+            temporal = Path(str(ruta) + ".tmp")
+            temporal.write_text(
                 json.dumps(contenido, ensure_ascii=False, indent=2), encoding="utf-8"
             )
+            os.replace(temporal, ruta)
     except Exception:  # noqa: BLE001 - el caché nunca tumba una corrida
         pass

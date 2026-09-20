@@ -138,6 +138,19 @@ class TestPreguntarConCache:
         assert segunda == {"ok": True}
         assert len(llamadas) == 1
 
+    def test_un_modelo_distinto_no_sirve_la_respuesta_cacheada_del_otro(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(cache_razonamiento, "RUTA_CACHE", tmp_path / "cache.json")
+        llamadas = []
+
+        def ejecutar_falso(prompt):
+            llamadas.append(prompt)
+            return json.dumps({"ok": True})
+
+        preguntar("tarea", {"x": 1}, SCHEMA_SIMPLE, ejecutar=ejecutar_falso, cachear=True, modelo="haiku")
+        preguntar("tarea", {"x": 1}, SCHEMA_SIMPLE, ejecutar=ejecutar_falso, cachear=True, modelo="sonnet")
+
+        assert len(llamadas) == 2
+
 
 class TestEjecutarClaudeResuelveRutaCompleta:
     def test_usa_shutil_which_para_resolver_el_ejecutable(self, monkeypatch):

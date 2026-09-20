@@ -23,6 +23,18 @@ class TestClave:
     def test_una_tarea_distinta_cambia_la_clave(self):
         assert cache.clave("tarea A", {"x": 1}) != cache.clave("tarea B", {"x": 1})
 
+    def test_un_modelo_distinto_cambia_la_clave(self):
+        """Sin esto, cambiar GESTION_CAUSAS_MODELO_CLASIFICACION para comparar
+        calidad/costo entre modelos serviría igual la respuesta cacheada del
+        modelo viejo hasta por DIAS_VIGENCIA — exactamente el caso de uso
+        documentado en reasoning.py para esa variable."""
+        a = cache.clave("tarea", {"x": 1}, modelo="claude-haiku-4-5-20251001")
+        b = cache.clave("tarea", {"x": 1}, modelo="claude-sonnet-5")
+        assert a != b
+
+    def test_modelo_none_y_modelo_vacio_dan_la_misma_clave(self):
+        assert cache.clave("tarea", {"x": 1}, modelo=None) == cache.clave("tarea", {"x": 1}, modelo="")
+
 
 class TestObtenerYGuardar:
     def test_devuelve_lo_guardado(self, tmp_path):
@@ -70,3 +82,17 @@ class TestArchivoCorrupto:
         cache.guardar("nueva", {"y": 2}, ruta=ruta)
 
         assert json.loads(ruta.read_text(encoding="utf-8"))["nueva"]["resultado"] == {"y": 2}
+
+
+class TestEscrituraAtomica:
+    def test_guardar_no_deja_un_temporal_atras(self, tmp_path):
+        """Mismo patrón que registro._guardar: escribe a un .tmp al lado y
+        reemplaza de una sola vez, para que un corte a mitad de la escritura
+        no deje el archivo de caché truncado (que _cargar trataría como
+        caché vacío, perdiendo TODAS las entradas previas, no solo la que se
+        estaba escribiendo)."""
+        ruta = tmp_path / "cache.json"
+        cache.guardar("abc", {"x": 1}, ruta=ruta)
+
+        assert ruta.exists()
+        assert not (tmp_path / "cache.json.tmp").exists()

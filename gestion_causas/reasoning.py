@@ -81,7 +81,7 @@ def preguntar(
     # (tarea, contexto), no del prompt final, para que agregar un campo al
     # formato del prompt (ej. la línea de `ruta_archivo`) no invalide todo
     # el caché de golpe.
-    clave_cache = cache_razonamiento.clave(tarea, contexto) if cachear else None
+    clave_cache = cache_razonamiento.clave(tarea, contexto, modelo=modelo) if cachear else None
     if clave_cache is not None:
         cacheado = cache_razonamiento.obtener(clave_cache, ruta=cache_razonamiento.RUTA_CACHE)
         if cacheado is not None:
