@@ -24,14 +24,16 @@ from gestion_causas.seguimiento import es_remitente_confiable
 
 NOMBRES_ADJUNTO_EXCLUIDOS = {"invite.ics"}
 
-# Cota de seguridad para el tamaño total del contexto que le mandamos a
-# claude -p: un hilo de correo real de 29 mensajes (~800KB) hizo que
-# claude -p rechazara el prompt con "Prompt is too long" (confirmado en una
-# corrida real). El recorte de texto citado (_quitar_texto_citado) resuelve
-# la causa de fondo (el historial repetido en cada respuesta), pero esta
-# cota es la última red de seguridad para que un hilo igual de largo nunca
-# vuelva a tumbar la evaluación por completo.
-LIMITE_CONTEXTO_CHARS = 400_000
+# Cota del contexto que le mandamos a claude -p por causa. Era 400_000
+# (~100k tokens en UNA llamada, por causa, por corrida) cuando su único
+# propósito era que un hilo de 29 mensajes (~800KB) no hiciera fallar la
+# llamada con "Prompt is too long". Pero la pregunta que hacemos acá
+# ("¿se cerró un acuerdo? ¿hay comprobante de pago?") se responde con los
+# mensajes recientes: el historial viejo solo agrega costo. Con
+# `_quitar_texto_citado` ya sacando el historial repetido de cada
+# respuesta, 40k caracteres (~10k tokens) cubren de sobra los últimos
+# mensajes reales de un hilo.
+LIMITE_CONTEXTO_CHARS = 40_000
 
 # Patrones de inicio de texto citado en clientes de correo en español
 # (Gmail y Outlook en modo texto plano) — cada correo de un hilo suele
@@ -63,18 +65,27 @@ def _quitar_texto_citado(cuerpo_texto: str) -> str:
 
 def _acotar_mensajes_por_tamano(mensajes: list[dict], limite: int) -> bool:
     """Si la suma de las longitudes de `cuerpo` en `mensajes` supera
-    `limite`, trunca por el principio (se asume orden cronológico
-    ascendente, mensajes más antiguos primero) hasta bajar del límite. Muta
-    `mensajes` in place. Devuelve si hubo truncado."""
-    exceso = sum(len(m["cuerpo"]) for m in mensajes) - limite
-    if exceso <= 0:
+    `limite`, descarta mensajes ENTEROS desde el principio (se asume orden
+    cronológico ascendente, más antiguos primero) hasta bajar del límite.
+    Muta `mensajes` in place. Devuelve si hubo truncado.
+
+    Antes esto recortaba caracteres (`cuerpo[recorte:]`), lo que partía un
+    mensaje al medio y dejaba un fragmento sin su encabezado — peor insumo
+    para el modelo que no tener ese mensaje.
+
+    El último mensaje nunca se descarta: si solo él ya excede el límite, se
+    recorta su cuerpo por el principio (conservando el final, que es la
+    parte nueva). Quedarse con una lista vacía sería preguntarle a Claude
+    sobre la nada."""
+    if sum(len(m["cuerpo"]) for m in mensajes) <= limite or not mensajes:
         return False
-    for mensaje in mensajes:
-        if exceso <= 0:
-            break
-        recorte = min(len(mensaje["cuerpo"]), exceso)
-        mensaje["cuerpo"] = mensaje["cuerpo"][recorte:]
-        exceso -= recorte
+
+    while len(mensajes) > 1 and sum(len(m["cuerpo"]) for m in mensajes) > limite:
+        mensajes.pop(0)
+
+    if len(mensajes[0]["cuerpo"]) > limite:
+        mensajes[0]["cuerpo"] = mensajes[0]["cuerpo"][-limite:]
+
     return True
 
 

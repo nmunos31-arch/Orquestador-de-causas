@@ -499,3 +499,36 @@ class TestCausaSinCarpeta:
         assert (carpeta_causa_2 / "contrato.pdf").exists()
         assert any(item["rit"] == "M-1-2026" for item in resumen["items"])
         assert any("T-10-2026" in n["detalle"] for n in resumen["notas"])
+
+
+class TestAcotarMensajesPorTamano:
+    def test_no_trunca_si_entra_en_el_limite(self):
+        mensajes = [{"cuerpo": "a" * 10}, {"cuerpo": "b" * 10}]
+        assert goteo._acotar_mensajes_por_tamano(mensajes, 100) is False
+        assert len(mensajes) == 2
+
+    def test_descarta_los_mensajes_mas_antiguos_enteros(self):
+        """Los mensajes vienen en orden cronológico ascendente. Se descartan
+        desde el principio, sin partir ninguno al medio."""
+        mensajes = [{"cuerpo": "viejo" * 10}, {"cuerpo": "medio" * 10}, {"cuerpo": "nuevo" * 10}]
+
+        assert goteo._acotar_mensajes_por_tamano(mensajes, 100) is True
+
+        assert len(mensajes) == 2
+        assert mensajes[0]["cuerpo"].startswith("medio")
+        assert mensajes[-1]["cuerpo"].startswith("nuevo")
+
+    def test_conserva_el_ultimo_mensaje_aunque_solo_el_ya_exceda(self):
+        """Un hilo cuyo único mensaje reciente ya supera el límite no puede
+        quedar en una lista vacía: se le preguntaría a Claude sobre la nada.
+        Se manda ese mensaje recortado por el principio."""
+        mensajes = [{"cuerpo": "x" * 500}]
+
+        assert goteo._acotar_mensajes_por_tamano(mensajes, 100) is True
+
+        assert len(mensajes) == 1
+        assert len(mensajes[0]["cuerpo"]) == 100
+        assert mensajes[0]["cuerpo"] == "x" * 100
+
+    def test_el_limite_por_defecto_es_acotado(self):
+        assert goteo.LIMITE_CONTEXTO_CHARS == 40_000
