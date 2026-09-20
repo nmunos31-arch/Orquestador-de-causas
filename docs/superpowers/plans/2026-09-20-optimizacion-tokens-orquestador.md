@@ -62,7 +62,7 @@ Sin esto, las tasks 3-5 no se pueden validar: no hay forma de decir si bajó el 
   - `uso_tokens.resumen(ruta: Path = RUTA_USO_TOKENS, desde: str | None = None) -> dict`
   - `uso_tokens.RUTA_USO_TOKENS: Path`
 
-- [ ] **Step 1: Confirmar empíricamente la forma del envoltorio JSON**
+- [x] **Step 1: Confirmar empíricamente la forma del envoltorio JSON**
 
 No asumas los nombres de los campos. Corré esto en una máquina con `claude` en el PATH:
 
@@ -82,7 +82,7 @@ Anotá los nombres exactos que devuelve. Al momento de escribir este plan (CLI 2
 
 Si los nombres difieren, usá los reales en los steps siguientes y corregí este bloque en el plan.
 
-- [ ] **Step 2: Escribir el test que falla de `uso_tokens.registrar`**
+- [x] **Step 2: Escribir el test que falla de `uso_tokens.registrar`**
 
 ```python
 # tests/test_uso_tokens.py
@@ -122,12 +122,12 @@ class TestRegistrar:
         assert not ruta_imposible.exists()
 ```
 
-- [ ] **Step 3: Correr el test para verificar que falla**
+- [x] **Step 3: Correr el test para verificar que falla**
 
 Run: `pytest tests/test_uso_tokens.py -v`
 Expected: FAIL con `ModuleNotFoundError: No module named 'gestion_causas.uso_tokens'`
 
-- [ ] **Step 4: Escribir `uso_tokens.py`**
+- [x] **Step 4: Escribir `uso_tokens.py`**
 
 ```python
 """Telemetría de consumo de tokens de las llamadas a Claude.
@@ -191,12 +191,12 @@ def resumen(ruta: Path = RUTA_USO_TOKENS, desde: str | None = None) -> dict:
     return totales
 ```
 
-- [ ] **Step 5: Correr el test para verificar que pasa**
+- [x] **Step 5: Correr el test para verificar que pasa**
 
 Run: `pytest tests/test_uso_tokens.py -v`
 Expected: PASS
 
-- [ ] **Step 6: Escribir el test que falla del parseo del envoltorio en `reasoning`**
+- [x] **Step 6: Escribir el test que falla del parseo del envoltorio en `reasoning`**
 
 `_ejecutar_claude` es la única función que cambia de contrato: ahora corre `claude -p --output-format json`, parsea el envoltorio, registra el `usage` y devuelve **solo** el texto de `result`. Se testea mockeando `subprocess.run`.
 
@@ -261,7 +261,7 @@ class TestEjecutarClaude:
         assert reasoning._ejecutar_claude("prompt") == '{"ok": true}'
 ```
 
-- [ ] **Step 7: Escribir el test de `is_error: true` con exit code 0 (Review Focus 1)**
+- [x] **Step 7: Escribir el test de `is_error: true` con exit code 0 (Review Focus 1)**
 
 ```python
 # tests/test_reasoning.py — dentro de TestEjecutarClaude
@@ -279,12 +279,12 @@ class TestEjecutarClaude:
             reasoning._ejecutar_claude("prompt")
 ```
 
-- [ ] **Step 8: Correr los tests para verificar que fallan**
+- [x] **Step 8: Correr los tests para verificar que fallan**
 
 Run: `pytest tests/test_reasoning.py::TestEjecutarClaude -v`
 Expected: FAIL — `_ejecutar_claude` todavía no pasa `--output-format json` ni parsea el envoltorio.
 
-- [ ] **Step 9: Implementar el parseo del envoltorio en `reasoning.py`**
+- [x] **Step 9: Implementar el parseo del envoltorio en `reasoning.py`**
 
 Agregá el import y la constante arriba del módulo:
 
@@ -363,12 +363,12 @@ con `etiqueta: str | None = None` como nuevo parámetro keyword-only de `pregunt
 
 Hacé el mismo cambio en `_ejecutar_claude_skill`: agregá `"--output-format", "json"` a su `argv` y devolvé `_desenvolver_salida(resultado.stdout, etiqueta="minuta-laboral")`. Es la llamada más cara de todas (una skill entera con `Read,Write,Bash` y timeout de 1800s) y hoy no se mide.
 
-- [ ] **Step 10: Correr todos los tests**
+- [x] **Step 10: Correr todos los tests**
 
 Run: `pytest -q`
 Expected: PASS. Los tests viejos de `TestPreguntar` no se ven afectados: inyectan `ejecutar`, así que nunca pasan por `_ejecutar_claude`.
 
-- [ ] **Step 11: Pasar la etiqueta en los 5 call sites**
+- [x] **Step 11: Pasar la etiqueta en los 5 call sites**
 
 En cada llamada, agregá `etiqueta=` con el nombre del punto de razonamiento, para que `uso_tokens.resumen()["por_llamada"]` diga dónde se va el gasto:
 
@@ -386,7 +386,7 @@ Ejemplo:
     return reasoning.preguntar(tarea, contexto, SCHEMA_ACUERDO, etiqueta="goteo.acuerdo_y_pago")
 ```
 
-- [ ] **Step 12: Agregar el JSONL a `.gitignore`**
+- [x] **Step 12: Agregar el JSONL a `.gitignore`**
 
 En `gestion_causas/.gitignore`, bajo "Estado en tiempo de ejecución", agregá:
 
@@ -394,7 +394,7 @@ En `gestion_causas/.gitignore`, bajo "Estado en tiempo de ejecución", agregá:
 uso_tokens.jsonl
 ```
 
-- [ ] **Step 13: Correr todos los tests y commitear**
+- [x] **Step 13: Correr todos los tests y commitear**
 
 Run: `pytest -q`
 Expected: PASS
@@ -423,7 +423,7 @@ El cambio con más ahorro del plan, y el que menos código nuevo necesita: `orqu
 - Consumes: `uso_tokens.resumen` (Task 1).
 - Produces: `orquestador._asegurar_contexto(ruta_contexto: Path) -> bool` — devuelve `True` si el contexto quedó listo (`contexto["listo"]`), `False` si no.
 
-- [ ] **Step 1: Escribir el test que falla de `_asegurar_contexto`**
+- [x] **Step 1: Escribir el test que falla de `_asegurar_contexto`**
 
 ```python
 # tests/test_orquestador.py — agregar
@@ -469,12 +469,12 @@ class TestAsegurarContexto:
         assert orquestador._asegurar_contexto(ruta) is False
 ```
 
-- [ ] **Step 2: Correr el test para verificar que falla**
+- [x] **Step 2: Correr el test para verificar que falla**
 
 Run: `pytest tests/test_orquestador.py::TestAsegurarContexto -v`
 Expected: FAIL con `AttributeError: module 'gestion_causas.orquestador' has no attribute '_asegurar_contexto'`
 
-- [ ] **Step 3: Implementar `_asegurar_contexto` y reescribir `main`**
+- [x] **Step 3: Implementar `_asegurar_contexto` y reescribir `main`**
 
 En `gestion_causas/orquestador.py`:
 
@@ -544,12 +544,12 @@ def main(argv=None) -> int:
 
 Agregá `from gestion_causas import uso_tokens` a los imports.
 
-- [ ] **Step 4: Correr los tests**
+- [x] **Step 4: Correr los tests**
 
 Run: `pytest tests/test_orquestador.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Reescribir `gestion_causas/orquestador/SKILL.md`**
+- [x] **Step 5: Reescribir `gestion_causas/orquestador/SKILL.md`**
 
 Reemplazá el archivo entero (hoy 191 líneas que documentan el despacho de 5 subagentes, arquitectura que `orquestador.py` ya reemplazó) por:
 
@@ -592,7 +592,7 @@ Historial de la migración: `docs/superpowers/plans/`.
 
 Borrá también la nota de "Copia versionada" que abría el archivo viejo: ya no hay dos copias que sincronizar a mano, porque el contenido dejó de ser un procedimiento y pasó a ser un comando.
 
-- [ ] **Step 6: Actualizar la tabla del `README.md`**
+- [x] **Step 6: Actualizar la tabla del `README.md`**
 
 Reemplazá el párrafo que dice "Las 5 fases están migradas. La tarea programada real (`gestion-causas-orquestador`) todavía corre el flujo viejo de subagentes — el corte a este driver es una decisión pendiente." por:
 
@@ -603,7 +603,7 @@ Las 5 fases están migradas y la tarea programada corre este driver
 reglas de negocio de cada fase — ya no los ejecuta nadie.
 ```
 
-- [ ] **Step 7: Correr todos los tests y commitear**
+- [x] **Step 7: Correr todos los tests y commitear**
 
 Run: `pytest -q`
 Expected: PASS
@@ -654,7 +654,7 @@ Con 3 corridas diarias y `mapa_hilos` trayendo el hilo completo cada vez, el mis
   - `cache_razonamiento.RUTA_CACHE: Path`, `cache_razonamiento.DIAS_VIGENCIA: int`
   - `reasoning.preguntar(..., cachear: bool = False)`
 
-- [ ] **Step 1: Escribir los tests que fallan del módulo de caché**
+- [x] **Step 1: Escribir los tests que fallan del módulo de caché**
 
 ```python
 # tests/test_cache_razonamiento.py
@@ -717,7 +717,7 @@ class TestObtenerYGuardar:
         assert "nueva" in contenido
 ```
 
-- [ ] **Step 2: Escribir el test de archivo corrupto (Review Focus 4)**
+- [x] **Step 2: Escribir el test de archivo corrupto (Review Focus 4)**
 
 ```python
 # tests/test_cache_razonamiento.py — agregar
@@ -736,12 +736,12 @@ class TestArchivoCorrupto:
         assert json.loads(ruta.read_text(encoding="utf-8"))["nueva"]["resultado"] == {"y": 2}
 ```
 
-- [ ] **Step 3: Correr los tests para verificar que fallan**
+- [x] **Step 3: Correr los tests para verificar que fallan**
 
 Run: `pytest tests/test_cache_razonamiento.py -v`
 Expected: FAIL con `ModuleNotFoundError: No module named 'gestion_causas.cache_razonamiento'`
 
-- [ ] **Step 4: Escribir `cache_razonamiento.py`**
+- [x] **Step 4: Escribir `cache_razonamiento.py`**
 
 ```python
 """Caché de respuestas de razonamiento entre corridas.
@@ -839,7 +839,7 @@ def guardar(clave_nueva: str, resultado: dict, ruta: Path = RUTA_CACHE) -> None:
         pass
 ```
 
-- [ ] **Step 5: Escribir los tests que fallan del `cachear=True` en `preguntar` (Review Focus 3)**
+- [x] **Step 5: Escribir los tests que fallan del `cachear=True` en `preguntar` (Review Focus 3)**
 
 ```python
 # tests/test_reasoning.py — agregar
@@ -913,12 +913,12 @@ class TestPreguntarConCache:
         assert len(llamadas) == 1
 ```
 
-- [ ] **Step 6: Correr los tests para verificar que fallan**
+- [x] **Step 6: Correr los tests para verificar que fallan**
 
 Run: `pytest tests/test_reasoning.py::TestPreguntarConCache -v`
 Expected: FAIL con `TypeError: preguntar() got an unexpected keyword argument 'cachear'`
 
-- [ ] **Step 7: Implementar `cachear` en `preguntar`**
+- [x] **Step 7: Implementar `cachear` en `preguntar`**
 
 En `gestion_causas/reasoning.py`, agregá `from gestion_causas import cache_razonamiento` y cambiá la firma y el cuerpo de `preguntar`:
 
@@ -961,12 +961,12 @@ Y en el `return resultado` del loop (cuando `_parsear_json` devolvió algo):
 
 El `return {"error": ...}` del final (tras los 2 intentos fallidos) no toca el caché, así que no hay que cambiarlo.
 
-- [ ] **Step 8: Correr los tests**
+- [x] **Step 8: Correr los tests**
 
 Run: `pytest tests/test_reasoning.py -v`
 Expected: PASS
 
-- [ ] **Step 9: Activar el caché en los dos call sites repetitivos**
+- [x] **Step 9: Activar el caché en los dos call sites repetitivos**
 
 En `gestion_causas/fases/goteo.py`, `_detectar_acuerdo_y_pago`:
 
@@ -987,7 +987,7 @@ En `gestion_causas/fases/seguimiento.py`, `_clasificar_pedido`:
 
 **No** se activa en `smu.py` ni en `agenda.py`: esas 4 llamadas corren una sola vez por causa nueva (alta, u ofrecimiento a 4 días hábiles de la audiencia), así que no hay repetición que ahorrar, y dos de ellas dependen del contenido de un PDF que la clave no ve (`ruta_archivo` no entra en el contexto).
 
-- [ ] **Step 10: Agregar el caché a `.gitignore`**
+- [x] **Step 10: Agregar el caché a `.gitignore`**
 
 En `gestion_causas/.gitignore`, bajo "Estado en tiempo de ejecución":
 
@@ -995,7 +995,7 @@ En `gestion_causas/.gitignore`, bajo "Estado en tiempo de ejecución":
 cache_razonamiento.json
 ```
 
-- [ ] **Step 11: Correr todos los tests y commitear**
+- [x] **Step 11: Correr todos los tests y commitear**
 
 Run: `pytest -q`
 Expected: PASS
@@ -1019,7 +1019,7 @@ git commit -m "perf(gestion_causas): cachea el razonamiento entre corridas por h
 - Consumes: nada de tareas anteriores.
 - Produces: `goteo._acotar_mensajes_por_tamano(mensajes: list[dict], limite: int) -> bool` — misma firma, misma semántica de retorno (si hubo truncado), pero descarta mensajes enteros desde el más antiguo en vez de recortar caracteres.
 
-- [ ] **Step 1: Escribir los tests que fallan del truncado por mensaje entero**
+- [x] **Step 1: Escribir los tests que fallan del truncado por mensaje entero**
 
 ```python
 # tests/fases/test_goteo.py — agregar
@@ -1059,12 +1059,12 @@ class TestAcotarMensajesPorTamano:
         assert goteo.LIMITE_CONTEXTO_CHARS == 40_000
 ```
 
-- [ ] **Step 2: Correr los tests para verificar que fallan**
+- [x] **Step 2: Correr los tests para verificar que fallan**
 
 Run: `pytest tests/fases/test_goteo.py::TestAcotarMensajesPorTamano -v`
 Expected: FAIL — el truncado actual recorta caracteres del principio de cada mensaje sin descartar ninguno, y `LIMITE_CONTEXTO_CHARS` es `400_000`.
 
-- [ ] **Step 3: Implementar el truncado por mensaje entero**
+- [x] **Step 3: Implementar el truncado por mensaje entero**
 
 Reemplazá la constante y la función en `gestion_causas/fases/goteo.py`:
 
@@ -1107,12 +1107,12 @@ def _acotar_mensajes_por_tamano(mensajes: list[dict], limite: int) -> bool:
     return True
 ```
 
-- [ ] **Step 4: Correr los tests**
+- [x] **Step 4: Correr los tests**
 
 Run: `pytest tests/fases/test_goteo.py -v`
 Expected: PASS. Si algún test existente asumía el recorte por caracteres, actualizalo al comportamiento nuevo (descarte de mensajes enteros) — el aviso `_accion_contexto_truncado` que ve Nico no cambia.
 
-- [ ] **Step 5: Correr todos los tests y commitear**
+- [x] **Step 5: Correr todos los tests y commitear**
 
 Run: `pytest -q`
 Expected: PASS
@@ -1139,7 +1139,7 @@ git commit -m "perf(gestion_causas): goteo acota el contexto a 40k y trunca por 
   - `reasoning.MODELO_CLASIFICACION: str` — id del modelo para clasificaciones acotadas, o `""` para el default del CLI.
   - `reasoning.preguntar(..., modelo: str | None = None)`
 
-- [ ] **Step 1: Escribir los tests que fallan**
+- [x] **Step 1: Escribir los tests que fallan**
 
 ```python
 # tests/test_reasoning.py — dentro de TestEjecutarClaude
@@ -1163,12 +1163,12 @@ git commit -m "perf(gestion_causas): goteo acota el contexto a 40k y trunca por 
         assert "--model" not in self.argv
 ```
 
-- [ ] **Step 2: Correr los tests para verificar que fallan**
+- [x] **Step 2: Correr los tests para verificar que fallan**
 
 Run: `pytest tests/test_reasoning.py::TestEjecutarClaude -v`
 Expected: FAIL con `TypeError: _ejecutar_claude() got an unexpected keyword argument 'modelo'`
 
-- [ ] **Step 3: Implementar la selección de modelo**
+- [x] **Step 3: Implementar la selección de modelo**
 
 En `gestion_causas/reasoning.py`, agregá `import os` y, junto a `_FLAGS_MINIMOS`:
 
@@ -1210,12 +1210,12 @@ En `preguntar`, agregá `modelo: str | None = None` a la firma y pasalo al parti
 
 Un id de modelo inválido hace que `claude -p` salga con código distinto de cero, lo que `_ejecutar_claude` ya convierte en `RuntimeError`, que `preguntar` ya atrapa y devuelve como `{"error": ...}` — la fase sigue con la causa siguiente y el aviso llega a `acciones`. No hace falta validar el id.
 
-- [ ] **Step 4: Correr los tests**
+- [x] **Step 4: Correr los tests**
 
 Run: `pytest tests/test_reasoning.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Pasar el modelo en los dos call sites de clasificación**
+- [x] **Step 5: Pasar el modelo en los dos call sites de clasificación**
 
 En `gestion_causas/fases/goteo.py`, `_detectar_acuerdo_y_pago`:
 
@@ -1238,7 +1238,7 @@ En `gestion_causas/fases/seguimiento.py`, `_clasificar_pedido`:
 
 `smu._generar_resumen_narrativo` queda con el default a propósito: redacta el párrafo que va al Excel de Juicios Vigentes que lee una persona, siguiendo una plantilla estricta. Es candidato a bajar de modelo, pero recién con los números de `uso_tokens.py` en la mano y comparando la redacción contra corridas anteriores.
 
-- [ ] **Step 6: Documentar la variable de entorno en el `README.md`**
+- [x] **Step 6: Documentar la variable de entorno en el `README.md`**
 
 En la sección "Credenciales y estado en tiempo de ejecución", agregá una subsección:
 
@@ -1259,7 +1259,7 @@ python -c "from gestion_causas import uso_tokens; import json; print(json.dumps(
 ```
 ```
 
-- [ ] **Step 7: Correr todos los tests y commitear**
+- [x] **Step 7: Correr todos los tests y commitear**
 
 Run: `pytest -q`
 Expected: PASS
@@ -1274,7 +1274,7 @@ git commit -m "perf(gestion_causas): las clasificaciones acotadas corren en un m
 
 ## Validación final (después de las 5 tasks)
 
-- [ ] **Step 1: Suite completa**
+- [x] **Step 1: Suite completa**
 
 Run: `pytest -q`
 Expected: PASS, sin tests salteados que antes corrían.
