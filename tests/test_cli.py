@@ -316,7 +316,7 @@ class TestPanel:
 
 
 class TestContextoCorrida:
-    """Paso 0 del disparador: resuelve una sola vez lo que las 4 fases
+    """Paso 0 del ciclo: resuelve una sola vez lo que las 4 fases
     comparten (fecha, tokens, cache de calendario). Sin red: los tres
     diagnósticos y el cache se simulan."""
 
@@ -377,7 +377,7 @@ class TestContextoCorrida:
         assert contexto["cache_calendario"]["total"] == 12
         assert contexto["mapa_hilos"]["total_rits_activos"] == 0
         assert contexto["mapa_audiencias"]["total_causas"] == 0
-        # También lo imprime a stdout, para que el disparador no tenga que leer el archivo.
+        # También lo imprime a stdout, para que el ciclo no tenga que leer el archivo.
         assert json.loads(capsys.readouterr().out)["listo"] is True
 
     def test_calendar_caido_sale_uno_y_no_deja_cache(self, tmp_path, monkeypatch, capsys):

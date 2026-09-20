@@ -34,7 +34,7 @@ def _es_lunes(contexto_corrida: dict) -> bool:
 
 
 def _eventos_candidatos(contexto_corrida: dict) -> list[dict]:
-    """Paso 1: usa el cache de calendario que el disparador ya trajo para
+    """Paso 1: usa el cache de calendario que el ciclo ya trajo para
     toda la corrida (contiene el rango de 90 días que necesita esta fase);
     si no hay contexto, no hay cache, o la lectura falla por cualquier
     motivo (archivo corrupto, rango insuficiente), cae a la llamada en vivo

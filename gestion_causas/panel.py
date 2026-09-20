@@ -93,7 +93,7 @@ def estado_causas(hoy: date | None = None, ruta=None) -> list[dict]:
 
 # Nombres internos de fase (calendario/smu/goteo/agenda) vs. lo que se
 # muestra en el correo — los internos son claves estables usadas por el
-# disparador y el resumen JSON; acá se traducen a una etiqueta que describe
+# ciclo y el resumen JSON; acá se traducen a una etiqueta que describe
 # qué hace cada una, para que el panel se entienda sin conocer el código.
 _FASE_ETIQUETAS = {
     "calendario": "Calendario (búsqueda de causas no detectadas por correo)",

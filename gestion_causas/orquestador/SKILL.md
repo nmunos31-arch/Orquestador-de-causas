@@ -6,7 +6,7 @@ description: Corre el ciclo completo de gestión de causas (contexto de la corri
 Tarea programada desatendida (sin usuario presente). Es un único comando:
 
 ```
-python -m gestion_causas.disparador
+python -m gestion_causas.ciclo
 ```
 
 con `Actualizador de informes` como directorio de trabajo.

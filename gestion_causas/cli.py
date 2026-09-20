@@ -46,7 +46,7 @@ from . import registro as registro_mod
 from . import seguimiento as seguimiento_mod
 
 
-# Contexto comun de una corrida del disparador (ver cmd_contexto_corrida):
+# Contexto comun de una corrida del ciclo (ver cmd_contexto_corrida):
 # fecha de hoy, estado de los 3 tokens y cache de calendario, resueltos una
 # sola vez para que las 4 fases no los redescubran cada una por su cuenta.
 RUTA_CONTEXTO_CORRIDA = Path(__file__).parent / "_contexto_corrida.json"
@@ -287,7 +287,7 @@ def verificar_borradores_pendientes(dry_run: bool = False) -> dict:
     causas para no volver a chequearlo.
 
     Función pura (sin argparse ni stdout) para que tanto la CLI
-    (`cmd_verificar_borradores_pendientes`) como `disparador.py` la llamen
+    (`cmd_verificar_borradores_pendientes`) como `ciclo.py` la llamen
     directo, sin pasar por un subprocess."""
     causas = registro_mod.causas_con_borrador_pendiente()
     pendientes = []
@@ -677,7 +677,7 @@ def _generar_mapa_hilos_por_rit(ruta_salida) -> dict:
     "descartados"}` en `ruta_salida`, para que `goteo` y `seguimiento` lo
     lean en vez de volver a golpear Gmail cada una por su cuenta. Usada
     tanto por el comando suelto `mapa-hilos-por-rit` como por
-    `contexto-corrida` (paso 1 del disparador, para generarlo una sola vez
+    `contexto-corrida` (paso 1 del ciclo, para generarlo una sola vez
     por corrida). Devuelve el resumen (no el mapa completo, que puede ser
     grande) para imprimir/anexar al contexto."""
     causas = registro_mod.causas_para_goteo()
@@ -775,7 +775,7 @@ def _generar_mapa_audiencias(ruta_cache, ruta_salida, hoy=None) -> dict:
 
     Escribe `{"generado_en", "rit_a_audiencia"}` en `ruta_salida`. Usada tanto
     por el comando suelto `mapa-audiencias` como por `contexto-corrida` (paso
-    1 del disparador). Devuelve el resumen (no el mapa completo) para
+    1 del ciclo). Devuelve el resumen (no el mapa completo) para
     imprimir/anexar al contexto."""
     causas = registro_mod.causas_para_goteo()
     rits = [c["rit"] for c in causas]
@@ -884,7 +884,7 @@ def _diagnosticar_token(diagnostico, email_esperado: str) -> dict:
 
 
 def cmd_contexto_corrida(args) -> int:
-    """Paso 0 del disparador: resuelve de una vez lo que las 4 fases
+    """Paso 0 del ciclo: resuelve de una vez lo que las 4 fases
     comparten, para que ninguna lo redescubra por su cuenta.
 
     - fecha de hoy / dia de la semana (evita que dos fases de una corrida que
@@ -896,7 +896,7 @@ def cmd_contexto_corrida(args) -> int:
       --desde-cache.
 
     Codigo de salida 1 si Gmail de trabajo o Calendar no estan disponibles (el
-    disparador aborta y manda el panel avisando). Un fallo del token personal
+    ciclo aborta y manda el panel avisando). Un fallo del token personal
     no es motivo de salida 1: solo afecta el envio del panel al final.
     """
     ahora = datetime.datetime.now()
@@ -907,7 +907,7 @@ def cmd_contexto_corrida(args) -> int:
         "dia_semana": DIAS_SEMANA[hoy.weekday()],
         "es_lunes": hoy.weekday() == 0,
         # "manana" identifica la corrida de las 09:00 (cron "0 9,13,17 * * *"),
-        # la unica en la que el disparador despacha "calendario" y
+        # la unica en la que el ciclo despacha "calendario" y
         # "seguimiento" (ver orquestador/SKILL.md paso 2) -- sus umbrales son
         # en dias habiles, correrlas 3x/dia no adelanta nada.
         "corrida": "manana" if ahora.hour < 12 else "resto",
@@ -1246,7 +1246,7 @@ def construir_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "contexto-corrida",
-        help="Paso 0 del disparador: resuelve fecha de hoy, estado de los 3 tokens (sin login interactivo) y el cache de calendario, una sola vez para toda la corrida",
+        help="Paso 0 del ciclo: resuelve fecha de hoy, estado de los 3 tokens (sin login interactivo) y el cache de calendario, una sola vez para toda la corrida",
     )
     p.add_argument("--salida", default=str(RUTA_CONTEXTO_CORRIDA))
     p.add_argument("--ruta-cache", default=str(calendar_client.RUTA_CACHE_EVENTOS_CALENDARIO))

@@ -4,7 +4,7 @@ y docs/superpowers/plans/2026-09-17-driver-python-agenda-plan-b-minuta.md):
 los 5 pasos de subagentes/agenda.md.
 
 Revisa las causas activas, resuelve su próxima audiencia desde el mapa que
-el disparador ya armó para toda la corrida. En el hito de 14 días corridos
+el ciclo ya armó para toda la corrida. En el hito de 14 días corridos
 antes de una audiencia Única o de Juicio deja un borrador de ofrecimiento a
 Román; en el hito de 4 días hábiles antes de una audiencia Única o
 Preparatoria invoca la skill `/minuta-laboral` sobre la carpeta de la causa.
