@@ -128,7 +128,8 @@ def _detectar_acuerdo_y_pago(mensajes_hilos: list[dict]) -> dict:
         "asociado a ese acuerdo."
     )
     resultado = reasoning.preguntar(
-        tarea, contexto, SCHEMA_ACUERDO, etiqueta="goteo.acuerdo_y_pago", cachear=True
+        tarea, contexto, SCHEMA_ACUERDO, etiqueta="goteo.acuerdo_y_pago",
+        cachear=True, modelo=reasoning.MODELO_CLASIFICACION,
     )
     if hubo_truncado:
         resultado = {**resultado, "_contexto_truncado": True}

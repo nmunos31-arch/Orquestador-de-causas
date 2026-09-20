@@ -95,6 +95,7 @@ def _clasificar_pedido(pedido: dict, mensajes_posteriores_reales: list[dict]) ->
     return reasoning.preguntar(
         tarea, contexto, SCHEMA_CLASIFICAR_PEDIDO,
         etiqueta="seguimiento.clasificar_pedido", cachear=True,
+        modelo=reasoning.MODELO_CLASIFICACION,
     )
 
 

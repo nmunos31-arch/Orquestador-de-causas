@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import functools
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -20,6 +21,20 @@ from gestion_causas import uso_tokens
 
 TIMEOUT_SEGUNDOS = 180
 TIMEOUT_SKILL_SEGUNDOS = 1800
+
+# Modelo para las clasificaciones acotadas (`goteo.acuerdo_y_pago`,
+# `seguimiento.clasificar_pedido`): devuelven 2-3 campos con un schema fijo
+# sobre texto corto, no hace falta el modelo más caro. Las que SÍ lo
+# necesitan (leer una demanda escaneada en modo visión y extraer montos
+# exactos: `smu.ajustes_demanda`, `agenda.montos_ofrecimiento`) no pasan
+# `modelo` y siguen con el default del CLI.
+#
+# Vacío ("") = default del CLI. Se puede forzar por entorno sin tocar
+# código, para comparar calidad/costo contra los números de uso_tokens.py:
+#   GESTION_CAUSAS_MODELO_CLASIFICACION=""  -> vuelve al default
+MODELO_CLASIFICACION = os.environ.get(
+    "GESTION_CAUSAS_MODELO_CLASIFICACION", "claude-haiku-4-5-20251001"
+)
 
 # `_ejecutar_claude` no necesita nada de esto: ni skills (no se invoca
 # ninguna con /), ni la config de settings del proyecto/usuario (los
@@ -36,7 +51,7 @@ _FLAGS_MINIMOS = ["--disable-slash-commands", "--setting-sources", "", "--output
 
 def preguntar(
     tarea: str, contexto: dict, schema: dict, *, ejecutar=None, ruta_archivo=None,
-    etiqueta: str | None = None, cachear: bool = False,
+    etiqueta: str | None = None, cachear: bool = False, modelo: str | None = None,
 ) -> dict:
     """Le pide a Claude que resuelva `tarea` sobre `contexto`, devolviendo un
     dict que cumple `schema`. Reintenta una vez si la respuesta no es JSON
@@ -60,7 +75,7 @@ def preguntar(
     entrega, `ejecutar` se llama igual que siempre (`ejecutar(prompt)`), así
     que ningún llamador existente que no use `ruta_archivo` se ve afectado.
     """
-    ejecutar = ejecutar or functools.partial(_ejecutar_claude, etiqueta=etiqueta)
+    ejecutar = ejecutar or functools.partial(_ejecutar_claude, etiqueta=etiqueta, modelo=modelo)
 
     # El caché se consulta ANTES de armar el prompt: la clave depende de
     # (tarea, contexto), no del prompt final, para que agregar un campo al
@@ -202,7 +217,8 @@ def _parsear_json(texto: str) -> dict | None:
         return None
 
 
-def _ejecutar_claude(prompt: str, ruta_archivo=None, etiqueta: str | None = None) -> str:
+def _ejecutar_claude(prompt: str, ruta_archivo=None, etiqueta: str | None = None,
+                     modelo: str | None = None) -> str:
     """Corre `claude -p`, pasando el prompt por stdin (no como argumento de
     línea de comandos) — en Windows, un prompt largo (el contexto de una
     causa con muchos correos puede ser de decenas de miles de caracteres)
@@ -250,6 +266,8 @@ def _ejecutar_claude(prompt: str, ruta_archivo=None, etiqueta: str | None = None
         raise RuntimeError("No se encontró el ejecutable 'claude' en el PATH.")
 
     argv = [ejecutable, "-p", *_FLAGS_MINIMOS]
+    if modelo:
+        argv += ["--model", modelo]
     if ruta_archivo is not None:
         settings_lectura_acotada = json.dumps({"permissions": {"deny": ["Bash", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch"]}})
         argv += [

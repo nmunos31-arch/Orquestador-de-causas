@@ -42,6 +42,21 @@ cada máquina donde corra esto:
 - `registro_causas.json`, `registro_ceco.json`, `registro_seguimiento.json`,
   `registro_pedidos.json`, `bitacora.md` — estado real de causas/clientes.
 
+### Variables de entorno opcionales
+
+- `GESTION_CAUSAS_MODELO_CLASIFICACION` — modelo que usan las dos
+  clasificaciones acotadas (`goteo.acuerdo_y_pago`,
+  `seguimiento.clasificar_pedido`). Por defecto `claude-haiku-4-5-20251001`;
+  ponela en vacío (`""`) para volver al modelo por defecto del CLI. Las
+  llamadas que leen un PDF de demanda siempre usan el default.
+
+El consumo real de cada llamada queda en `gestion_causas/uso_tokens.jsonl`
+(una línea JSON por llamada). Para verlo sumado:
+
+```bash
+python -c "from gestion_causas import uso_tokens; import json; print(json.dumps(uso_tokens.resumen(), indent=2))"
+```
+
 ### Dependencia con `actualizar_informe_juicios.py` (repo `Scripts-varios`)
 
 Las fases `smu` y `calendario` escriben filas en el Excel "Informe de Juicios Vigentes"

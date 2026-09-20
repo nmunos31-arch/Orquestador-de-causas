@@ -468,6 +468,25 @@ class TestEjecutarClaude:
 
         assert reasoning._ejecutar_claude("prompt") == '{"ok": true}'
 
+    def test_pasa_el_modelo_cuando_se_indica(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(reasoning.shutil, "which", lambda _: "/usr/bin/claude")
+        monkeypatch.setattr(reasoning.subprocess, "run", self._correr_falso("{}"))
+        monkeypatch.setattr(reasoning.uso_tokens, "RUTA_USO_TOKENS", tmp_path / "uso.jsonl")
+
+        reasoning._ejecutar_claude("prompt", modelo="claude-haiku-4-5-20251001")
+
+        assert "--model" in self.argv
+        assert self.argv[self.argv.index("--model") + 1] == "claude-haiku-4-5-20251001"
+
+    def test_no_pasa_model_si_el_modelo_es_vacio(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(reasoning.shutil, "which", lambda _: "/usr/bin/claude")
+        monkeypatch.setattr(reasoning.subprocess, "run", self._correr_falso("{}"))
+        monkeypatch.setattr(reasoning.uso_tokens, "RUTA_USO_TOKENS", tmp_path / "uso.jsonl")
+
+        reasoning._ejecutar_claude("prompt", modelo="")
+
+        assert "--model" not in self.argv
+
     def test_is_error_true_con_exit_code_cero_es_un_fallo(self, monkeypatch, tmp_path):
         envoltorio = json.dumps({
             "type": "result", "subtype": "error_max_turns", "is_error": True,
