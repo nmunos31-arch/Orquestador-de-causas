@@ -78,6 +78,16 @@ COLOR_POR_EMPRESA = {
 # Preunic y Salcobrand pasan por las 4 fases igual, pero sin escribir fila.
 EMPRESAS_SIN_EXCEL = {"Preunic", "Salcobrand"}
 
+# Cuántas veces reintenta una llamada la propia libreria de Google
+# (googleapiclient.http.HttpRequest.execute) antes de propagar la
+# excepción, con backoff exponencial incorporado — cubre justamente
+# HttpError 403 rateLimitExceeded/userRateLimitExceeded, 429 y 5xx.
+# Confirmado el 2026-09-21: una corrida con muchas llamadas seguidas
+# (goteo + agenda + seguimiento + calendario) agotó la cuota de "units per
+# minute" de Gmail y tumbó las fases seguimiento/calendario enteras sin
+# reintento — la cuota se libera sola en menos de un minuto.
+NUM_REINTENTOS_HTTP = 5
+
 ETIQUETA_PROCESADO = "Procesado-GestionCausas"
 
 # Etiqueta que Nico aplica a mano a un correo que el mismo envio (pedido de
@@ -153,7 +163,7 @@ def diagnostico(servicio=None, permitir_login: bool = True) -> dict:
     (nmunoz@gomezyriesco.cl) y no a la personal."""
     if servicio is None:
         servicio = construir_servicio(permitir_login=permitir_login)
-    perfil = servicio.users().getProfile(userId="me").execute()
+    perfil = servicio.users().getProfile(userId="me").execute(num_retries=NUM_REINTENTOS_HTTP)
     return {"email": perfil.get("emailAddress"), "scopes": SCOPES}
 
 
@@ -171,7 +181,7 @@ def buscar_hilos(query: str, servicio=None, max_resultados: int = 50) -> list[di
         resultado = servicio.users().threads().list(
             userId="me", q=query, maxResults=min(max_resultados - len(hilos), 100),
             pageToken=page_token,
-        ).execute()
+        ).execute(num_retries=NUM_REINTENTOS_HTTP)
         hilos.extend(resultado.get("threads", []))
         page_token = resultado.get("nextPageToken")
         if not page_token or len(hilos) >= max_resultados:
@@ -182,7 +192,7 @@ def buscar_hilos(query: str, servicio=None, max_resultados: int = 50) -> list[di
 def obtener_hilo(thread_id: str, servicio=None) -> dict:
     if servicio is None:
         servicio = construir_servicio()
-    return servicio.users().threads().get(userId="me", id=thread_id, format="full").execute()
+    return servicio.users().threads().get(userId="me", id=thread_id, format="full").execute(num_retries=NUM_REINTENTOS_HTTP)
 
 
 def leer_hilo(thread_id: str, servicio=None) -> list[dict]:
@@ -229,7 +239,7 @@ def cabeceras_respuesta_de_hilo(thread_id: str, servicio=None) -> dict:
 
     hilo = servicio.users().threads().get(
         userId="me", id=thread_id, format="metadata", metadataHeaders=["Message-ID", "References"]
-    ).execute()
+    ).execute(num_retries=NUM_REINTENTOS_HTTP)
     mensajes = hilo.get("messages", [])
     if not mensajes:
         return {"in_reply_to": None, "references": None}
@@ -302,7 +312,7 @@ def leer_mensaje(message_id: str, servicio=None) -> dict:
 
     mensaje = servicio.users().messages().get(
         userId="me", id=message_id, format="full"
-    ).execute()
+    ).execute(num_retries=NUM_REINTENTOS_HTTP)
 
     headers = {h["name"].lower(): h["value"] for h in mensaje["payload"].get("headers", [])}
     return {
@@ -323,7 +333,7 @@ def descargar_adjunto(message_id: str, attachment_id: str, servicio=None) -> byt
         servicio = construir_servicio()
     adjunto = servicio.users().messages().attachments().get(
         userId="me", messageId=message_id, id=attachment_id
-    ).execute()
+    ).execute(num_retries=NUM_REINTENTOS_HTTP)
     return _decodificar_base64url(adjunto["data"])
 
 
@@ -331,7 +341,7 @@ def descargar_adjunto(message_id: str, attachment_id: str, servicio=None) -> byt
 def listar_etiquetas(servicio=None) -> list[dict]:
     if servicio is None:
         servicio = construir_servicio()
-    return servicio.users().labels().list(userId="me").execute().get("labels", [])
+    return servicio.users().labels().list(userId="me").execute(num_retries=NUM_REINTENTOS_HTTP).get("labels", [])
 
 
 def obtener_o_crear_etiqueta(
@@ -355,7 +365,7 @@ def obtener_o_crear_etiqueta(
     if color:
         cuerpo["color"] = color
 
-    creada = servicio.users().labels().create(userId="me", body=cuerpo).execute()
+    creada = servicio.users().labels().create(userId="me", body=cuerpo).execute(num_retries=NUM_REINTENTOS_HTTP)
     return creada["id"]
 
 
@@ -364,7 +374,7 @@ def aplicar_etiqueta_a_hilo(thread_id: str, label_id: str, servicio=None) -> Non
         servicio = construir_servicio()
     servicio.users().threads().modify(
         userId="me", id=thread_id, body={"addLabelIds": [label_id]}
-    ).execute()
+    ).execute(num_retries=NUM_REINTENTOS_HTTP)
 
 
 def aplicar_etiqueta_a_mensaje(message_id: str, label_id: str, servicio=None) -> None:
@@ -372,7 +382,7 @@ def aplicar_etiqueta_a_mensaje(message_id: str, label_id: str, servicio=None) ->
         servicio = construir_servicio()
     servicio.users().messages().modify(
         userId="me", id=message_id, body={"addLabelIds": [label_id]}
-    ).execute()
+    ).execute(num_retries=NUM_REINTENTOS_HTTP)
 
 
 def quitar_etiqueta_de_hilo(thread_id: str, label_id: str, servicio=None) -> None:
@@ -383,7 +393,7 @@ def quitar_etiqueta_de_hilo(thread_id: str, label_id: str, servicio=None) -> Non
         servicio = construir_servicio()
     servicio.users().threads().modify(
         userId="me", id=thread_id, body={"removeLabelIds": [label_id]}
-    ).execute()
+    ).execute(num_retries=NUM_REINTENTOS_HTTP)
 
 
 # ── Borradores (NUNCA se envían desde este módulo) ──────────────────────────
@@ -432,7 +442,7 @@ def crear_borrador(
 
     return servicio.users().drafts().create(
         userId="me", body={"message": cuerpo_mensaje}
-    ).execute()
+    ).execute(num_retries=NUM_REINTENTOS_HTTP)
 
 
 def _construir_cuerpo_mensaje(
@@ -464,10 +474,10 @@ def listar_borradores_de_hilo(thread_id: str, servicio=None) -> list[dict]:
     sobrescribe)."""
     if servicio is None:
         servicio = construir_servicio()
-    todos = servicio.users().drafts().list(userId="me").execute().get("drafts", [])
+    todos = servicio.users().drafts().list(userId="me").execute(num_retries=NUM_REINTENTOS_HTTP).get("drafts", [])
     resultado = []
     for borrador in todos:
-        detalle = servicio.users().drafts().get(userId="me", id=borrador["id"]).execute()
+        detalle = servicio.users().drafts().get(userId="me", id=borrador["id"]).execute(num_retries=NUM_REINTENTOS_HTTP)
         if detalle.get("message", {}).get("threadId") == thread_id:
             resultado.append(detalle)
     return resultado
@@ -482,11 +492,11 @@ def buscar_borrador_por_asunto(fragmento_asunto: str, servicio=None) -> list[dic
     asunto siempre incluye el RIT: 'Demanda laboral ... Rit [RIT]')."""
     if servicio is None:
         servicio = construir_servicio()
-    todos = servicio.users().drafts().list(userId="me").execute().get("drafts", [])
+    todos = servicio.users().drafts().list(userId="me").execute(num_retries=NUM_REINTENTOS_HTTP).get("drafts", [])
     objetivo = fragmento_asunto.lower()
     resultado = []
     for borrador in todos:
-        detalle = servicio.users().drafts().get(userId="me", id=borrador["id"]).execute()
+        detalle = servicio.users().drafts().get(userId="me", id=borrador["id"]).execute(num_retries=NUM_REINTENTOS_HTTP)
         headers = detalle.get("message", {}).get("payload", {}).get("headers", [])
         asunto = next((h["value"] for h in headers if h["name"].lower() == "subject"), "")
         if objetivo in asunto.lower():
@@ -504,7 +514,7 @@ def borrador_existe(draft_id: str, servicio=None) -> bool:
     if servicio is None:
         servicio = construir_servicio()
     try:
-        servicio.users().drafts().get(userId="me", id=draft_id).execute()
+        servicio.users().drafts().get(userId="me", id=draft_id).execute(num_retries=NUM_REINTENTOS_HTTP)
         return True
     except HttpError as e:
         if getattr(e, "status_code", None) == 404 or e.resp.status == 404:

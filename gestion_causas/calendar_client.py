@@ -28,6 +28,12 @@ from pathlib import Path
 from .ics import buscar_eventos_por_rit
 from .registro import extraer_rit
 
+# Cuántas veces reintenta una llamada la propia libreria de Google
+# (googleapiclient.http.HttpRequest.execute) antes de propagar la
+# excepción, con backoff exponencial incorporado — cubre 403
+# rateLimitExceeded/userRateLimitExceeded, 429 y 5xx (ver gmail_client.py).
+NUM_REINTENTOS_HTTP = 5
+
 # Alias por los que se reconoce a cada empresa en el texto de un evento de
 # calendario (títulos como "Audiencia Unica RIT M-643-2026 Iturriaga con
 # Rendic" o "Audiencia única "Rebolledo con Salcobrand" M-637-2026"). Usado
@@ -133,7 +139,7 @@ def diagnostico(servicio=None, permitir_login: bool = True) -> dict:
     verificar ANTES de operar que el token quedó atado a nmunoz@gomezyriesco.cl."""
     if servicio is None:
         servicio = construir_servicio(permitir_login=permitir_login)
-    calendario = servicio.calendarList().get(calendarId="primary").execute()
+    calendario = servicio.calendarList().get(calendarId="primary").execute(num_retries=NUM_REINTENTOS_HTTP)
     return {"email": calendario.get("id"), "scopes": SCOPES}
 
 
@@ -164,7 +170,7 @@ def listar_eventos(desde: date, hasta: date, servicio=None) -> list[dict]:
         resultado = servicio.events().list(
             calendarId="primary", timeMin=time_min, timeMax=time_max,
             singleEvents=True, orderBy="startTime", pageToken=page_token,
-        ).execute()
+        ).execute(num_retries=NUM_REINTENTOS_HTTP)
         for crudo in resultado.get("items", []):
             fecha = _fecha_de_evento(crudo)
             resumen = crudo.get("summary")

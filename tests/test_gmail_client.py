@@ -124,7 +124,7 @@ class _Ejecutable:
     def __init__(self, valor):
         self._valor = valor
 
-    def execute(self):
+    def execute(self, **_kwargs):
         return self._valor
 
 
@@ -303,7 +303,7 @@ class TestLeerHilo:
             def get(self, userId, id, format=None):
                 return self
 
-            def execute(self):
+            def execute(self, **_kwargs):
                 return {
                     "messages": [
                         {
@@ -332,3 +332,17 @@ class TestLeerHilo:
         assert mensajes[0]["to"] == "nmunoz@gomezyriesco.cl"
         assert mensajes[0]["cc"] == ""
         assert mensajes[0]["adjuntos"] == []
+
+
+class TestReintentosAnteCuotaDeGmail:
+    """Confirmado el 2026-09-21: una corrida con muchas llamadas seguidas
+    agotó la cuota de "units per minute" de Gmail (HttpError 403
+    rateLimitExceeded) y tumbó fases enteras sin reintentar. Cada
+    `.execute()` debe pasarle `num_retries` a googleapiclient, que reintenta
+    con backoff exponencial esos mismos errores (403 rate limit, 429, 5xx)
+    antes de propagar la excepción."""
+
+    def test_ninguna_llamada_execute_omite_num_retries(self):
+        fuente = inspect.getsource(gmail_client)
+        assert ".execute()" not in fuente
+        assert fuente.count(".execute(num_retries=") == fuente.count(".execute(")

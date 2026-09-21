@@ -88,3 +88,13 @@ class TestLoginNoInteractivo:
         monkeypatch.setattr(gmail_personal_client, "TOKEN_PATH", str(tmp_path / "no-existe.json"))
         with pytest.raises(RuntimeError, match="diagnostico-personal"):
             gmail_personal_client.obtener_credenciales(permitir_login=False)
+
+
+class TestReintentosAnteCuotaDeGmail:
+    """Ver TestReintentosAnteCuotaDeGmail en test_gmail_client.py — mismo
+    fix: cada `.execute()` debe pasarle `num_retries` a googleapiclient."""
+
+    def test_ninguna_llamada_execute_omite_num_retries(self):
+        fuente = inspect.getsource(gmail_personal_client)
+        assert ".execute()" not in fuente
+        assert fuente.count(".execute(num_retries=") == fuente.count(".execute(")

@@ -50,6 +50,12 @@ SCOPES = [
     "openid",
 ]
 
+# Cuántas veces reintenta una llamada la propia libreria de Google
+# (googleapiclient.http.HttpRequest.execute) antes de propagar la
+# excepción, con backoff exponencial incorporado — cubre 403
+# rateLimitExceeded/userRateLimitExceeded, 429 y 5xx (ver gmail_client.py).
+NUM_REINTENTOS_HTTP = 5
+
 # Único destinatario permitido de enviar_panel_estado() — ver esa función
 # más abajo. No es un parámetro: la garantía de que este módulo no puede
 # mandar correo a nadie más queda en el código, no en el llamador.
@@ -129,7 +135,7 @@ def diagnostico(credenciales=None, permitir_login: bool = True) -> dict:
     if credenciales is None:
         credenciales = obtener_credenciales(permitir_login=permitir_login)
     servicio_userinfo = build("oauth2", "v2", credentials=credenciales)
-    perfil = servicio_userinfo.userinfo().get().execute()
+    perfil = servicio_userinfo.userinfo().get().execute(num_retries=NUM_REINTENTOS_HTTP)
     return {"email": perfil.get("email"), "scopes": SCOPES}
 
 
@@ -153,4 +159,4 @@ def enviar_panel_estado(asunto: str, html: str, servicio=None) -> dict:
     mensaje["subject"] = asunto
     raw = base64.urlsafe_b64encode(mensaje.as_bytes()).decode("utf-8")
 
-    return servicio.users().messages().send(userId="me", body={"raw": raw}).execute()
+    return servicio.users().messages().send(userId="me", body={"raw": raw}).execute(num_retries=NUM_REINTENTOS_HTTP)

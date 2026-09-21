@@ -55,7 +55,7 @@ class _Ejecutable:
     def __init__(self, valor):
         self._valor = valor
 
-    def execute(self):
+    def execute(self, **_kwargs):
         return self._valor
 
 
@@ -398,3 +398,13 @@ class TestLoginNoInteractivo:
         monkeypatch.setattr(calendar_client, "TOKEN_PATH", str(tmp_path / "no-existe.json"))
         with pytest.raises(RuntimeError, match="diagnostico-calendario"):
             calendar_client.obtener_credenciales(permitir_login=False)
+
+
+class TestReintentosAnteCuotaDeGoogle:
+    """Ver TestReintentosAnteCuotaDeGmail en test_gmail_client.py — mismo
+    fix: cada `.execute()` debe pasarle `num_retries` a googleapiclient."""
+
+    def test_ninguna_llamada_execute_omite_num_retries(self):
+        fuente = inspect.getsource(calendar_client)
+        assert ".execute()" not in fuente
+        assert fuente.count(".execute(num_retries=") == fuente.count(".execute(")
