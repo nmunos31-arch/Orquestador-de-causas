@@ -311,6 +311,122 @@ class TestDeteccionDeAcuerdoYPago:
         }]
 
 
+class TestFechaCorteParaCausa:
+    def test_usa_la_ultima_revision_de_goteo_si_esta_registrada(self):
+        causa = {"goteo_ultima_revision": "2026-09-10"}
+        assert goteo._fecha_corte_para_causa(causa, "2026-09-15") == "2026-09-10"
+
+    def test_usa_una_semana_atras_si_la_causa_nunca_fue_revisada(self):
+        assert goteo._fecha_corte_para_causa({}, "2026-09-15") == "2026-09-08"
+
+
+class TestFiltrarMensajesDesdeFechaCorte:
+    def test_descarta_mensajes_anteriores_al_corte(self):
+        mensajes = [
+            {"cuerpo_texto": "viejo", "date": "Mon, 1 Sep 2026 10:00:00 -0400"},
+            {"cuerpo_texto": "nuevo", "date": "Fri, 12 Sep 2026 10:00:00 -0400"},
+        ]
+        filtrados = goteo._filtrar_mensajes_desde_fecha_corte(mensajes, "2026-09-10")
+        assert filtrados == [{"cuerpo_texto": "nuevo", "date": "Fri, 12 Sep 2026 10:00:00 -0400"}]
+
+    def test_conserva_mensajes_sin_fecha_parseable(self):
+        mensajes = [{"cuerpo_texto": "sin fecha", "date": ""}]
+        assert goteo._filtrar_mensajes_desde_fecha_corte(mensajes, "2026-09-10") == mensajes
+
+    def test_conserva_el_ultimo_mensaje_si_todo_el_hilo_es_anterior_al_corte(self):
+        mensajes = [
+            {"cuerpo_texto": "viejo1", "date": "Mon, 1 Sep 2026 10:00:00 -0400"},
+            {"cuerpo_texto": "viejo2", "date": "Tue, 2 Sep 2026 10:00:00 -0400"},
+        ]
+        filtrados = goteo._filtrar_mensajes_desde_fecha_corte(mensajes, "2026-09-10")
+        assert filtrados == [{"cuerpo_texto": "viejo2", "date": "Tue, 2 Sep 2026 10:00:00 -0400"}]
+
+
+class TestEvaluarAcuerdoYPagoAcotaPorFechaDeCorte:
+    def test_no_manda_a_claude_los_mensajes_anteriores_a_la_ultima_revision(self, tmp_path, monkeypatch):
+        ruta_registro = _registrar_causa_activa(
+            tmp_path, carpeta=str(tmp_path / "Perez con Alvi"), goteo_ultima_revision="2026-09-10",
+        )
+
+        ruta_mapa = tmp_path / "mapa_hilos.json"
+        ruta_mapa.write_text(json.dumps({
+            "rit_a_hilos": {"M-1-2026": ["thread-1"]},
+            "hilos": {
+                "thread-1": [
+                    {
+                        "id": "msg-1", "thread_id": "thread-1", "sender": "nmunoz@gomezyriesco.cl",
+                        "subject": "Re: Acuerdo", "date": "Mon, 1 Sep 2026 10:00:00 -0400",
+                        "cuerpo_texto": "mensaje viejo ya evaluado", "adjuntos": [],
+                    },
+                    {
+                        "id": "msg-2", "thread_id": "thread-1", "sender": "nmunoz@gomezyriesco.cl",
+                        "subject": "Re: Acuerdo", "date": "Fri, 12 Sep 2026 10:00:00 -0400",
+                        "cuerpo_texto": "mensaje nuevo", "adjuntos": [],
+                    },
+                ],
+            },
+        }), encoding="utf-8")
+
+        llamadas = []
+
+        def preguntar_falso(tarea, contexto, schema, **_kwargs):
+            llamadas.append(contexto)
+            return {"acuerdo_cerrado": False, "pago_confirmado": False, "justificacion": ""}
+
+        monkeypatch.setattr(goteo.reasoning, "preguntar", preguntar_falso)
+
+        contexto = {
+            "fecha_hoy": "2026-09-15",
+            "mapa_hilos": {"ruta": str(ruta_mapa)},
+            "mapa_audiencias": {"ruta": str(tmp_path / "no_existe.json")},
+        }
+
+        _correr_goteo(contexto, tmp_path, ruta_registro_causas=ruta_registro)
+
+        assert len(llamadas) == 1
+        assert [m["cuerpo"] for m in llamadas[0]["mensajes"]] == ["mensaje nuevo"]
+
+    def test_primera_revision_acota_a_una_semana_atras(self, tmp_path, monkeypatch):
+        ruta_registro = _registrar_causa_activa(tmp_path, carpeta=str(tmp_path / "Perez con Alvi"))
+
+        ruta_mapa = tmp_path / "mapa_hilos.json"
+        ruta_mapa.write_text(json.dumps({
+            "rit_a_hilos": {"M-1-2026": ["thread-1"]},
+            "hilos": {
+                "thread-1": [
+                    {
+                        "id": "msg-1", "thread_id": "thread-1", "sender": "nmunoz@gomezyriesco.cl",
+                        "subject": "Re: Acuerdo", "date": "Mon, 1 Sep 2026 10:00:00 -0400",
+                        "cuerpo_texto": "hace mas de una semana", "adjuntos": [],
+                    },
+                    {
+                        "id": "msg-2", "thread_id": "thread-1", "sender": "nmunoz@gomezyriesco.cl",
+                        "subject": "Re: Acuerdo", "date": "Sun, 13 Sep 2026 10:00:00 -0400",
+                        "cuerpo_texto": "dentro de la semana", "adjuntos": [],
+                    },
+                ],
+            },
+        }), encoding="utf-8")
+
+        llamadas = []
+
+        def preguntar_falso(tarea, contexto, schema, **_kwargs):
+            llamadas.append(contexto)
+            return {"acuerdo_cerrado": False, "pago_confirmado": False, "justificacion": ""}
+
+        monkeypatch.setattr(goteo.reasoning, "preguntar", preguntar_falso)
+
+        contexto = {
+            "fecha_hoy": "2026-09-15",
+            "mapa_hilos": {"ruta": str(ruta_mapa)},
+            "mapa_audiencias": {"ruta": str(tmp_path / "no_existe.json")},
+        }
+
+        _correr_goteo(contexto, tmp_path, ruta_registro_causas=ruta_registro)
+
+        assert [m["cuerpo"] for m in llamadas[0]["mensajes"]] == ["dentro de la semana"]
+
+
 class TestQuitarTextoCitado:
     def test_corta_en_primera_linea_de_cita_con_gt(self):
         cuerpo = "Hola,\nGracias por la info.\n\n> El día 1, X escribió:\n> contenido citado\n> mas citado"

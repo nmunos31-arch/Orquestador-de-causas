@@ -11,6 +11,7 @@ del plan de implementación)."""
 from __future__ import annotations
 
 import re
+from datetime import date, timedelta
 from pathlib import Path
 
 from gestion_causas import bitacora as bitacora_mod
@@ -19,10 +20,16 @@ from gestion_causas import gmail_client
 from gestion_causas import mapas as mapas_mod
 from gestion_causas import registro as registro_mod
 from gestion_causas import reasoning
+from gestion_causas import seguimiento as seguimiento_mod
 from gestion_causas.carpetas import carpeta_destino_por_tipo_audiencia
 from gestion_causas.seguimiento import es_remitente_confiable
 
 NOMBRES_ADJUNTO_EXCLUIDOS = {"invite.ics"}
+
+# Ventana de historial que se manda a Claude cuando una causa nunca fue
+# revisada por goteo (no hay `goteo_ultima_revision` de la que partir) —
+# evita mandar meses de historial de un hilo viejo en la primera revisión.
+DIAS_VENTANA_PRIMERA_REVISION = 7
 
 # Cota del contexto que le mandamos a claude -p por causa. Era 400_000
 # (~100k tokens en UNA llamada, por causa, por corrida) cuando su único
@@ -87,6 +94,47 @@ def _acotar_mensajes_por_tamano(mensajes: list[dict], limite: int) -> bool:
         mensajes[0]["cuerpo"] = mensajes[0]["cuerpo"][-limite:]
 
     return True
+
+
+def _fecha_corte_para_causa(causa_registrada: dict, fecha_hoy: str) -> str:
+    """Fecha (AAAA-MM-DD) desde la que se manda el historial de un hilo a
+    Claude para `goteo.acuerdo_y_pago`: la última revisión de goteo
+    registrada para la causa (los mensajes de antes ya se evaluaron en una
+    corrida anterior), o `DIAS_VENTANA_PRIMERA_REVISION` días atrás de hoy
+    si la causa nunca fue revisada."""
+    ultima_revision = causa_registrada.get("goteo_ultima_revision")
+    if ultima_revision:
+        return ultima_revision
+    return str(date.fromisoformat(fecha_hoy) - timedelta(days=DIAS_VENTANA_PRIMERA_REVISION))
+
+
+def _mensaje_es_desde(mensaje: dict, fecha_corte: str) -> bool:
+    """True si el header `date` de `mensaje` es de `fecha_corte` en adelante.
+    Un mensaje sin fecha parseable se conserva — más seguro que descartar
+    contenido que no se pudo ubicar en el tiempo."""
+    valor = mensaje.get("date")
+    if not valor:
+        return True
+    try:
+        fecha_mensaje = seguimiento_mod.parsear_fecha(valor)
+    except (TypeError, ValueError):
+        return True
+    if fecha_mensaje is None:
+        return True
+    return str(fecha_mensaje.date()) >= fecha_corte
+
+
+def _filtrar_mensajes_desde_fecha_corte(mensajes: list[dict], fecha_corte: str) -> list[dict]:
+    """Descarta mensajes de antes de `fecha_corte` (ver `_fecha_corte_para_causa`)
+    antes de mandar el hilo a Claude — el truncado por tamaño
+    (`_acotar_mensajes_por_tamano`) sigue como red de seguridad para hilos
+    que aun así queden largos. Si el filtro deja la lista vacía (todo el
+    hilo es de antes del corte), conserva el último mensaje: preguntarle a
+    Claude sobre la nada no sirve."""
+    filtrados = [m for m in mensajes if _mensaje_es_desde(m, fecha_corte)]
+    if not filtrados and mensajes:
+        return mensajes[-1:]
+    return filtrados
 
 
 SCHEMA_ACUERDO = {
@@ -156,19 +204,26 @@ def _accion_contexto_truncado(rit: str) -> dict:
 
 
 def _evaluar_acuerdo_y_pago(
-    rit: str, mensajes_hilos: list[dict], ruta_registro_causas: Path, acciones: list[dict]
+    rit: str, mensajes_hilos: list[dict], ruta_registro_causas: Path, acciones: list[dict],
+    fecha_hoy: str,
 ) -> None:
     """Corre la detección de acuerdo/pago para una causa (si hay hilos
     nuevos) y aplica la transición de estado correspondiente, agregando a
     `acciones` (mutado in place) el aviso para Nico — de éxito o de error.
     No hace nada si `mensajes_hilos` está vacío, ni si la causa ya está en el
     estado terminal `pago_recibido_pendiente_confirmar`. Un valor de
-    `estado_acuerdo` desconocido se trata igual que 'sin acuerdo todavía'."""
+    `estado_acuerdo` desconocido se trata igual que 'sin acuerdo todavía'.
+
+    Antes de preguntarle a Claude, acota `mensajes_hilos` a lo de la última
+    revisión en adelante (ver `_fecha_corte_para_causa`) — el resto ya se
+    evaluó en una corrida anterior."""
     if not mensajes_hilos:
         return
 
     causa_registrada = registro_mod.obtener_causa(rit, ruta=ruta_registro_causas) or {}
     estado_actual = causa_registrada.get("estado_acuerdo")
+    fecha_corte = _fecha_corte_para_causa(causa_registrada, fecha_hoy)
+    mensajes_hilos = _filtrar_mensajes_desde_fecha_corte(mensajes_hilos, fecha_corte)
 
     if estado_actual not in ("pendiente_pago", "pago_recibido_pendiente_confirmar"):
         deteccion = _detectar_acuerdo_y_pago(mensajes_hilos)
@@ -231,7 +286,9 @@ def correr(
             for mensaje in mapa_hilos.get("hilos", {}).get(thread_id, [])
         ]
 
-        _evaluar_acuerdo_y_pago(rit, mensajes_hilos, ruta_registro_causas, acciones)
+        _evaluar_acuerdo_y_pago(
+            rit, mensajes_hilos, ruta_registro_causas, acciones, contexto_corrida["fecha_hoy"]
+        )
 
         carpeta = causa.get("carpeta")
         if not carpeta:
