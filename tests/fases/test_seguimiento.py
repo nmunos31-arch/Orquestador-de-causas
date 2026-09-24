@@ -152,7 +152,7 @@ class TestProcesarPedido:
             {"thread_id": "thread-1", "tipo": "documentos", "fecha_envio": None, "rit": "M-1-2026"},
             "2026-09-16", {},
             rutas["ruta_registro_pedidos"], rutas["ruta_registro_seguimiento"], rutas["ruta_registro_causas"],
-            [], [],
+            [], [], {},
         )
         assert resultado == "sin_novedad"
 
@@ -175,7 +175,7 @@ class TestProcesarPedido:
              "items_pedidos": ["Contrato de trabajo"], "label_id": "label-1"},
             "2026-09-16", {},
             rutas["ruta_registro_pedidos"], rutas["ruta_registro_seguimiento"], rutas["ruta_registro_causas"],
-            [], [],
+            [], [], {},
         )
 
         assert resultado == "completo"
@@ -209,7 +209,7 @@ class TestProcesarPedido:
              "items_pedidos": ["Contrato de trabajo", "Finiquito"], "destinatario": "contraparte@externo.cl"},
             "2026-09-16", {},
             rutas["ruta_registro_pedidos"], rutas["ruta_registro_seguimiento"], rutas["ruta_registro_causas"],
-            [], items,
+            [], items, {},
         )
 
         assert resultado == "recordatorio"
@@ -242,7 +242,7 @@ class TestProcesarPedido:
             {"thread_id": "thread-1", "tipo": "acuerdo", "fecha_envio": "2026-09-15", "rit": "M-1-2026"},
             "2026-09-16", {},
             rutas["ruta_registro_pedidos"], rutas["ruta_registro_seguimiento"], rutas["ruta_registro_causas"],
-            [], [],
+            [], [], {},
         )
 
         # Todavía corresponde insistir (paso 24hs cumplido, el mensaje
@@ -250,6 +250,60 @@ class TestProcesarPedido:
         # sigue el flujo mecánico normal y crea la insistencia, en vez de
         # marcar el pedido como completo o con un recordatorio.
         assert resultado == "insistencia"
+
+    def test_acuerdo_con_externo_ignora_respuestas_internas(self, tmp_path, monkeypatch):
+        """Ofrecimiento hecho al abogado de la contraparte: un comentario
+        interno del equipo en la misma cadena no es la respuesta — no se le
+        pasa a Claude y se sigue el flujo de insistencia (caso M-875-2026)."""
+        rutas = _registrar_pedido(tmp_path, tipo="acuerdo", fecha_envio="2026-09-22")
+        monkeypatch.setattr(
+            seguimiento.gmail_client, "leer_hilo",
+            lambda thread_id, **k: [_mensaje(
+                sender="Diego Brito <dbrito@gomezyriesco.cl>", fecha="Tue, 22 Sep 2026 17:01:56 -0300",
+                cuerpo="[image: image.png]",
+            ), _mensaje(sender="Diego Brito <dbrito@gomezyriesco.cl>", fecha="Wed, 23 Sep 2026 10:00:00 -0300", cuerpo="ok")],
+        )
+        llamadas_claude = []
+        monkeypatch.setattr(seguimiento.reasoning, "preguntar", lambda *a, **k: llamadas_claude.append(1) or {"estado": "completo"})
+        monkeypatch.setattr(seguimiento.gmail_client, "listar_borradores_de_hilo", lambda *a, **k: [])
+        monkeypatch.setattr(seguimiento.gmail_client, "crear_borrador", lambda *a, **k: {"id": "draft-1"})
+        monkeypatch.setattr(seguimiento.bitacora_mod, "registrar", lambda *a, **k: None)
+
+        resultado = seguimiento._procesar_pedido(
+            {"thread_id": "thread-1", "tipo": "acuerdo", "fecha_envio": "2026-09-22", "rit": "M-1-2026",
+             "destinatario": "egon.schmidlin@cajbiobio.cl"},
+            "2026-09-24", {},
+            rutas["ruta_registro_pedidos"], rutas["ruta_registro_seguimiento"], rutas["ruta_registro_causas"],
+            [], [], {},
+        )
+
+        assert llamadas_claude == []
+        assert resultado == "insistencia"
+
+    def test_acuerdo_con_externo_si_cuenta_la_respuesta_de_la_contraparte(self, tmp_path, monkeypatch):
+        rutas = _registrar_pedido(tmp_path, tipo="acuerdo", fecha_envio="2026-09-22")
+        monkeypatch.setattr(
+            seguimiento.gmail_client, "leer_hilo",
+            lambda thread_id, **k: [_mensaje(
+                sender="Egon <egon.schmidlin@cajbiobio.cl>", fecha="Wed, 23 Sep 2026 10:00:00 -0300",
+                cuerpo="Mi representada rechaza la propuesta",
+            )],
+        )
+        monkeypatch.setattr(
+            seguimiento.reasoning, "preguntar",
+            lambda *a, **k: {"estado": "completo", "items_recibidos": [], "motivo": "rechaza"},
+        )
+        monkeypatch.setattr(seguimiento.bitacora_mod, "registrar", lambda *a, **k: None)
+
+        resultado = seguimiento._procesar_pedido(
+            {"thread_id": "thread-1", "tipo": "acuerdo", "fecha_envio": "2026-09-22", "rit": "M-1-2026",
+             "destinatario": "egon.schmidlin@cajbiobio.cl"},
+            "2026-09-24", {},
+            rutas["ruta_registro_pedidos"], rutas["ruta_registro_seguimiento"], rutas["ruta_registro_causas"],
+            [], [], {},
+        )
+
+        assert resultado == "completo"
 
     def test_anota_accion_si_claude_devuelve_error(self, tmp_path, monkeypatch):
         rutas = _registrar_pedido(tmp_path, fecha_envio="2026-09-01")
@@ -265,7 +319,7 @@ class TestProcesarPedido:
              "items_pedidos": ["Contrato de trabajo"]},
             "2026-09-16", {},
             rutas["ruta_registro_pedidos"], rutas["ruta_registro_seguimiento"], rutas["ruta_registro_causas"],
-            acciones, [],
+            acciones, [], {},
         )
 
         assert resultado == "sin_novedad"

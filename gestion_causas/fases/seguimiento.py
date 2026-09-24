@@ -27,6 +27,7 @@ from gestion_causas import seguimiento as seguimiento_mod
 
 CUENTA_TRABAJO = "nmunoz@gomezyriesco.cl"
 CUENTA_ACUERDO_DANIELA = "dsanchezv@smu.cl"
+DOMINIO_INTERNO = "@gomezyriesco.cl"
 
 UMBRAL_DIAS_HABILES_INSISTENCIA_DOCUMENTOS = 4
 
@@ -290,6 +291,7 @@ def _procesar_pedido(
     ruta_registro_causas: Path,
     acciones: list[dict],
     items: list[dict],
+    cache_hilos: dict,
 ) -> str:
     """Ejecuta el paso 3 completo para un pedido abierto. Devuelve uno de:
     'completo', 'insistencia', 'recordatorio', 'gestion_manual',
@@ -303,11 +305,13 @@ def _procesar_pedido(
         registro_mod.registrar_pedido(thread_id, {}, ruta=ruta_registro_pedidos)
         return "sin_novedad"
 
-    mensajes_hilo = gmail_client.leer_hilo(thread_id)
+    mensajes_hilo = _leer_hilo_cacheado(thread_id, cache_hilos)
     posteriores = _mensajes_posteriores(thread_id, mensajes_hilo, fecha_envio, rit, mapa_hilos)
     posteriores_reales = [
         m for m in posteriores if not seguimiento_mod.parece_cierre_sin_pedido(m.get("cuerpo_texto", ""))
     ]
+    if _es_acuerdo_con_externo(pedido):
+        posteriores_reales = [m for m in posteriores_reales if not _es_remitente_interno(m)]
 
     if posteriores_reales:
         clasificacion = _clasificar_pedido(pedido, posteriores_reales)
@@ -366,7 +370,39 @@ def _procesar_pedido(
     )
 
 
-def _verificar_borradores_pendientes(ruta_registro_causas: Path, ruta_registro_pedidos: Path) -> dict:
+def _es_remitente_interno(mensaje: dict) -> bool:
+    return seguimiento_mod.extraer_direccion(mensaje.get("sender", "")).endswith(DOMINIO_INTERNO)
+
+
+def _es_acuerdo_con_externo(pedido: dict) -> bool:
+    """True si el pedido es una propuesta/ofrecimiento (`tipo: acuerdo`)
+    hecha a la otra parte (destinatario fuera de @gomezyriesco.cl). En ese
+    caso solo cuenta como respuesta lo que escriba alguien externo: los
+    comentarios internos del equipo en la misma cadena (ej. Diego
+    respondiéndole solo a Nico en M-875-2026, 22.09.2026) no son la
+    respuesta de la contraparte y no deben cerrar el pedido."""
+    destinatario = (pedido.get("destinatario") or "").strip().lower()
+    return pedido.get("tipo") == "acuerdo" and bool(destinatario) and not destinatario.endswith(DOMINIO_INTERNO)
+
+
+def _leer_hilo_cacheado(thread_id: str, cache_hilos: dict) -> list[dict]:
+    """Reusa el hilo ya traído por `_generar_mapa_hilos_por_rit` (paso 1 del
+    ciclo, ver `mapas.leer_mapa_hilos`) en vez de volver a pedirle a Gmail el
+    hilo completo — `threads().get(format="full")` es la llamada más cara
+    (gestion_causas_seguimiento_quota_gmail, 2026-09-22: agotó la cuota
+    "units per minute" pidiendo de nuevo, pedido por pedido, hilos que el
+    barrido combinado ya había traído segundos antes). Cachea también los
+    hilos que sí hay que traer de nuevo (ej. un pedido dado de alta por
+    etiqueta, fuera del barrido por RIT) para no repetirlos dentro de la
+    misma corrida."""
+    if thread_id not in cache_hilos:
+        cache_hilos[thread_id] = gmail_client.leer_hilo(thread_id)
+    return cache_hilos[thread_id]
+
+
+def _verificar_borradores_pendientes(
+    ruta_registro_causas: Path, ruta_registro_pedidos: Path, cache_hilos: dict
+) -> dict:
     """Paso 1a: para cada causa con un borrador de documentos registrado,
     revisa si Nico ya lo envió (mismo criterio que
     `cli.cmd_verificar_borradores_pendientes`, llamando a `registro_mod`/
@@ -385,7 +421,7 @@ def _verificar_borradores_pendientes(ruta_registro_causas: Path, ruta_registro_p
         thread_id = causa.get("thread_id")
         ultimo_propio = None
         if thread_id:
-            for m in gmail_client.leer_hilo(thread_id):
+            for m in _leer_hilo_cacheado(thread_id, cache_hilos):
                 if seguimiento_mod.extraer_direccion(m.get("sender", "")) == CUENTA_TRABAJO:
                     ultimo_propio = m
 
@@ -478,7 +514,14 @@ def correr(
     notas: list[dict] = []
     items: list[dict] = []
 
-    verificacion = _verificar_borradores_pendientes(ruta_registro_causas, ruta_registro_pedidos)
+    # Se lee acá (antes de usarlo recién más abajo para el cruce por RIT) para
+    # poder cachear desde el arranque los hilos que el barrido combinado del
+    # paso 1 del ciclo ya trajo — evita que el resto de esta fase le vuelva a
+    # pedir a Gmail el hilo completo (gestion_causas_seguimiento_quota_gmail).
+    mapa_hilos = mapas_mod.leer_mapa_hilos(contexto_corrida)
+    cache_hilos: dict = dict(mapa_hilos.get("hilos") or {})
+
+    verificacion = _verificar_borradores_pendientes(ruta_registro_causas, ruta_registro_pedidos, cache_hilos)
     etiqueta = _pedidos_desde_etiqueta(ruta_registro_pedidos)
     for creado in etiqueta["creados"]:
         if not creado.get("rit"):
@@ -505,8 +548,6 @@ def correr(
             "notas": notas,
         }
 
-    mapa_hilos = mapas_mod.leer_mapa_hilos(contexto_corrida)
-
     completados = 0
     insistencias = 0
     recordatorios = 0
@@ -516,7 +557,7 @@ def correr(
         resultado = _procesar_pedido(
             pedido, fecha_hoy, mapa_hilos,
             ruta_registro_pedidos, ruta_registro_seguimiento, ruta_registro_causas,
-            acciones, items,
+            acciones, items, cache_hilos,
         )
         if resultado == "completo":
             completados += 1
