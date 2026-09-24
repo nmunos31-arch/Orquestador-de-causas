@@ -531,6 +531,52 @@ class TestProcesarOfrecimientoIntegracion:
         assert resumen["metricas"][1] == {"etiqueta": "Borradores de ofrecimiento creados", "valor": 1}
         assert resumen["items"] == [{"rit": "M-1-2026", "titulo": "Perez con Alvi", "detalle": "Borrador de ofrecimiento creado"}]
 
+    def test_ignora_la_cadena_con_el_abogado_externo_aunque_la_abra_nico(self, tmp_path, monkeypatch):
+        """La cadena con el abogado de la contraparte también la abre Nico
+        (@gomezyriesco.cl) y menciona el RIT, pero tiene un destinatario
+        externo — no es la cadena interna (caso M-875-2026)."""
+        ruta_registro = self._causa_lista_para_ofrecimiento(tmp_path)
+        ruta_mapa = _mapa_audiencias(tmp_path, {
+            "M-1-2026": {"fecha": "2026-10-01", "resumen": "Audiencia única", "tipo": "Única"},
+        })
+        self._mock_evaluacion(monkeypatch)
+        monkeypatch.setattr(agenda.bitacora_mod, "registrar", lambda *a, **k: None)
+
+        monkeypatch.setattr(
+            agenda.gmail_client, "buscar_hilos",
+            lambda query, **k: [{"id": "thread-externo"}, {"id": "thread-interno"}] if "gomezyriesco.cl" in query else [],
+        )
+        hilos = {
+            "thread-externo": [{
+                "sender": "Nico Muñoz <nmunoz@gomezyriesco.cl>",
+                "to": "Egon <egon@cajbiobio.cl>",
+                "cc": "Román Gomez <rgomez@gomezyriesco.cl>",
+                "cuerpo_texto": "Propuesta de acuerdo", "subject": 'Causa Laboral "Perez con Alvi" M-1-2026',
+            }],
+            "thread-interno": [{
+                "sender": "Nico Muñoz <nmunoz@gomezyriesco.cl>",
+                "to": "Román Gomez <rgomez@gomezyriesco.cl>",
+                "cuerpo_texto": "Estimado Román", "subject": 'Demanda laboral "Perez con Alvi" M-1-2026',
+            }],
+        }
+        monkeypatch.setattr(agenda.gmail_client, "leer_hilo", lambda thread_id, **k: hilos.get(thread_id, []))
+        monkeypatch.setattr(agenda.gmail_client, "listar_borradores_de_hilo", lambda thread_id, **k: [])
+
+        llamadas_crear = []
+        monkeypatch.setattr(
+            agenda.gmail_client, "crear_borrador",
+            lambda destinatario, asunto, cuerpo, **k: llamadas_crear.append((destinatario, asunto, cuerpo, k)) or {"id": "draft-1"},
+        )
+
+        contexto = {"fecha_hoy": "2026-09-17", "mapa_audiencias": {"ruta": str(ruta_mapa)}}
+        _correr_agenda(contexto, tmp_path, ruta_registro_causas=ruta_registro)
+
+        assert len(llamadas_crear) == 1
+        destinatario, asunto, _cuerpo, kwargs = llamadas_crear[0]
+        assert kwargs["thread_id"] == "thread-interno"
+        assert destinatario == "rgomez@gomezyriesco.cl"
+        assert asunto == 'Re: Demanda laboral "Perez con Alvi" M-1-2026'
+
     def test_crea_correo_nuevo_si_no_encuentra_la_cadena_interna(self, tmp_path, monkeypatch):
         ruta_registro = self._causa_lista_para_ofrecimiento(tmp_path)
         ruta_mapa = _mapa_audiencias(tmp_path, {

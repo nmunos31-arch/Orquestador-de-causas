@@ -228,9 +228,26 @@ def _buscar_cadena_interna(rit: str) -> tuple[str, str] | None:
         hilos = gmail_client.buscar_hilos(f"from:gomezyriesco.cl {rit}")
     for hilo in hilos:
         mensajes = gmail_client.leer_hilo(hilo["id"])
-        if mensajes and extraer_direccion(mensajes[0].get("sender", "")).endswith("@gomezyriesco.cl"):
+        if mensajes and _es_mensaje_interno(mensajes[0]):
             return hilo["id"], mensajes[0].get("subject", "")
     return None
+
+
+def _es_mensaje_interno(mensaje: dict) -> bool:
+    """True si remitente y todos los destinatarios (to/cc) del mensaje son
+    @gomezyriesco.cl. No alcanza con mirar el remitente: el correo que Nico
+    manda al abogado de la contraparte (ej. la propuesta de acuerdo, con
+    Román y el equipo en copia) también sale de @gomezyriesco.cl y menciona
+    el RIT, pero no es la cadena interna (M-875-2026, 23.09.2026: el
+    borrador de ofrecimiento quedó en la cadena con el abogado externo)."""
+    if not extraer_direccion(mensaje.get("sender", "")).endswith("@gomezyriesco.cl"):
+        return False
+    encabezados = [mensaje.get(campo, "") for campo in ("to", "cc") if mensaje.get(campo)]
+    return all(
+        direccion.strip().lower().endswith("@gomezyriesco.cl")
+        for _nombre, direccion in getaddresses(encabezados)
+        if direccion.strip()
+    )
 
 
 def _destinatarios_respuesta(thread_id: str) -> str:
