@@ -16,6 +16,7 @@ from __future__ import annotations
 import html
 import os
 import sys
+import unicodedata
 from pathlib import Path
 
 from gestion_causas import bitacora as bitacora_mod
@@ -66,6 +67,33 @@ QUERY_CANDIDATOS = (
     'after:2026/07/01 -label:"Procesado-GestionCausas"'
 )
 
+# Salcobrand y Preunic (a diferencia de SMU, Rendic, Super 10 y Alvi) nunca
+# notifican sus demandas con el cuadro-resumen estructurado — no es un correo
+# mal formado, es que esas dos empresas no lo generan. Si el cuadro viene
+# incompleto y el mensaje las menciona (por dominio del remitente o por texto
+# en asunto/cuerpo), se anota aparte y se marca el hilo como procesado para
+# no repetir el mismo aviso en cada corrida.
+_EMPRESAS_SIN_CUADRO_AUTOMATICO = {
+    "salcobrand": "Salcobrand",
+    "preunic": "Preunic",
+}
+
+
+def _empresa_sin_cuadro_automatico(mensaje: dict) -> str | None:
+    texto = " ".join([
+        mensaje.get("sender", ""),
+        mensaje.get("subject", ""),
+        mensaje.get("cuerpo_texto", ""),
+    ])
+    sin_tildes = "".join(
+        c for c in unicodedata.normalize("NFD", texto) if unicodedata.category(c) != "Mn"
+    ).lower()
+    for palabra_clave, nombre_canonico in _EMPRESAS_SIN_CUADRO_AUTOMATICO.items():
+        if palabra_clave in sin_tildes:
+            return nombre_canonico
+    return None
+
+
 LISTA_DOCUMENTOS_BASE = [
     "Contrato de trabajo y anexos",
     "Carta de despido",
@@ -113,10 +141,19 @@ def correr(
 
         campos = extraer_campos_cuadro(primer_mensaje.get("cuerpo_texto", ""))
         if not cuadro_completo(campos):
-            notas.append({
-                "tipo": "cuadro_incompleto",
-                "detalle": f"Hilo {thread_id}: cuadro incompleto o mal formado (falta Rit, Tribunal o Cuantía) — revisar a mano.",
-            })
+            empresa_sin_cuadro = _empresa_sin_cuadro_automatico(primer_mensaje)
+            if empresa_sin_cuadro:
+                notas.append({
+                    "tipo": "empresa_sin_cuadro_automatico",
+                    "detalle": f"Hilo {thread_id} ({empresa_sin_cuadro}): esta empresa no envía cuadro-resumen automático — cargar la causa a mano.",
+                })
+                label_procesado = gmail_client.obtener_o_crear_etiqueta(ETIQUETA_PROCESADO)
+                gmail_client.aplicar_etiqueta_a_hilo(thread_id, label_procesado)
+            else:
+                notas.append({
+                    "tipo": "cuadro_incompleto",
+                    "detalle": f"Hilo {thread_id}: cuadro incompleto o mal formado (falta Rit, Tribunal o Cuantía) — revisar a mano.",
+                })
             continue
 
         empresa = normalizar_empresa(campos.get("demandada", ""))
