@@ -308,11 +308,23 @@ def mapa_audiencias_por_rit(rits: list[str], eventos: list[dict], hoy: date | No
     (no una audiencia) se descarta antes de elegir "el primero futuro", para
     no confundirlo con una audiencia real de tipo ambiguo — si el RIT no
     tiene ningún otro evento futuro, queda sin audiencia próxima (se salta),
-    igual que si no tuviera ningún evento. Devuelve
+    igual que si no tuviera ningún evento.
+
+    Un RIT M- (procedimiento monitorio) no tiene etapa preparatoria separada
+    de la audiencia — solo audiencia única — así que un evento clasificado
+    como "Preparatoria" para un RIT M- también se descarta antes de elegir
+    "el primero futuro" (bug confirmado 2026-09-22 con M-875-2026: el
+    tribunal agendó, además de la "Audiencia Única" real del 29/09, una
+    "Reunión preparatoria" interna el 25/09 — al ser cronológicamente
+    anterior, `primer_evento_futuro` se quedaba con ella y clasificaba mal
+    toda la causa como "Preparatoria", salteando el hito de ofrecimiento a
+    Román y disparando de más el de la minuta). Devuelve
     `{rit: {"fecha": "YYYY-MM-DD", "resumen": str, "tipo": str}}`."""
     resultado = {}
     for rit in rits:
         candidatos = [e for e in buscar_eventos_por_rit(eventos, rit) if not es_evento_no_audiencia(e["resumen"])]
+        if rit.upper().startswith("M-"):
+            candidatos = [e for e in candidatos if clasificar_tipo_audiencia(e["resumen"]) != "Preparatoria"]
         evento = primer_evento_futuro(candidatos, hoy=hoy)
         if evento is None:
             continue

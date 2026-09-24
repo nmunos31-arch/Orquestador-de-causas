@@ -386,6 +386,30 @@ class TestMapaAudienciasPorRit:
         mapa = calendar_client.mapa_audiencias_por_rit(["T-995-2026"], eventos, hoy=date(2026, 9, 3))
         assert mapa == {}
 
+    def test_rit_monitorio_ignora_reunion_preparatoria_y_usa_la_audiencia_unica(self):
+        # Bug confirmado 2026-09-22 con M-875-2026: el tribunal agendó una
+        # "Reunión preparatoria" interna antes de la audiencia única real. Un
+        # RIT M- no tiene etapa preparatoria separada, así que esa reunión no
+        # debe tapar a la audiencia única aunque sea cronológicamente anterior.
+        eventos = [
+            {"fecha": date(2026, 9, 25), "resumen": 'Reunión preparatoria "Silva con Rendic Hermanos" M-875-2026'},
+            {"fecha": date(2026, 9, 29), "resumen": 'Audiencia Única "Silva con Rendic Hermanos" M-875-2026'},
+        ]
+        mapa = calendar_client.mapa_audiencias_por_rit(["M-875-2026"], eventos, hoy=date(2026, 9, 22))
+        assert mapa["M-875-2026"]["fecha"] == "2026-09-29"
+        assert mapa["M-875-2026"]["tipo"] == "Única"
+
+    def test_rit_no_monitorio_si_respeta_reunion_preparatoria_mas_proxima(self):
+        # El filtro es solo para RIT M- (monitorio); un O-/T- sí puede tener
+        # una etapa preparatoria real separada de la audiencia de juicio.
+        eventos = [
+            {"fecha": date(2026, 9, 25), "resumen": 'Reunión preparatoria "Tiznado con Salcobrand" O-744-2026'},
+            {"fecha": date(2026, 9, 29), "resumen": 'Audiencia de Juicio O-744-2026'},
+        ]
+        mapa = calendar_client.mapa_audiencias_por_rit(["O-744-2026"], eventos, hoy=date(2026, 9, 22))
+        assert mapa["O-744-2026"]["fecha"] == "2026-09-25"
+        assert mapa["O-744-2026"]["tipo"] == "Preparatoria"
+
 
 class TestLoginNoInteractivo:
     """En una corrida desatendida (contexto-corrida) el flujo de OAuth abre un
