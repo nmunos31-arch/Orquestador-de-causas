@@ -38,22 +38,48 @@ def _sin_tildes(texto: str) -> str:
 def extraer_campos_cuadro(cuerpo_texto: str) -> dict:
     """Recorre `cuerpo_texto` línea por línea buscando "Etiqueta: valor".
     Devuelve un dict solo con las claves que encontró (nunca claves con
-    valor vacío) — un campo ausente simplemente no aparece."""
+    valor vacío) — un campo ausente simplemente no aparece.
+
+    Además de "Etiqueta: valor" en una misma línea, reconoce el cuadro
+    resumen en formato tabla (SMU lo manda así casi siempre: una celda con
+    la etiqueta y la celda de al lado, sin ":", queda en la línea
+    siguiente, a veces con líneas en blanco entre celda y celda — ver hilos
+    con Rit M-417-2026, M-576-2026 y M-875-2026, 2026-09): si una línea es,
+    ella sola, una etiqueta conocida sin ":", se toma como valor la
+    siguiente línea no vacía."""
     campos: dict = {}
-    for linea in cuerpo_texto.splitlines():
+    lineas = cuerpo_texto.splitlines()
+    total = len(lineas)
+    i = 0
+    while i < total:
+        linea = lineas[i]
         coincidencia = _LINEA_ETIQUETA_VALOR.match(linea)
-        if not coincidencia:
+        if coincidencia:
+            etiqueta_cruda = re.sub(r"\s+", " ", _sin_tildes(coincidencia.group(1).strip()))
+            valor = coincidencia.group(2).strip()
+            if valor:
+                for clave, variantes in _ETIQUETAS.items():
+                    if clave not in campos and etiqueta_cruda in variantes:
+                        campos[clave] = valor
+                        break
+            i += 1
             continue
-        etiqueta_cruda = re.sub(r"\s+", " ", _sin_tildes(coincidencia.group(1).strip()))
-        valor = coincidencia.group(2).strip()
-        if not valor:
-            continue
-        for clave, variantes in _ETIQUETAS.items():
-            if clave in campos:
-                continue
-            if etiqueta_cruda in variantes:
-                campos[clave] = valor
+
+        etiqueta_sola = re.sub(r"\s+", " ", _sin_tildes(linea.strip()))
+        if etiqueta_sola:
+            for clave, variantes in _ETIQUETAS.items():
+                if clave in campos:
+                    continue
+                if etiqueta_sola not in variantes:
+                    continue
+                j = i + 1
+                while j < total and not lineas[j].strip():
+                    j += 1
+                if j < total and lineas[j].strip():
+                    campos[clave] = lineas[j].strip()
+                    i = j
                 break
+        i += 1
     return campos
 
 

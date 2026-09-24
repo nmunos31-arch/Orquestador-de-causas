@@ -76,6 +76,48 @@ class TestExtraerCamposCuadro:
         campos = extraer_campos_cuadro(cuerpo)
         assert campos["fecha_audiencia"] == "15:30 hrs, 15 de octubre de 2026"
 
+    def test_extrae_cuadro_en_formato_tabla_sin_dos_puntos(self):
+        """SMU casi siempre manda el cuadro como una tabla: la etiqueta
+        queda sola en una línea y el valor en la siguiente, sin ":" (hilo
+        Rit M-417-2026, 2026-09-07)."""
+        cuerpo = (
+            "Rit\n"
+            "M-417-2026\n"
+            "Tribunal\n"
+            "Juzgado de Letras del Trabajo de Los Ángeles\n"
+            "Demandante\n"
+            "Leticia Andrea Zapata Rodríguez\n"
+            "Cuantía\n"
+            "$4.380.371\n"
+        )
+        campos = extraer_campos_cuadro(cuerpo)
+        assert campos["rit"] == "M-417-2026"
+        assert campos["tribunal"] == "Juzgado de Letras del Trabajo de Los Ángeles"
+        assert campos["demandante"] == "Leticia Andrea Zapata Rodríguez"
+        assert campos["cuantia"] == "$4.380.371"
+        assert cuadro_completo(campos)
+
+    def test_extrae_cuadro_en_formato_tabla_con_lineas_en_blanco(self):
+        """Algunos correos dejan líneas en blanco entre la celda de
+        etiqueta y la de valor (hilo Rit M-21-2025, 2025-06-06)."""
+        cuerpo = (
+            "RIT\n"
+            "M-21-2025\n"
+            "\n"
+            "\n"
+            "Tribunal\n"
+            "Juzgado de Letras de Yungay\n"
+            "\n"
+            "\n"
+            "Cuantía\n"
+            "$3.789.798.-\n"
+        )
+        campos = extraer_campos_cuadro(cuerpo)
+        assert campos["rit"] == "M-21-2025"
+        assert campos["tribunal"] == "Juzgado de Letras de Yungay"
+        assert campos["cuantia"] == "$3.789.798.-"
+        assert cuadro_completo(campos)
+
 
 class TestTextoCitado:
     def test_sin_marcador_de_cita_devuelve_vacio(self):
