@@ -16,7 +16,9 @@ from __future__ import annotations
 import html
 import os
 import sys
+import tempfile
 import unicodedata
+from datetime import date
 from pathlib import Path
 
 from gestion_causas import bitacora as bitacora_mod
@@ -33,7 +35,7 @@ from gestion_causas.cuadro_resumen import (
 )
 from gestion_causas.empresas import normalizar_empresa
 from gestion_causas.gmail_client import COLOR_POR_EMPRESA, EMPRESAS_SIN_EXCEL, ETIQUETA_PROCESADO
-from gestion_causas.seguimiento import extraer_direccion
+from gestion_causas.seguimiento import extraer_direccion, parsear_fecha
 
 # `actualizar_informe_juicios.py` vive en un repo/carpeta separado del de
 # gestion_causas (es un script propio para actualizar el Excel de Juicios
@@ -71,8 +73,9 @@ QUERY_CANDIDATOS = (
 # notifican sus demandas con el cuadro-resumen estructurado — no es un correo
 # mal formado, es que esas dos empresas no lo generan. Si el cuadro viene
 # incompleto y el mensaje las menciona (por dominio del remitente o por texto
-# en asunto/cuerpo), se anota aparte y se marca el hilo como procesado para
-# no repetir el mismo aviso en cada corrida.
+# en asunto/cuerpo), los datos se sacan del PDF de la demanda adjunta (ver
+# `_campos_desde_demanda`); solo si eso no es posible se anota aparte y se
+# marca el hilo como procesado para no repetir el mismo aviso en cada corrida.
 _EMPRESAS_SIN_CUADRO_AUTOMATICO = {
     "salcobrand": "Salcobrand",
     "preunic": "Preunic",
@@ -92,6 +95,78 @@ def _empresa_sin_cuadro_automatico(mensaje: dict) -> str | None:
         if palabra_clave in sin_tildes:
             return nombre_canonico
     return None
+
+
+# Misma fecha que el `after:` de QUERY_CANDIDATOS. Gmail aplica `after:` a
+# cualquier mensaje del hilo, no al primero: un correo nuevo en un hilo de
+# una demanda antigua (ej. M-21-2025, hilo de junio 2025 que revivió el
+# 2026-09-25 por la etapa de pago) hace que el hilo entero vuelva a salir
+# como candidato. Solo cuenta como demanda nueva si el hilo EMPEZÓ después
+# del corte.
+FECHA_CORTE_HILOS = date(2026, 7, 1)
+
+
+def _hilo_iniciado_antes_del_corte(primer_mensaje: dict) -> bool:
+    valor = primer_mensaje.get("date")
+    if not valor:
+        return False
+    try:
+        return parsear_fecha(valor).date() < FECHA_CORTE_HILOS
+    except (TypeError, ValueError):
+        return False
+
+
+SCHEMA_CAMPOS_DEMANDA = {
+    "type": "object",
+    "properties": {
+        "rit": {"type": ["string", "null"]},
+        "tribunal": {"type": ["string", "null"]},
+        "demandante": {"type": ["string", "null"]},
+        "materia": {"type": ["string", "null"]},
+    },
+    "required": ["rit", "tribunal", "demandante", "materia"],
+}
+
+
+def _campos_desde_demanda(primer_mensaje: dict, empresa: str) -> dict:
+    """Para Salcobrand/Preunic (sin cuadro-resumen): saca RIT, tribunal,
+    demandante y materia directamente del PDF de la demanda adjunta, para
+    que la causa siga el mismo flujo que las de SMU. Devuelve los campos
+    (con `demandada` = `empresa`), `{}` si no hay PDF de demanda adjunto o
+    Claude no encontró el RIT, o `{"error": ...}` si falló la lectura."""
+    for adjunto in primer_mensaje.get("adjuntos", []):
+        if not adjunto["filename"].lower().endswith(".pdf"):
+            continue
+        contenido = gmail_client.descargar_adjunto(primer_mensaje["id"], adjunto["attachment_id"])
+        if carpetas_mod.es_adjunto_firma(adjunto["filename"], len(contenido)):
+            continue
+        with tempfile.TemporaryDirectory() as directorio:
+            ruta_pdf = Path(directorio) / "demanda.pdf"
+            ruta_pdf.write_bytes(contenido)
+            tarea = (
+                "Leé el archivo de la demanda laboral indicado más abajo con tu herramienta Read "
+                "(si es un PDF escaneado sin capa de texto, en modo visión; basta con la primera "
+                "página o las dos primeras, donde está la carátula/proveído del tribunal). "
+                "Extraé: (1) el RIT de la causa, tal como lo asigna el tribunal (ej. 'O-396-2026', "
+                "'M-12-2026', 'T-51-2026'); si la demanda todavía no tiene RIT asignado, null; "
+                "(2) el tribunal (ej. 'Juzgado de Letras del Trabajo de Temuco'); (3) el nombre "
+                "completo de la parte demandante; (4) la materia o acción principal (ej. "
+                "'Despido injustificado y cobro de prestaciones'). Usá null en lo que no puedas "
+                "determinar con certeza — no inventes un RIT."
+            )
+            respuesta = reasoning.preguntar(
+                tarea, {"empresa_demandada": empresa, "asunto_del_correo": primer_mensaje.get("subject", "")},
+                SCHEMA_CAMPOS_DEMANDA, ruta_archivo=ruta_pdf, etiqueta="smu.campos_demanda_sin_cuadro",
+            )
+        if respuesta.get("error"):
+            return {"error": respuesta["error"]}
+        if not respuesta.get("rit"):
+            return {}
+        campos = {clave: valor for clave, valor in respuesta.items() if valor}
+        campos["rit"] = registro_mod.normalizar_rit(campos["rit"])
+        campos["demandada"] = empresa
+        return campos
+    return {}
 
 
 LISTA_DOCUMENTOS_BASE = [
@@ -139,22 +214,39 @@ def correr(
         if not _origen_cadena(primer_mensaje)["valida"]:
             continue
 
+        if _hilo_iniciado_antes_del_corte(primer_mensaje):
+            label_procesado = gmail_client.obtener_o_crear_etiqueta(ETIQUETA_PROCESADO)
+            gmail_client.aplicar_etiqueta_a_hilo(thread_id, label_procesado)
+            continue
+
         campos = extraer_campos_cuadro(primer_mensaje.get("cuerpo_texto", ""))
         if not cuadro_completo(campos):
             empresa_sin_cuadro = _empresa_sin_cuadro_automatico(primer_mensaje)
             if empresa_sin_cuadro:
-                notas.append({
-                    "tipo": "empresa_sin_cuadro_automatico",
-                    "detalle": f"Hilo {thread_id} ({empresa_sin_cuadro}): esta empresa no envía cuadro-resumen automático — cargar la causa a mano.",
-                })
-                label_procesado = gmail_client.obtener_o_crear_etiqueta(ETIQUETA_PROCESADO)
-                gmail_client.aplicar_etiqueta_a_hilo(thread_id, label_procesado)
+                deteccion = _campos_desde_demanda(primer_mensaje, empresa_sin_cuadro)
+                if deteccion.get("rit"):
+                    campos = deteccion
+                elif deteccion.get("error"):
+                    acciones.append({
+                        "rit": thread_id,
+                        "que": f"Demanda de {empresa_sin_cuadro} sin cuadro-resumen: no se pudo leer el RIT desde el PDF ({deteccion['error']}) — se reintenta en la próxima corrida; si persiste, cargar la causa a mano.",
+                        "urgencia": "media",
+                    })
+                    continue
+                else:
+                    notas.append({
+                        "tipo": "empresa_sin_cuadro_automatico",
+                        "detalle": f"Hilo {thread_id} ({empresa_sin_cuadro}): esta empresa no envía cuadro-resumen automático y no se pudo sacar el RIT de la demanda adjunta — cargar la causa a mano.",
+                    })
+                    label_procesado = gmail_client.obtener_o_crear_etiqueta(ETIQUETA_PROCESADO)
+                    gmail_client.aplicar_etiqueta_a_hilo(thread_id, label_procesado)
+                    continue
             else:
                 notas.append({
                     "tipo": "cuadro_incompleto",
                     "detalle": f"Hilo {thread_id}: cuadro incompleto o mal formado (falta Rit, Tribunal o Cuantía) — revisar a mano.",
                 })
-            continue
+                continue
 
         empresa = normalizar_empresa(campos.get("demandada", ""))
         if empresa is None:

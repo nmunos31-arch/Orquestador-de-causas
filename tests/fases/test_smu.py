@@ -176,6 +176,87 @@ class TestFiltroDeEmpresaYDuplicados:
         )
         assert etiquetas_aplicadas == [("thread-1", "label-procesado")]
 
+    def test_salcobrand_sin_cuadro_saca_los_datos_de_la_demanda_y_sigue_el_flujo(self, tmp_path, monkeypatch):
+        carpeta_causa = tmp_path / "Minutas" / "Dinares con Salcobrand O-396-2026"
+        monkeypatch.setattr(smu.carpetas_mod, "buscar_carpeta_existente_por_rit", lambda rit: None)
+        monkeypatch.setattr(smu.carpetas_mod, "crear_carpeta_causa", lambda apellido, empresa, rit: carpeta_causa)
+        monkeypatch.setattr(smu.gmail_client, "descargar_adjunto", lambda message_id, attachment_id: b"contenido pdf falso")
+        llamadas_agregar_causa = []
+        monkeypatch.setattr(smu, "agregar_causa", lambda ruta_excel, datos: llamadas_agregar_causa.append(datos))
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda tarea, contexto, schema, ruta_archivo=None, **_kwargs: (
+            {"rit": "O-396-2026", "tribunal": "Juzgado de Letras del Trabajo de Temuco",
+             "demandante": "Marianela Viviana Dinares Yañez", "materia": None}
+            if schema is smu.SCHEMA_CAMPOS_DEMANDA
+            else {"fecha_despido": "2026-08-01", "ajuste_base_calculo": False, "otros_ajustes": []}
+        ))
+        etiquetas_aplicadas = []
+        monkeypatch.setattr(smu.gmail_client, "obtener_o_crear_etiqueta", lambda nombre, color=None: f"label-{nombre}")
+        monkeypatch.setattr(smu.gmail_client, "aplicar_etiqueta_a_hilo", lambda thread_id, label_id: etiquetas_aplicadas.append(label_id))
+        monkeypatch.setattr(smu.gmail_client, "listar_borradores_de_hilo", lambda thread_id: [])
+        monkeypatch.setattr(smu.gmail_client, "crear_borrador", lambda *a, **k: {"id": "draft-1"})
+        monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
+        monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: [{
+            "id": "msg-1", "thread_id": "thread-1", "sender": "Camila <cqueralto@sb.cl>",
+            "subject": "Notificacion demanda laboral Dinares con Salcobrand",
+            "date": "Fri, 25 Sep 2026 08:00:00 -0300",
+            "cuerpo_texto": "Hola Roman,\n\nAdjunto demanda laboral de Marianela Viviana Dinares Yañez.",
+            "adjuntos": [{"filename": "Epson_20260924.pdf", "attachment_id": "att-1", "mime_type": "application/pdf", "size": 8300391}],
+        }])
+
+        ruta_registro = tmp_path / "registro_causas.json"
+        resumen = smu.correr({"fecha_hoy": "2026-09-25"}, ruta_registro_causas=ruta_registro)
+
+        entrada = registro_mod.obtener_causa("O-396-2026", ruta=ruta_registro)
+        assert entrada["empresa"] == "Salcobrand"
+        assert entrada["borrador_documentos_draft_id"] == "draft-1"
+        assert entrada["aplica_excel"] is False
+        assert llamadas_agregar_causa == []
+        assert "label-Salcobrand" in etiquetas_aplicadas
+        assert f"label-{smu.ETIQUETA_PROCESADO}" in etiquetas_aplicadas
+        assert resumen["items"] == [{"rit": "O-396-2026", "titulo": "Salcobrand - Marianela Viviana Dinares Yañez"}]
+        assert not any(n["tipo"] == "empresa_sin_cuadro_automatico" for n in resumen["notas"])
+
+    def test_salcobrand_sin_cuadro_si_falla_la_lectura_no_marca_procesado(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(smu.gmail_client, "descargar_adjunto", lambda message_id, attachment_id: b"contenido pdf falso")
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda *a, **k: {"error": "timeout"})
+        etiquetas_aplicadas = []
+        monkeypatch.setattr(smu.gmail_client, "obtener_o_crear_etiqueta", lambda nombre, color=None: f"label-{nombre}")
+        monkeypatch.setattr(smu.gmail_client, "aplicar_etiqueta_a_hilo", lambda thread_id, label_id: etiquetas_aplicadas.append(label_id))
+        monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
+        monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: [{
+            "id": "msg-1", "thread_id": "thread-1", "sender": "cqueralto@sb.cl",
+            "subject": "Notificacion demanda laboral Dinares con Salcobrand", "cuerpo_texto": "Adjunto demanda.",
+            "adjuntos": [{"filename": "demanda.pdf", "attachment_id": "att-1", "mime_type": "application/pdf", "size": 8300391}],
+        }])
+
+        resumen = smu.correr({"fecha_hoy": "2026-09-25"}, ruta_registro_causas=tmp_path / "registro_causas.json")
+
+        assert resumen["items"] == []
+        assert etiquetas_aplicadas == []
+        assert any("timeout" in a["que"] for a in resumen["acciones"])
+
+    def test_hilo_iniciado_antes_del_corte_se_ignora_aunque_tenga_cuadro(self, tmp_path, monkeypatch):
+        llamadas = []
+        monkeypatch.setattr(smu.reasoning, "preguntar", lambda *a, **k: llamadas.append(1))
+        etiquetas_aplicadas = []
+        monkeypatch.setattr(smu.gmail_client, "obtener_o_crear_etiqueta", lambda nombre, color=None: f"label-{nombre}")
+        monkeypatch.setattr(smu.gmail_client, "aplicar_etiqueta_a_hilo", lambda thread_id, label_id: etiquetas_aplicadas.append(label_id))
+        monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
+        monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: [
+            {"id": "msg-1", "thread_id": "thread-1", "sender": "nalquinta@smu.cl", "subject": "DEMANDA RIT M-21-2025",
+             "date": "Fri, 6 Jun 2025 19:51:39 +0000", "cuerpo_texto": CUERPO_CUADRO_ALVI, "adjuntos": []},
+            {"id": "msg-2", "thread_id": "thread-1", "sender": "nmunoz@gomezyriesco.cl", "subject": "Re: DEMANDA",
+             "date": "Fri, 25 Sep 2026 05:10:28 -0700", "cuerpo_texto": "Etapa de pago.", "adjuntos": []},
+        ])
+
+        ruta_registro = tmp_path / "registro_causas.json"
+        resumen = smu.correr({"fecha_hoy": "2026-09-25"}, ruta_registro_causas=ruta_registro)
+
+        assert resumen["items"] == []
+        assert llamadas == []
+        assert registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro) is None
+        assert etiquetas_aplicadas == [f"label-{smu.ETIQUETA_PROCESADO}"]
+
     def test_rit_ya_registrado_no_genera_item_nuevo(self, tmp_path, monkeypatch):
         ruta_registro = tmp_path / "registro_causas.json"
         registro_mod.registrar_causa("M-1-2026", {"empresa": "Alvi"}, ruta=ruta_registro)
