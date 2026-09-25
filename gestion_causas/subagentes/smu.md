@@ -1,5 +1,18 @@
 # Subagente "smu" (Fases 1-2) del orquestador gestion-causas-orquestador
 
+> **⚠️ ARCHIVO HISTÓRICO — YA NO SE EJECUTA (desde 2026-09-XX, migración a
+> `ciclo.py`).** El ciclo automatizado (`python -m gestion_causas.ciclo`, disparado por
+> la tarea programada) corre esta fase con código Python puro en
+> `gestion_causas/fases/smu.py` — ya no despacha un subagente de Claude que lea este
+> prompt paso a paso. Este `.md` queda solo como referencia histórica del diseño y las
+> reglas de negocio acordadas con el usuario (regla de origen de la cadena, excepción de
+> Román, plantilla del cuadro-resumen, etc.), muchas de las cuales siguen vigentes en el
+> código nuevo. **Si necesitás cambiar el comportamiento real de la fase smu (por
+> ejemplo la query de búsqueda de correos), editá `fases/smu.py`, no este archivo** — un
+> cambio hecho solo acá no tiene ningún efecto en las corridas automáticas (así se
+> descubrió el 2026-09-25: la query de este archivo se corrigió primero acá por error,
+> sin efecto real, hasta notar que la query vigente vivía hardcodeada en `fases/smu.py`).
+
 Fases 1 y 2 del proyecto "Gestión automática de causas nuevas desde la casilla del
 trabajo" — ver el diseño completo en
 `C:\Users\usuario\.claude\plans\1-contrato-de-trabajo-streamed-pizza.md` y en
@@ -77,13 +90,38 @@ repita.
 
 Ejecuta:
 ```
-python -m gestion_causas.cli buscar-hilos --query "from:(smu.cl OR sb.cl OR gomezyriesco.cl) subject:DEMANDA after:2026/07/01 -label:\"Procesado-GestionCausas\"" --max-resultados 50
+python -m gestion_causas.cli buscar-hilos --query "from:(smu.cl OR sb.cl OR gomezyriesco.cl) (subject:DEMANDA OR subject:\"PLAN DE SALIDA\" OR \"Fecha de ingreso al Pjud\") after:2026/07/01 -label:\"Procesado-GestionCausas\"" --max-resultados 50
 ```
 Se incluye `gomezyriesco.cl` en la búsqueda a propósito, aunque esas cadenas no se
 procesan (ver paso 2b) — es la única forma de que la etiqueta `Procesado-GestionCausas`
 también las alcance y no las siga trayendo en cada corrida. El filtrado real de si una
 cadena es válida (smu.cl/sb.cl) o interna (gomezyriesco.cl) se hace por hilo, no en esta
 búsqueda.
+
+**Nota (2026-09-25):** el filtro de asunto original (`subject:DEMANDA`) no detectó un
+correo real de `dsanchezv@smu.cl` (causa M-23-2026, Soto/Rendic, JLT Yungay) cuyo asunto
+no traía la palabra "DEMANDA" — solo `M-23-2026 JLT YUNGAY (SOTO/RENDIC) PLAN DE SALIDA
+2026` — y por eso la búsqueda nunca lo trajo; se procesó a mano al notarlo. Se agregaron
+dos ramas más al OR, sin sacar `subject:DEMANDA` (Salcobrand, Preunic y las demás
+empresas casi siempre sí usan esa palabra en el asunto, así que se mantiene como ancla
+principal):
+- `subject:"PLAN DE SALIDA"` — nombre del programa de desvinculaciones de Rendic bajo el
+  que llega buena parte de esta correspondencia; red de respaldo para asuntos Rendic que
+  no calcen con el patrón "DEMANDA RIT ...".
+- `"Fecha de ingreso al Pjud"` (sin `subject:`, así busca en todo el mensaje) — es una
+  etiqueta fija de la plantilla del cuadro-resumen que SMU/sb.cl usa siempre,
+  independiente de cómo redacten el asunto ese día; es la red más robusta de las tres
+  porque ancla al contenido, no al asunto.
+
+Ojo con la sintaxis exacta de Gmail: el OR debe repetir `subject:` en cada rama que sea
+de asunto (`subject:DEMANDA OR subject:"PLAN DE SALIDA"`) — agrupar `subject:(A OR "B
+C")` funciona pero mezclar ahí una rama sin `subject:` no aplica el filtro de asunto a
+esa rama (queda como búsqueda de cualquier campo, que es lo que queremos para la frase
+del cuadro-resumen). Si en el futuro un cambio no trae los resultados esperados, probá
+primero sin la fecha/label para descartar que sea la sintaxis y no el contenido. Si
+aparece un asunto o plantilla nueva que tampoco calce con ninguna rama, agregala acá en
+vez de sacar el filtro por completo (sin él, la búsqueda por dominio trae demasiado
+volumen de correspondencia no relacionada).
 
 El `after:2026/07/01` es un límite acordado con el usuario: no procesar correspondencia
 anterior a julio de 2026. Razón: causas de meses anteriores que ya se resolvieron y se

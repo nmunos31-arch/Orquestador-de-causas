@@ -64,8 +64,24 @@ def _importar_actualizador_informe_juicios():
 
 RUTA_EXCEL_JUICIOS, agregar_causa = _importar_actualizador_informe_juicios()
 
+# Nota (2026-09-25): la causa M-23-2026 (Soto/Rendic, JLT Yungay) llego con el
+# asunto "M-23-2026 JLT YUNGAY (SOTO/RENDIC) PLAN DE SALIDA 2026", sin la
+# palabra "DEMANDA" -- la version anterior de esta query (solo subject:DEMANDA)
+# nunca la trajo. Se agregaron dos ramas mas al OR sin sacar subject:DEMANDA
+# (Salcobrand, Preunic y el resto casi siempre si usan esa palabra, asi que
+# sigue siendo el ancla principal):
+#   - subject:"PLAN DE SALIDA": nombre del programa de desvinculaciones de
+#     Rendic bajo el que llega buena parte de esta correspondencia.
+#   - "Fecha de ingreso al Pjud" (sin subject:, busca en todo el mensaje): es
+#     una etiqueta fija de la plantilla del cuadro-resumen que SMU/sb.cl usa
+#     siempre, independiente del asunto -- la red mas robusta de las tres
+#     porque ancla al contenido, no al asunto. Si aparece una plantilla nueva
+#     que tampoco calce, agregar otra rama aca en vez de sacar el filtro de
+#     asunto por completo (sin el, la busqueda por dominio trae demasiado
+#     volumen de correspondencia no relacionada).
 QUERY_CANDIDATOS = (
-    'from:(smu.cl OR sb.cl OR gomezyriesco.cl) subject:DEMANDA '
+    'from:(smu.cl OR sb.cl OR gomezyriesco.cl) '
+    '(subject:DEMANDA OR subject:"PLAN DE SALIDA" OR "Fecha de ingreso al Pjud") '
     'after:2026/07/01 -label:"Procesado-GestionCausas"'
 )
 
