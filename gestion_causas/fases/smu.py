@@ -116,6 +116,17 @@ def _hilo_iniciado_antes_del_corte(primer_mensaje: dict) -> bool:
         return False
 
 
+def _rit_ya_registrado_por_asunto(primer_mensaje: dict, ruta_registro_causas: Path) -> bool:
+    """Cuando el cuadro no se pudo parsear, intenta sacar el RIT del asunto
+    del correo (casi siempre lo trae, ej. "DEMANDA M-556-2026 JLT Chillán
+    ...") solo para chequear si esa causa ya está registrada — no para
+    procesarla como si el cuadro estuviera completo."""
+    rit = registro_mod.extraer_rit(primer_mensaje.get("subject", ""))
+    if not rit:
+        return False
+    return registro_mod.causa_ya_registrada(rit, ruta=ruta_registro_causas)
+
+
 SCHEMA_CAMPOS_DEMANDA = {
     "type": "object",
     "properties": {
@@ -221,6 +232,18 @@ def correr(
 
         campos = extraer_campos_cuadro(primer_mensaje.get("cuerpo_texto", ""))
         if not cuadro_completo(campos):
+            if _rit_ya_registrado_por_asunto(primer_mensaje, ruta_registro_causas):
+                # El cuadro no se pudo parsear en esta corrida (ej. el hilo
+                # sigue vivo por una respuesta interna que cita el cuadro
+                # original con otro formato de indentación), pero la causa
+                # ya está registrada — confirmado 2026-09-25 en el hilo
+                # 1a039a6776cdb394 (M-556-2026, ya cerrada), que sin este
+                # atajo repetía la nota "cuadro incompleto" en cada corrida
+                # sin llegar nunca a marcarse procesado. Se marca procesado
+                # para no repetir el aviso.
+                label_procesado = gmail_client.obtener_o_crear_etiqueta(ETIQUETA_PROCESADO)
+                gmail_client.aplicar_etiqueta_a_hilo(thread_id, label_procesado)
+                continue
             empresa_sin_cuadro = _empresa_sin_cuadro_automatico(primer_mensaje)
             if empresa_sin_cuadro:
                 deteccion = _campos_desde_demanda(primer_mensaje, empresa_sin_cuadro)

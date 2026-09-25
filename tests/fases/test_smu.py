@@ -153,6 +153,28 @@ class TestFiltroDeEmpresaYDuplicados:
         assert resumen["items"] == []
         assert any("cuadro" in n["detalle"].lower() for n in resumen["notas"])
 
+    def test_cuadro_incompleto_pero_rit_del_asunto_ya_registrado_no_anota_y_marca_procesado(self, tmp_path, monkeypatch):
+        ruta_registro = tmp_path / "registro_causas.json"
+        registro_mod.registrar_causa("M-556-2026", {"empresa": "Super 10"}, ruta=ruta_registro)
+        etiquetas_aplicadas = []
+        monkeypatch.setattr(smu.gmail_client, "obtener_o_crear_etiqueta", lambda *a, **k: "label-procesado")
+        monkeypatch.setattr(
+            smu.gmail_client, "aplicar_etiqueta_a_hilo",
+            lambda thread_id, label_id, servicio=None: etiquetas_aplicadas.append((thread_id, label_id)),
+        )
+        monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
+        monkeypatch.setattr(smu.gmail_client, "leer_hilo", lambda thread_id: [{
+            "id": "msg-1", "thread_id": "thread-1", "sender": "persona@smu.cl",
+            "subject": "Re: DEMANDA M-556-2026 JLT Chillán (Navarrete/S10) PLAN DE SALIDA 2026",
+            "cuerpo_texto": "Texto sin el cuadro reconocible en este formato.", "adjuntos": [],
+        }])
+
+        resumen = smu.correr({"fecha_hoy": "2026-09-25"}, ruta_registro_causas=ruta_registro)
+
+        assert resumen["items"] == []
+        assert resumen["notas"] == []
+        assert etiquetas_aplicadas == [("thread-1", "label-procesado")]
+
     def test_cuadro_incompleto_de_salcobrand_se_anota_distinto_y_marca_procesado(self, tmp_path, monkeypatch):
         etiquetas_aplicadas = []
         monkeypatch.setattr(smu.gmail_client, "buscar_hilos", lambda query, max_resultados=50: [{"id": "thread-1"}])
