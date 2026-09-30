@@ -28,7 +28,7 @@ class TestEstadoCausas:
         filas = estado_causas(hoy=date(2026, 8, 27), ruta=ruta)
         assert filas == [{
             "rit": "M-1-2026", "empresa": "Alvi", "demandante": "Soto",
-            "fase": "Recien registrada", "fecha_audiencia": "",
+            "fase": "Recien registrada", "fecha_audiencia": "", "evento_proximo": "",
             "dias_sin_actualizar": 0, "alerta": False,
         }]
 
@@ -127,6 +127,55 @@ class TestEstadoCausas:
         assert filas[0]["dias_sin_actualizar"] == 5
         assert filas[0]["alerta"] is False
 
+    def test_evento_proximo_cae_a_fecha_audiencia_del_registro_sin_mapa(self, tmp_path):
+        ruta = _escribir_registro(tmp_path, {
+            "M-10-2026": {
+                "rit": "M-10-2026", "empresa": "Alvi", "demandante": "Soto",
+                "fecha_audiencia": "2026-09-10", "ultima_actualizacion": "2026-08-27T10:00:00",
+            }
+        })
+        filas = estado_causas(hoy=date(2026, 8, 27), ruta=ruta)
+        assert filas[0]["evento_proximo"] == "10-09-2026"
+
+    def test_evento_proximo_usa_el_mapa_de_audiencias_por_sobre_el_registro(self, tmp_path):
+        ruta = _escribir_registro(tmp_path, {
+            "M-417-2026": {
+                "rit": "M-417-2026", "empresa": "Rendic Hermanos", "demandante": "Zapata",
+                "ultima_actualizacion": "2026-09-30T17:00:00",
+                # sin fecha_audiencia en el registro — la fuente viva es el mapa
+            }
+        })
+        ruta_mapa = tmp_path / "_audiencias_corrida.json"
+        ruta_mapa.write_text(json.dumps({
+            "rit_a_audiencia": {
+                "M-417-2026": {"fecha": "2026-11-04", "tipo": "Única", "resumen": "Audiencia Única Zapata"},
+            }
+        }, ensure_ascii=False), encoding="utf-8")
+        filas = estado_causas(hoy=date(2026, 9, 30), ruta=ruta, ruta_mapa_audiencias=ruta_mapa)
+        assert filas[0]["evento_proximo"] == "04-11-2026 (Única)"
+
+    def test_evento_proximo_muestra_etapa_procesal_en_vez_de_audiencia(self, tmp_path):
+        ruta = _escribir_registro(tmp_path, {
+            "O-75-2025": {
+                "rit": "O-75-2025", "empresa": "Rendic Hermanos", "demandante": "Osses",
+                "fecha_audiencia": "2026-01-29", "etapa_procesal": "recurso_nulidad",
+                "ultima_actualizacion": "2026-09-30T13:00:00",
+            }
+        })
+        filas = estado_causas(hoy=date(2026, 9, 30), ruta=ruta)
+        assert filas[0]["evento_proximo"] == "Recurso de nulidad"
+
+    def test_evento_proximo_vacio_si_la_causa_esta_cerrada(self, tmp_path):
+        ruta = _escribir_registro(tmp_path, {
+            "M-11-2026": {
+                "rit": "M-11-2026", "empresa": "Alvi", "demandante": "Soto",
+                "fecha_audiencia": "2026-09-10", "causa_cerrada": True,
+                "ultima_actualizacion": "2026-08-27T10:00:00",
+            }
+        })
+        filas = estado_causas(hoy=date(2026, 8, 27), ruta=ruta)
+        assert filas[0]["evento_proximo"] == ""
+
     def test_ordena_por_rit(self, tmp_path):
         ruta = _escribir_registro(tmp_path, {
             "M-9-2026": {"rit": "M-9-2026", "empresa": "Alvi", "demandante": "B"},
@@ -176,6 +225,30 @@ class TestGenerarPanelHtml:
         contenido = generar_panel_html([], hoy=date(2026, 8, 27), ruta_registro=ruta)
         assert "M-1-2026" in contenido
         assert "10-09-2026" in contenido
+
+    def test_columna_proximo_evento_usa_mapa_y_etapa_procesal(self, tmp_path):
+        ruta = _escribir_registro(tmp_path, {
+            "M-417-2026": {
+                "rit": "M-417-2026", "empresa": "Rendic Hermanos", "demandante": "Zapata",
+                "ultima_actualizacion": "2026-09-30T17:00:00",
+            },
+            "O-75-2025": {
+                "rit": "O-75-2025", "empresa": "Rendic Hermanos", "demandante": "Osses",
+                "etapa_procesal": "recurso_nulidad", "ultima_actualizacion": "2026-09-30T13:00:00",
+            },
+        })
+        ruta_mapa = tmp_path / "_audiencias_corrida.json"
+        ruta_mapa.write_text(json.dumps({
+            "rit_a_audiencia": {
+                "M-417-2026": {"fecha": "2026-11-04", "tipo": "Única", "resumen": "Audiencia Única Zapata"},
+            }
+        }, ensure_ascii=False), encoding="utf-8")
+        contenido = generar_panel_html(
+            [], hoy=date(2026, 9, 30), ruta_registro=ruta, ruta_mapa_audiencias=ruta_mapa,
+        )
+        assert "04-11-2026 (Única)" in contenido
+        assert "Recurso de nulidad" in contenido
+        assert "Próximo evento" in contenido
 
     def test_sin_causas_activas_no_falla(self, tmp_path):
         ruta = _escribir_registro(tmp_path, {})

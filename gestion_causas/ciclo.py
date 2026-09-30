@@ -104,6 +104,7 @@ def correr(
         "fecha_hoy": contexto_corrida.get("fecha_hoy"),
         "corrida": contexto_corrida.get("corrida"),
         "fases": fases,
+        "mapa_audiencias_ruta": contexto_corrida.get("mapa_audiencias", {}).get("ruta"),
     }
 
 
@@ -128,7 +129,14 @@ def _resumen_como_lista(fases: dict, es_corrida_manana: bool) -> list[dict]:
     return lista
 
 
-def _armar_y_enviar_panel(fases: dict, fecha_hoy: str, es_corrida_manana: bool, *, ruta_registro_causas: Path) -> dict:
+def _armar_y_enviar_panel(
+    fases: dict,
+    fecha_hoy: str,
+    es_corrida_manana: bool,
+    *,
+    ruta_registro_causas: Path,
+    mapa_audiencias_ruta: str | None = None,
+) -> dict:
     """Pasos 3 a 5 del SKILL.md original: arma el resumen de la corrida,
     revisa si quedaron borradores de documentos sin enviar de corridas
     anteriores, genera el HTML del panel y lo envía por correo. Nunca lanza
@@ -157,6 +165,7 @@ def _armar_y_enviar_panel(fases: dict, fecha_hoy: str, es_corrida_manana: bool, 
             hoy=date.fromisoformat(fecha_hoy) if fecha_hoy else None,
             ruta_registro=ruta_registro_causas,
             borradores_pendientes=borradores_pendientes,
+            ruta_mapa_audiencias=Path(mapa_audiencias_ruta) if mapa_audiencias_ruta else None,
         )
         resultado["panel_generado"] = True
     except Exception as e:
@@ -202,6 +211,7 @@ def correr_y_enviar_panel(
         resultado["fecha_hoy"],
         resultado["corrida"] == "manana",
         ruta_registro_causas=ruta_registro_causas,
+        mapa_audiencias_ruta=resultado.get("mapa_audiencias_ruta"),
     )
 
     try:

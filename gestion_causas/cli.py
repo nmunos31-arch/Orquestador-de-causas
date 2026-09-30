@@ -835,8 +835,10 @@ def cmd_panel_html(args) -> int:
             datos_borradores.get("pendientes", []) if isinstance(datos_borradores, dict) else datos_borradores
         )
 
+    ruta_mapa_audiencias = Path(args.ruta_mapa_audiencias) if args.ruta_mapa_audiencias else None
     contenido = panel_mod.generar_panel_html(
-        resumen, hoy=hoy, ruta_registro=ruta_registro, borradores_pendientes=borradores_pendientes
+        resumen, hoy=hoy, ruta_registro=ruta_registro, borradores_pendientes=borradores_pendientes,
+        ruta_mapa_audiencias=ruta_mapa_audiencias,
     )
     Path(args.salida).write_text(contenido, encoding="utf-8")
     _imprimir_json({"escrito": True, "ruta": args.salida})
@@ -1230,6 +1232,10 @@ def construir_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--borradores-json", default=None,
         help="Ruta a la salida de verificar-borradores-pendientes (o directamente su lista 'pendientes'), para sumarla a la bandeja de acciones",
+    )
+    p.add_argument(
+        "--ruta-mapa-audiencias", default=None,
+        help="Ruta al mapa RIT->audiencia de una corrida (ver mapa-audiencias); si no se indica, la columna 'Próximo evento' cae al fecha_audiencia guardado en el registro",
     )
     p.set_defaults(func=cmd_panel_html)
 

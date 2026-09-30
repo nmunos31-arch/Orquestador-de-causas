@@ -12,7 +12,9 @@ docs/2026-08-27-orquestador-gestion-causas-design.md).
 """
 
 import html as html_mod
+import json
 from datetime import date, datetime
+from pathlib import Path
 
 from . import agenda as agenda_mod
 from . import registro as registro_mod
@@ -21,6 +23,16 @@ from . import registro as registro_mod
 # se marca con alerta en el panel. Valor inicial acordado en el diseño;
 # ajustar aquí si en la práctica resulta muy sensible o muy laxo.
 DIAS_ALERTA_SIN_ACTUALIZAR = 7
+
+# Etiqueta legible por cada valor posible de `etapa_procesal` (campo del
+# registro para causas que ya salieron del circuito audiencia/acuerdo
+# normal, ej. sentencia dictada y recurso de nulidad en trámite — ver
+# O-75-2025, confirmado por Nico 30.09.2026). Un valor no listado se muestra
+# igual (con guiones bajos cambiados por espacios y capitalizado) en vez de
+# quedar en blanco.
+_ETIQUETA_ETAPA_PROCESAL = {
+    "recurso_nulidad": "Recurso de nulidad",
+}
 
 
 def _fase_actual(causa: dict) -> str:
@@ -54,6 +66,57 @@ def _formato_fecha(fecha_iso: str) -> str:
         return fecha_iso
 
 
+def _cargar_mapa_audiencias(ruta: Path | None) -> dict:
+    """Lee `rit_a_audiencia` del mapa que el ciclo arma una vez por corrida
+    (ver mapas.leer_mapa_audiencias) directamente por ruta, sin pasar por
+    `contexto_corrida` — el panel se genera después de que las 5 fases ya
+    corrieron, así que el archivo de esta misma corrida ya existe.
+
+    Sin `ruta` (nadie la pasó explícitamente) devuelve un mapa vacío — NO
+    cae sola a `RUTA_MAPA_AUDIENCIAS_CORRIDA`, para no leer por accidente el
+    archivo real del proyecto en llamados que no lo esperan (ej. los tests
+    de este módulo, que ya se llevaron un bug de aislamiento parecido con
+    registro_pedidos/registro_seguimiento — ver comentario en
+    TestBandejaAccionesEnPanel). El único llamador que debe ver el mapa vivo
+    de la corrida (ciclo.py) lo pasa a propósito."""
+    if not ruta or not Path(ruta).exists():
+        return {}
+    try:
+        return json.loads(Path(ruta).read_text(encoding="utf-8")).get("rit_a_audiencia", {})
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _etiqueta_etapa_procesal(etapa: str) -> str:
+    return _ETIQUETA_ETAPA_PROCESAL.get(etapa, etapa.replace("_", " ").capitalize())
+
+
+def _proximo_evento(causa: dict, audiencia: dict | None) -> str:
+    """Resuelve qué mostrar como "próximo evento" de la causa (pedido de
+    Nico 30.09.2026: la columna de audiencia del panel no reflejaba causas
+    como M-417-2026, cuya fecha vive en el calendario y no en el registro, ni
+    causas como O-75-2025, que ya no tienen una audiencia futura sino un
+    recurso de nulidad en trámite). Prioridad:
+    1. Causa cerrada: sin evento (ya no hay nada próximo que mostrar).
+    2. `etapa_procesal` registrada (ej. recurso de nulidad): se muestra esa
+       etapa en vez de una fecha — no hay audiencia próxima mientras dure.
+    3. Audiencia resuelta por el mapa de esta corrida (la fuente viva, leída
+       del calendario): fecha + tipo.
+    4. `fecha_audiencia` del registro (foto vieja, mejor que nada si todavía
+       no hay mapa de esta corrida, ej. tests o panel generado sin ciclo).
+    """
+    if causa.get("causa_cerrada"):
+        return ""
+    etapa = causa.get("etapa_procesal")
+    if etapa:
+        return _etiqueta_etapa_procesal(etapa)
+    if audiencia and audiencia.get("fecha"):
+        tipo = audiencia.get("tipo")
+        fecha = _formato_fecha(audiencia["fecha"])
+        return f"{fecha} ({tipo})" if tipo else fecha
+    return _formato_fecha(causa.get("fecha_audiencia") or "")
+
+
 def _dias_sin_actualizar(causa: dict, hoy: date) -> int | None:
     marca = causa.get("ultima_actualizacion")
     if not marca:
@@ -65,25 +128,32 @@ def _dias_sin_actualizar(causa: dict, hoy: date) -> int | None:
     return (hoy - fecha).days
 
 
-def estado_causas(hoy: date | None = None, ruta=None) -> list[dict]:
+def estado_causas(hoy: date | None = None, ruta=None, ruta_mapa_audiencias: Path | None = None) -> list[dict]:
     """Lee registro_causas.json (o `ruta` si se indica) y devuelve una lista
     de dicts, uno por causa, con: rit, empresa, demandante, fase,
-    fecha_audiencia, dias_sin_actualizar, alerta. Ordenada por RIT."""
+    fecha_audiencia, evento_proximo, dias_sin_actualizar, alerta. Ordenada
+    por RIT. `evento_proximo` (ver `_proximo_evento`) es lo que se muestra en
+    el panel: la audiencia viva del mapa de esta corrida, la etapa procesal
+    (ej. recurso de nulidad) si la causa ya no tiene audiencia pendiente, o
+    el `fecha_audiencia` del registro como respaldo."""
     if hoy is None:
         hoy = date.today()
     kwargs = {} if ruta is None else {"ruta": ruta}
     registro = registro_mod.cargar_registro_causas(**kwargs)
+    mapa_audiencias = _cargar_mapa_audiencias(ruta_mapa_audiencias)
 
     filas = []
     for causa in registro.values():
         dias = _dias_sin_actualizar(causa, hoy)
         cerrada = bool(causa.get("causa_cerrada"))
+        audiencia = mapa_audiencias.get(causa.get("rit", ""))
         filas.append({
             "rit": causa.get("rit", ""),
             "empresa": causa.get("empresa", ""),
             "demandante": causa.get("demandante") or causa.get("trabajador_demandado") or "",
             "fase": _fase_actual(causa),
             "fecha_audiencia": causa.get("fecha_audiencia") or "",
+            "evento_proximo": _proximo_evento(causa, audiencia),
             "dias_sin_actualizar": dias,
             "alerta": (not cerrada) and dias is not None and dias >= DIAS_ALERTA_SIN_ACTUALIZAR,
         })
@@ -409,7 +479,7 @@ def _fila_causa_html(causa: dict) -> str:
         f'<td style="padding:6px 10px;font-weight:600;white-space:nowrap;">{html_mod.escape(causa["rit"])}</td>'
         f'<td style="padding:6px 10px;min-width:160px;">{html_mod.escape(causa["demandante"])}</td>'
         f'<td style="padding:6px 10px;white-space:nowrap;">{fase_badge}</td>'
-        f'<td style="padding:6px 10px;white-space:nowrap;">{html_mod.escape(_formato_fecha(causa["fecha_audiencia"]))}</td>'
+        f'<td style="padding:6px 10px;white-space:nowrap;">{html_mod.escape(causa["evento_proximo"])}</td>'
         f'<td style="padding:6px 10px;white-space:nowrap;">{alerta_html}</td>'
         "</tr>"
     )
@@ -432,7 +502,7 @@ def _grupo_empresa_html(empresa: str, causas_empresa: list[dict]) -> str:
 <table cellpadding="0" cellspacing="0" style="width:100%;min-width:520px;border-collapse:collapse;font-size:13px;">
 <tr style="background:#f3f4f6;text-align:left;color:#374151;">
 <th style="padding:6px 10px;white-space:nowrap;">RIT</th><th style="padding:6px 10px;">Demandante</th>
-<th style="padding:6px 10px;white-space:nowrap;">Fase</th><th style="padding:6px 10px;white-space:nowrap;">Audiencia</th>
+<th style="padding:6px 10px;white-space:nowrap;">Fase</th><th style="padding:6px 10px;white-space:nowrap;">Próximo evento</th>
 <th style="padding:6px 10px;white-space:nowrap;">Alerta</th>
 </tr>
 {filas}
@@ -448,6 +518,7 @@ def generar_panel_html(
     ruta_registro_pedidos=None,
     ruta_registro_seguimiento=None,
     borradores_pendientes: list | None = None,
+    ruta_mapa_audiencias: Path | None = None,
 ) -> str:
     """Arma el HTML completo del panel: bandeja de acciones (todo lo que
     requiere que Nico haga algo, consolidado de las 4 fuentes que hoy
@@ -470,7 +541,7 @@ def generar_panel_html(
     """
     if hoy is None:
         hoy = date.today()
-    causas = estado_causas(hoy=hoy, ruta=ruta_registro)
+    causas = estado_causas(hoy=hoy, ruta=ruta_registro, ruta_mapa_audiencias=ruta_mapa_audiencias)
     pedidos = pedidos_abiertos_para_panel(
         hoy=hoy,
         ruta_pedidos=ruta_registro_pedidos,
