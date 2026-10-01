@@ -13,6 +13,7 @@ Nunca envía correos (solo deja borradores) ni toca el calendario."""
 from __future__ import annotations
 
 import html
+import re
 from datetime import date
 from email.utils import getaddresses
 from pathlib import Path
@@ -163,6 +164,8 @@ def _armar_cuerpo_ofrecimiento(
     fecha_legible = _formatear_fecha_larga(fecha_audiencia)
     tipo_legible = "de juicio" if tipo_audiencia == "Juicio" else "única"
 
+    un_solo_demandante = len(demandantes) == 1
+
     bloques = []
     ofertas = []
     total_general = 0
@@ -172,8 +175,9 @@ def _armar_cuerpo_ofrecimiento(
         total_persona = recargo + afc
         total_general += total_persona
         apellido = demandante["apellido"]
+        etiqueta = "" if un_solo_demandante else f"{apellido}:\n"
         bloques.append(
-            f"{apellido}:\n"
+            f"{etiqueta}"
             f"Recargo 30%: {_formatear_pesos(recargo)}\n"
             f"Devolución AFC: {_formatear_pesos(afc)}\n"
             f"Total: {_formatear_pesos(total_persona)}"
@@ -189,11 +193,11 @@ def _armar_cuerpo_ofrecimiento(
     if len(demandantes) > 1:
         cuerpo += f"Total demandado (todos): {_formatear_pesos(total_general)}\n\n"
 
-    if len(ofertas) == 1:
-        apellido, oferta = ofertas[0]
+    if un_solo_demandante:
+        _apellido, oferta = ofertas[0]
         pregunta = (
-            f"Por lo anterior, consulto si hago un ofrecimiento por {_formatear_pesos(oferta)} "
-            f"para don/doña {apellido}, equivalente al 60% del total"
+            f"Por lo anterior, consulto si hago un ofrecimiento por {_formatear_pesos(oferta)}, "
+            f"equivalente al 60% del total"
         )
     else:
         partes = [f"{_formatear_pesos(oferta)} para don/doña {apellido}" for apellido, oferta in ofertas]
@@ -205,8 +209,48 @@ def _armar_cuerpo_ofrecimiento(
     return cuerpo + pregunta + "\n\n\nAtentamente,"
 
 
+_CONECTORES_APELLIDO_COMPUESTO = {"san", "santa", "de", "del", "la", "las", "los", "von", "van", "mac", "mc", "di", "da", "dos"}
+
+
+def _consumir_apellido(tokens: list[str]) -> tuple[str, list[str]]:
+    """Saca del final de `tokens` un apellido (posiblemente compuesto, ej.
+    "San Martín", "De la Cruz"): el último token, más cualquier conector
+    (San/Santa/De/Del/...) que lo preceda. Devuelve (apellido, tokens
+    restantes)."""
+    if not tokens:
+        return "", tokens
+    tokens = list(tokens)
+    partes = [tokens.pop()]
+    while tokens and tokens[-1].lower() in _CONECTORES_APELLIDO_COMPUESTO:
+        partes.insert(0, tokens.pop())
+    return " ".join(p.title() for p in partes), tokens
+
+
+def _apellido_paterno(nombre_completo: str) -> str:
+    """Asume el formato chileno estándar "Nombre(s) ApellidoPaterno
+    ApellidoMaterno" (el registro no trae un campo de apellido separado):
+    saca primero el materno desde el final (respetando apellidos compuestos
+    como "San Martín" vía `_consumir_apellido`) y lo que queda después es el
+    paterno. Con un solo token (ej. "Sanhueza") lo devuelve tal cual; con
+    exactamente dos tokens asume "Nombre Apellido" (un solo apellido
+    conocido) y devuelve el segundo. Con nombres de pila que coincidan con
+    un conector (raro) o sin apellido paterno registrado, el heurístico
+    puede fallar — no hay forma confiable de resolverlo sin un campo
+    estructurado."""
+    tokens = nombre_completo.split()
+    if len(tokens) <= 1:
+        return tokens[0].title() if tokens else ""
+    if len(tokens) == 2:
+        return tokens[-1].title()
+
+    _materno, restantes = _consumir_apellido(tokens)
+    paterno, _restantes = _consumir_apellido(restantes)
+    return paterno
+
+
 def _armar_asunto_ofrecimiento(causa: dict, rit: str) -> str:
-    apellido = causa.get("demandante", "")
+    demandante = causa.get("demandante", "")
+    apellido = _apellido_paterno(demandante) if demandante else rit
     empresa = causa.get("empresa", "")
     return f'Demanda laboral "{apellido} con {empresa}" Rit {rit}'
 
@@ -228,9 +272,27 @@ def _buscar_cadena_interna(rit: str) -> tuple[str, str] | None:
         hilos = gmail_client.buscar_hilos(f"from:gomezyriesco.cl {rit}")
     for hilo in hilos:
         mensajes = gmail_client.leer_hilo(hilo["id"])
-        if mensajes and _es_mensaje_interno(mensajes[0]):
+        if mensajes and _es_mensaje_interno(mensajes[0]) and not _es_notificacion_calendario(mensajes[0]):
             return hilo["id"], mensajes[0].get("subject", "")
     return None
+
+
+_PATRON_NOTIFICACION_CALENDARIO = re.compile(
+    r"^(re: )?(evento (cancelado|actualizado|eliminado)|invitaci[oó]n:|nueva invitaci[oó]n:)",
+    re.IGNORECASE,
+)
+
+
+def _es_notificacion_calendario(mensaje: dict) -> bool:
+    """True si el primer mensaje de la cadena es una notificación de Google
+    Calendar (invitación, actualización o cancelación de evento) reenviada/
+    respondida entre internos, en vez de la cadena real que Nico abre con
+    Román al llegar la demanda. `_es_mensaje_interno` por sí sola no basta
+    para descartarla: un correo así puede ser 100% interno (M-393-2026,
+    30.09.2026: el borrador de ofrecimiento quedó mal encadenado en el hilo
+    "Evento cancelado con nota: Audiencia única ... M-393-2026" entre Nico y
+    Diego, en vez de abrir un correo nuevo)."""
+    return bool(_PATRON_NOTIFICACION_CALENDARIO.match((mensaje.get("subject") or "").strip()))
 
 
 def _es_mensaje_interno(mensaje: dict) -> bool:

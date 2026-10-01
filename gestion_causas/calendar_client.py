@@ -318,12 +318,22 @@ def mapa_audiencias_por_rit(rits: list[str], eventos: list[dict], hoy: date | No
     "Reunión preparatoria" interna el 25/09 — al ser cronológicamente
     anterior, `primer_evento_futuro` se quedaba con ella y clasificaba mal
     toda la causa como "Preparatoria", salteando el hito de ofrecimiento a
-    Román y disparando de más el de la minuta). Devuelve
-    `{rit: {"fecha": "YYYY-MM-DD", "resumen": str, "tipo": str}}`."""
+    Román y disparando de más el de la minuta).
+
+    Mismo problema aparece en causas no-M- cuando ya hay una "Audiencia de
+    juicio" agendada: si la etapa preparatoria ya se resolvió (porque el
+    tribunal fijó juicio), un evento "Reunión preparatoria" que aparezca
+    antes de esa fecha es una reunión interna de preparación para el
+    juicio, no una audiencia real — así que si entre los candidatos hay un
+    "Juicio", se descartan los "Preparatoria" igual que para M- (bug
+    confirmado 2026-10-01 con O-161-2026: "Reunión preparatoria" el 13/10
+    era reunión interna, la audiencia real era "Audiencia de juicio" el
+    15/10). Devuelve `{rit: {"fecha": "YYYY-MM-DD", "resumen": str, "tipo": str}}`."""
     resultado = {}
     for rit in rits:
         candidatos = [e for e in buscar_eventos_por_rit(eventos, rit) if not es_evento_no_audiencia(e["resumen"])]
-        if rit.upper().startswith("M-"):
+        tipos = [clasificar_tipo_audiencia(e["resumen"]) for e in candidatos]
+        if rit.upper().startswith("M-") or "Juicio" in tipos:
             candidatos = [e for e in candidatos if clasificar_tipo_audiencia(e["resumen"]) != "Preparatoria"]
         evento = primer_evento_futuro(candidatos, hoy=hoy)
         if evento is None:
