@@ -80,7 +80,7 @@ RUTA_EXCEL_JUICIOS, agregar_causa = _importar_actualizador_informe_juicios()
 #     asunto por completo (sin el, la busqueda por dominio trae demasiado
 #     volumen de correspondencia no relacionada).
 QUERY_CANDIDATOS = (
-    'from:(smu.cl OR sb.cl OR gomezyriesco.cl) '
+    'from:(smu.cl OR sb.cl OR unimarc.cl OR gomezyriesco.cl) '
     '(subject:DEMANDA OR subject:"PLAN DE SALIDA" OR "Fecha de ingreso al Pjud") '
     'after:2026/07/01 -label:"Procesado-GestionCausas"'
 )
@@ -573,7 +573,7 @@ def _evaluar_ajustes_demanda(campos: dict, ruta_demanda: Path) -> dict:
     )
 
 
-DOMINIOS_SMU = ("smu.cl", "sb.cl")
+DOMINIOS_SMU = ("smu.cl", "sb.cl", "unimarc.cl")
 
 
 def _es_reenvio_de_cuadro_confiable(primer_mensaje: dict) -> bool:

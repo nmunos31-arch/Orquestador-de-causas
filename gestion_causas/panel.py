@@ -91,6 +91,35 @@ def _etiqueta_etapa_procesal(etapa: str) -> str:
     return _ETIQUETA_ETAPA_PROCESAL.get(etapa, etapa.replace("_", " ").capitalize())
 
 
+def _caratula(demandante: str, empresa: str) -> str:
+    """Carátula de una causa ("Demandante con Empresa") a partir de los
+    campos del registro — usada para que cualquier mención de un RIT en el
+    panel venga acompañada del nombre del caso (pedido de Nico 14.10.2026:
+    antes el correo solo mostraba RITs sueltos en varias secciones)."""
+    demandante = (demandante or "").strip()
+    empresa = (empresa or "").strip()
+    if demandante and empresa:
+        return f"{demandante} con {empresa}"
+    return demandante or empresa
+
+
+def _mencion_rit(rit: str, mapa_caratulas: dict[str, str], titulo_respaldo: str = "") -> str:
+    """RIT en negrita + carátula entre comillas (ej. O-396-2026 "Dinares con
+    Salcobrand") para usar en cualquier lugar del panel que hoy solo
+    mostraba el RIT pelado. La carátula sale de `mapa_caratulas` (RIT ->
+    carátula, armado desde el registro de causas); si el RIT no está ahí
+    (causa no encontrada, o texto que no es un RIT) se usa
+    `titulo_respaldo` tal cual lo haya armado la fase."""
+    rit_html = html_mod.escape(str(rit or ""))
+    caratula = mapa_caratulas.get(str(rit or "")) or titulo_respaldo
+    partes = []
+    if rit_html:
+        partes.append(f'<span style="font-weight:600;">{rit_html}</span>')
+    if caratula:
+        partes.append(f'<span style="color:#6b7280;">&quot;{html_mod.escape(str(caratula))}&quot;</span>')
+    return " ".join(partes)
+
+
 def _proximo_evento(causa: dict, audiencia: dict | None) -> str:
     """Resuelve qué mostrar como "próximo evento" de la causa (pedido de
     Nico 30.09.2026: la columna de audiencia del panel no reflejaba causas
@@ -222,23 +251,23 @@ def _metricas_html(metricas: list) -> str:
     return f'<div style="margin-top:6px;">{chips}</div>'
 
 
-def _items_html(items: list) -> str:
+def _items_html(items: list, mapa_caratulas: dict[str, str]) -> str:
     """Lista de novedades por causa (rit/titulo/detalle/etiqueta) — la parte
     de un resumen de fase que hoy es un parrafo corrido; acá se separa en
-    una fila por causa."""
+    una fila por causa. La mención usa el RIT + carátula del registro
+    (ver `_mencion_rit`); si el RIT no está en el registro cae al `titulo`
+    que haya armado la fase."""
     if not items:
         return ""
     filas = []
     for it in items:
-        rit = html_mod.escape(str(it.get("rit", "")))
-        titulo = html_mod.escape(str(it.get("titulo", "")))
         detalle = html_mod.escape(str(it.get("detalle", "")))
         etiqueta = it.get("etiqueta")
         etiqueta_html = " " + _badge(html_mod.escape(str(etiqueta)), "#374151", "#e5e7eb") if etiqueta else ""
-        encabezado = " ".join(p for p in (rit, titulo) if p)
+        mencion = _mencion_rit(it.get("rit", ""), mapa_caratulas, str(it.get("titulo", "")))
         filas.append(
             f'<div style="margin-top:4px;padding-left:10px;border-left:2px solid #e5e7eb;">'
-            f'<span style="font-weight:600;">{encabezado}</span>{etiqueta_html}'
+            f'{mencion}{etiqueta_html}'
             f'<div style="color:#4b5563;">{detalle}</div>'
             "</div>"
         )
@@ -257,7 +286,7 @@ def _notas_html(notas: list) -> str:
 # Recordá: todo campo nuevo que se agregue a _fila_resumen_html o
 # _fila_causa_html debe pasar por html_mod.escape antes de insertarse en el
 # f-string — no hay un wrapper que lo obligue estructuralmente.
-def _fila_resumen_html(item: dict) -> str:
+def _fila_resumen_html(item: dict, mapa_caratulas: dict[str, str]) -> str:
     """Tarjeta de una fase en "Resumen de la corrida". Tres formatos
     posibles, en este orden de prioridad:
     1. `error` presente: tarjeta roja (fase que no pudo correr).
@@ -281,7 +310,7 @@ def _fila_resumen_html(item: dict) -> str:
         cuerpo = (
             f'<div style="color:#374151;margin-top:2px;">{html_mod.escape(str(titular))}</div>'
             f'{_metricas_html(item.get("metricas") or [])}'
-            f'{_items_html(item.get("items") or [])}'
+            f'{_items_html(item.get("items") or [], mapa_caratulas)}'
             f'{_notas_html(item.get("notas") or [])}'
         )
     else:
@@ -356,7 +385,7 @@ def acciones_consolidadas(
     return acciones
 
 
-def _bandeja_html(acciones: list) -> str:
+def _bandeja_html(acciones: list, mapa_caratulas: dict[str, str]) -> str:
     if not acciones:
         return (
             '<div style="border-left:4px solid #16a34a;background:#fff;padding:10px 14px;'
@@ -372,14 +401,14 @@ def _bandeja_html(acciones: list) -> str:
     for a in ordenadas:
         color, fondo = _COLOR_URGENCIA.get(a.get("urgencia"), _COLOR_URGENCIA_DEFAULT)
         badge_urgencia = _badge(html_mod.escape(str(a.get("urgencia") or "media")), color, fondo)
-        rit = html_mod.escape(str(a.get("rit") or ""))
-        rit_html = f'<span style="font-weight:600;">{rit}</span> ' if rit else ""
+        mencion = _mencion_rit(a.get("rit") or "", mapa_caratulas)
+        mencion_html = f"{mencion} " if mencion else ""
         que = html_mod.escape(str(a.get("que", "")))
         origen = html_mod.escape(str(_FASE_ETIQUETAS.get(a.get("origen"), a.get("origen", ""))))
         filas.append(
             f'<div style="border-left:4px solid {color};background:#fff;padding:8px 14px;'
             f'margin-bottom:6px;border-radius:0 6px 6px 0;">'
-            f"{badge_urgencia} {rit_html}{que}"
+            f"{badge_urgencia} {mencion_html}{que}"
             f'<div style="color:#9ca3af;font-size:11px;margin-top:2px;">{origen}</div>'
             "</div>"
         )
@@ -428,7 +457,7 @@ def pedidos_abiertos_para_panel(
     return filas
 
 
-def _pedidos_abiertos_html(pedidos: list) -> str:
+def _pedidos_abiertos_html(pedidos: list, mapa_caratulas: dict[str, str]) -> str:
     if not pedidos:
         return "<p>Sin pedidos abiertos.</p>"
     filas = []
@@ -444,7 +473,7 @@ def _pedidos_abiertos_html(pedidos: list) -> str:
             aviso_badge = _badge("sin avisos", "#4b5563", "#f3f4f6")
         filas.append(
             "<tr>"
-            f'<td style="padding:6px 10px;font-weight:600;white-space:nowrap;">{html_mod.escape(p["rit"])}</td>'
+            f'<td style="padding:6px 10px;">{_mencion_rit(p["rit"], mapa_caratulas)}</td>'
             f'<td style="padding:6px 10px;white-space:nowrap;">{html_mod.escape(p["tipo"])}</td>'
             f'<td style="padding:6px 10px;min-width:140px;">{html_mod.escape(p["destinatario"])}</td>'
             f'<td style="padding:6px 10px;white-space:nowrap;">{html_mod.escape(dias_texto)}</td>'
@@ -542,6 +571,9 @@ def generar_panel_html(
     if hoy is None:
         hoy = date.today()
     causas = estado_causas(hoy=hoy, ruta=ruta_registro, ruta_mapa_audiencias=ruta_mapa_audiencias)
+    mapa_caratulas = {
+        c["rit"]: _caratula(c.get("demandante", ""), c.get("empresa", "")) for c in causas if c.get("rit")
+    }
     pedidos = pedidos_abiertos_para_panel(
         hoy=hoy,
         ruta_pedidos=ruta_registro_pedidos,
@@ -550,13 +582,13 @@ def generar_panel_html(
     )
 
     acciones = acciones_consolidadas(resumen_corrida, causas, pedidos, borradores_pendientes)
-    bandeja_html = _bandeja_html(acciones)
+    bandeja_html = _bandeja_html(acciones, mapa_caratulas)
 
-    resumen_html = "".join(_fila_resumen_html(item) for item in resumen_corrida)
+    resumen_html = "".join(_fila_resumen_html(item, mapa_caratulas) for item in resumen_corrida)
     if not resumen_html:
         resumen_html = "<div>Sin fases ejecutadas</div>"
 
-    pedidos_html = _pedidos_abiertos_html(pedidos)
+    pedidos_html = _pedidos_abiertos_html(pedidos, mapa_caratulas)
 
     if causas:
         grupos: dict[str, list[dict]] = {}

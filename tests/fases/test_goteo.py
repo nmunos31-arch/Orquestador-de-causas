@@ -647,4 +647,4 @@ class TestAcotarMensajesPorTamano:
         assert mensajes[0]["cuerpo"] == "x" * 100
 
     def test_el_limite_por_defecto_es_acotado(self):
-        assert goteo.LIMITE_CONTEXTO_CHARS == 40_000
+        assert goteo.LIMITE_CONTEXTO_CHARS == 100_000

@@ -493,13 +493,19 @@ def _debe_generar_minuta(causa: dict, audiencia: dict, fecha_hoy: str) -> bool:
     return date.fromisoformat(fecha_hoy) >= hito
 
 
-def _docs_minuta_existentes(carpeta: Path) -> set[str]:
-    """Nombres de archivo de los .docx en `carpeta` cuyo nombre menciona
-    "minuta" (case-insensitive) — se compara antes/después de invocar la
-    skill para detectar, por efecto observable, si generó un archivo nuevo
-    (un exit code 0 del subprocess no garantiza que la skill haya completado
-    su flujo)."""
-    return {p.name for p in carpeta.glob("*.docx") if "minuta" in p.name.lower()}
+def _docs_minuta_existentes(carpeta: Path) -> dict[str, int]:
+    """Mapa nombre -> fecha de modificación (ns) de los .docx en `carpeta`
+    cuyo nombre menciona "minuta" (case-insensitive). Se compara antes/después
+    de invocar la skill para detectar, por efecto observable, si generó o
+    reescribió una minuta (un exit code 0 del subprocess no garantiza que la
+    skill haya completado su flujo). Comparar mtime además del nombre cubre
+    el caso en que la skill sobrescribe una minuta existente con el mismo
+    nombre."""
+    return {
+        p.name: p.stat().st_mtime_ns
+        for p in carpeta.glob("*.docx")
+        if "minuta" in p.name.lower()
+    }
 
 
 def _invocar_minuta_laboral(carpeta: Path, rit: str) -> dict:
@@ -549,7 +555,8 @@ def _procesar_minuta(
         return False
 
     docs_despues = _docs_minuta_existentes(carpeta)
-    if not (docs_despues - docs_antes):
+    generadas = [n for n, mtime in docs_despues.items() if docs_antes.get(n) != mtime]
+    if not generadas:
         acciones.append({
             "rit": rit,
             "que": (

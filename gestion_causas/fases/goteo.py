@@ -38,9 +38,12 @@ DIAS_VENTANA_PRIMERA_REVISION = 7
 # ("¿se cerró un acuerdo? ¿hay comprobante de pago?") se responde con los
 # mensajes recientes: el historial viejo solo agrega costo. Con
 # `_quitar_texto_citado` ya sacando el historial repetido de cada
-# respuesta, 40k caracteres (~10k tokens) cubren de sobra los últimos
-# mensajes reales de un hilo.
-LIMITE_CONTEXTO_CHARS = 40_000
+# respuesta, 40k caracteres (~10k tokens) cubrían de sobra los últimos
+# mensajes reales de un hilo — pero causas con mucho ida y vuelta en la
+# primera revisión (ventana de 7 días) seguían disparando el truncado como
+# red de seguridad. Subido a 100k para reducir esos falsos positivos sin
+# volver al costo de la cota original.
+LIMITE_CONTEXTO_CHARS = 100_000
 
 # Patrones de inicio de texto citado en clientes de correo en español
 # (Gmail y Outlook en modo texto plano) — cada correo de un hilo suele

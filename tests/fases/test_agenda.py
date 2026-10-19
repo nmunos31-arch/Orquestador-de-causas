@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 from gestion_causas import registro as registro_mod
@@ -253,6 +254,32 @@ class TestProcesarMinutaIntegracion:
 
         assert creado is False
         assert len(acciones) == 1
+
+    def test_detecta_una_minuta_preexistente_sobrescrita_con_el_mismo_nombre(self, tmp_path, monkeypatch):
+        """La skill reescribe la minuta existente (mismo nombre): debe contar
+        como generada y marcar el flag, aunque no aparezca un nombre nuevo."""
+        ruta_registro, carpeta = self._causa_lista_para_minuta(tmp_path)
+        existente = carpeta / "Minuta audiencia preparatoria M-1-2026.docx"
+        existente.write_bytes(b"version anterior")
+        os.utime(existente, ns=(1_000_000_000_000_000_000, 1_000_000_000_000_000_000))
+        monkeypatch.setattr(agenda.bitacora_mod, "registrar", lambda *a, **k: None)
+
+        def invocar_sobrescribe(prompt, carpeta_arg):
+            (carpeta_arg / "Minuta audiencia preparatoria M-1-2026.docx").write_bytes(b"version nueva")
+            return {"ok": True, "salida": ""}
+
+        monkeypatch.setattr(agenda.reasoning, "invocar_skill", invocar_sobrescribe)
+
+        acciones: list[dict] = []
+        creado = agenda._procesar_minuta(
+            {"rit": "M-1-2026", "carpeta": str(carpeta)}, self.AUDIENCIA_PREPARATORIA,
+            "2026-10-14", ruta_registro, acciones,
+        )
+
+        assert creado is True
+        assert acciones == []
+        entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
+        assert entrada["minuta_ejecutada"] is True
 
 
 class TestCorrerConAmbosHitosElMismoDia:
