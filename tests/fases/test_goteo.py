@@ -156,6 +156,107 @@ class TestGuardaAdjuntosDeRemitenteConfiable:
         assert resumen["items"] == []
 
 
+class TestExhibicionDeDocumentosPorAudienciaDeJuicio:
+    def _mapa_audiencias_juicio(self, tmp_path, rit="M-1-2026"):
+        ruta = tmp_path / "mapa_audiencias.json"
+        ruta.write_text(json.dumps({
+            "rit_a_audiencia": {rit: {"fecha": "2027-05-05", "resumen": "Audiencia de juicio", "tipo": "Juicio"}},
+        }), encoding="utf-8")
+        return ruta
+
+    def test_adjunto_posterior_a_la_preparatoria_va_a_exhibicion(self, tmp_path, monkeypatch):
+        carpeta_causa = tmp_path / "Perez con Alvi"
+        _registrar_causa_activa(tmp_path, carpeta=str(carpeta_causa), fecha_audiencia="2026-10-21")
+
+        ruta_mapa = tmp_path / "mapa_hilos.json"
+        ruta_mapa.write_text(json.dumps({
+            "rit_a_hilos": {"M-1-2026": ["thread-1"]},
+            "hilos": {
+                "thread-1": [{
+                    "id": "msg-1", "thread_id": "thread-1", "sender": "nombre@sb.cl",
+                    "subject": "Exhibición", "cuerpo_texto": "", "date": "Thu, 22 Oct 2026 10:00:00 -0300",
+                    "adjuntos": [{"filename": "nuevo.pdf", "attachment_id": "att-1", "mime_type": "application/pdf", "size": 1000}],
+                }],
+            },
+        }), encoding="utf-8")
+
+        monkeypatch.setattr(goteo.gmail_client, "descargar_adjunto", lambda message_id, attachment_id: b"contenido falso")
+        monkeypatch.setattr(goteo, "_detectar_acuerdo_y_pago", lambda mensajes: {"acuerdo_cerrado": False, "pago_confirmado": False, "justificacion": ""})
+
+        contexto = {
+            "fecha_hoy": "2026-10-22",
+            "mapa_hilos": {"ruta": str(ruta_mapa)},
+            "mapa_audiencias": {"ruta": str(self._mapa_audiencias_juicio(tmp_path))},
+        }
+
+        resumen = _correr_goteo(contexto, tmp_path)
+
+        assert (carpeta_causa / "Exhibición de documentos" / "nuevo.pdf").exists()
+        assert resumen["items"][0]["etiqueta"] == "Exhibición de documentos"
+
+    def test_adjunto_anterior_a_la_preparatoria_no_es_exhibicion_aunque_la_proxima_audiencia_sea_juicio(self, tmp_path, monkeypatch):
+        carpeta_causa = tmp_path / "Obreque con Salcobrand"
+        _registrar_causa_activa(tmp_path, carpeta=str(carpeta_causa), fecha_audiencia="2026-10-21")
+
+        ruta_mapa = tmp_path / "mapa_hilos.json"
+        ruta_mapa.write_text(json.dumps({
+            "rit_a_hilos": {"M-1-2026": ["thread-1"]},
+            "hilos": {
+                "thread-1": [{
+                    "id": "msg-1", "thread_id": "thread-1", "sender": "nombre@sb.cl",
+                    "subject": "Viejo correo recién procesado", "cuerpo_texto": "",
+                    "date": "Mon, 25 May 2026 08:00:00 -0400",
+                    "adjuntos": [{"filename": "viejo.pdf", "attachment_id": "att-1", "mime_type": "application/pdf", "size": 1000}],
+                }],
+            },
+        }), encoding="utf-8")
+
+        monkeypatch.setattr(goteo.gmail_client, "descargar_adjunto", lambda message_id, attachment_id: b"contenido falso")
+        monkeypatch.setattr(goteo, "_detectar_acuerdo_y_pago", lambda mensajes: {"acuerdo_cerrado": False, "pago_confirmado": False, "justificacion": ""})
+
+        contexto = {
+            "fecha_hoy": "2026-10-22",
+            "mapa_hilos": {"ruta": str(ruta_mapa)},
+            "mapa_audiencias": {"ruta": str(self._mapa_audiencias_juicio(tmp_path))},
+        }
+
+        resumen = _correr_goteo(contexto, tmp_path)
+
+        assert (carpeta_causa / "viejo.pdf").exists()
+        assert not (carpeta_causa / "Exhibición de documentos" / "viejo.pdf").exists()
+        assert "etiqueta" not in resumen["items"][0]
+
+    def test_sin_audiencia_preparatoria_registrada_todavia_no_es_exhibicion(self, tmp_path, monkeypatch):
+        carpeta_causa = tmp_path / "Perez con Alvi"
+        _registrar_causa_activa(tmp_path, carpeta=str(carpeta_causa))
+
+        ruta_mapa = tmp_path / "mapa_hilos.json"
+        ruta_mapa.write_text(json.dumps({
+            "rit_a_hilos": {"M-1-2026": ["thread-1"]},
+            "hilos": {
+                "thread-1": [{
+                    "id": "msg-1", "thread_id": "thread-1", "sender": "nombre@sb.cl",
+                    "subject": "Documento", "cuerpo_texto": "", "date": "Thu, 22 Oct 2026 10:00:00 -0300",
+                    "adjuntos": [{"filename": "doc.pdf", "attachment_id": "att-1", "mime_type": "application/pdf", "size": 1000}],
+                }],
+            },
+        }), encoding="utf-8")
+
+        monkeypatch.setattr(goteo.gmail_client, "descargar_adjunto", lambda message_id, attachment_id: b"contenido falso")
+        monkeypatch.setattr(goteo, "_detectar_acuerdo_y_pago", lambda mensajes: {"acuerdo_cerrado": False, "pago_confirmado": False, "justificacion": ""})
+
+        contexto = {
+            "fecha_hoy": "2026-10-22",
+            "mapa_hilos": {"ruta": str(ruta_mapa)},
+            "mapa_audiencias": {"ruta": str(self._mapa_audiencias_juicio(tmp_path))},
+        }
+
+        resumen = _correr_goteo(contexto, tmp_path)
+
+        assert (carpeta_causa / "doc.pdf").exists()
+        assert "etiqueta" not in resumen["items"][0]
+
+
 class TestDeteccionDeAcuerdoYPago:
     def test_registra_estado_acuerdo_pendiente_pago_cuando_claude_confirma_cierre(self, tmp_path, monkeypatch):
         ruta_registro = _registrar_causa_activa(tmp_path, carpeta=str(tmp_path / "Perez con Alvi"))

@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 
 from gestion_causas import registro as registro_mod
@@ -234,16 +233,18 @@ class TestProcesarMinutaIntegracion:
         assert len(acciones) == 1
         assert "no se encontró la carpeta" in acciones[0]["que"]
 
-    def test_no_confunde_un_docx_de_minuta_preexistente_con_uno_nuevo(self, tmp_path, monkeypatch):
-        """Si la carpeta ya tenía una minuta de una corrida anterior (re-
-        ejecución de la skill) y la skill no la regenera, no debe marcarse
-        como recién creada."""
+    def test_no_reinvoca_la_skill_si_ya_hay_una_minuta_en_la_carpeta(self, tmp_path, monkeypatch):
+        """Si la carpeta ya tiene una minuta (de una corrida anterior cuya
+        detección falló, o hecha a mano), no debe reinvocar la skill en cada
+        corrida: solo marca el hito como cumplido."""
         ruta_registro, carpeta = self._causa_lista_para_minuta(tmp_path)
         (carpeta / "Minuta audiencia preparatoria M-1-2026.docx").write_bytes(b"ya existia")
+        monkeypatch.setattr(agenda.bitacora_mod, "registrar", lambda *a, **k: None)
 
+        llamadas = []
         monkeypatch.setattr(
             agenda.reasoning, "invocar_skill",
-            lambda prompt, carpeta_arg: {"ok": True, "salida": ""},
+            lambda prompt, carpeta_arg: llamadas.append(1) or {"ok": True, "salida": ""},
         )
 
         acciones: list[dict] = []
@@ -253,31 +254,8 @@ class TestProcesarMinutaIntegracion:
         )
 
         assert creado is False
-        assert len(acciones) == 1
-
-    def test_detecta_una_minuta_preexistente_sobrescrita_con_el_mismo_nombre(self, tmp_path, monkeypatch):
-        """La skill reescribe la minuta existente (mismo nombre): debe contar
-        como generada y marcar el flag, aunque no aparezca un nombre nuevo."""
-        ruta_registro, carpeta = self._causa_lista_para_minuta(tmp_path)
-        existente = carpeta / "Minuta audiencia preparatoria M-1-2026.docx"
-        existente.write_bytes(b"version anterior")
-        os.utime(existente, ns=(1_000_000_000_000_000_000, 1_000_000_000_000_000_000))
-        monkeypatch.setattr(agenda.bitacora_mod, "registrar", lambda *a, **k: None)
-
-        def invocar_sobrescribe(prompt, carpeta_arg):
-            (carpeta_arg / "Minuta audiencia preparatoria M-1-2026.docx").write_bytes(b"version nueva")
-            return {"ok": True, "salida": ""}
-
-        monkeypatch.setattr(agenda.reasoning, "invocar_skill", invocar_sobrescribe)
-
-        acciones: list[dict] = []
-        creado = agenda._procesar_minuta(
-            {"rit": "M-1-2026", "carpeta": str(carpeta)}, self.AUDIENCIA_PREPARATORIA,
-            "2026-10-14", ruta_registro, acciones,
-        )
-
-        assert creado is True
         assert acciones == []
+        assert llamadas == []
         entrada = registro_mod.obtener_causa("M-1-2026", ruta=ruta_registro)
         assert entrada["minuta_ejecutada"] is True
 

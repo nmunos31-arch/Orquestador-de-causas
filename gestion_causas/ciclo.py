@@ -46,6 +46,7 @@ from gestion_causas import cli as cli_mod
 from gestion_causas import gmail_personal_client
 from gestion_causas import panel as panel_mod
 from gestion_causas import registro as registro_mod
+from gestion_causas import gmail_client
 from gestion_causas import uso_tokens
 from gestion_causas.fases import agenda as fases_agenda
 from gestion_causas.fases import calendario as fases_calendario
@@ -80,6 +81,7 @@ def correr(
     es_corrida_manana = contexto_corrida.get("corrida") == "manana"
 
     fases = {}
+    llamadas_gmail = {}
     for nombre, funcion, kwargs_extra in (
         ("smu", fases_smu.correr, {"ruta_registro_ceco": ruta_registro_ceco}),
         ("goteo", fases_goteo.correr, {"ruta_registro_ceco": ruta_registro_ceco}),
@@ -89,6 +91,7 @@ def correr(
     ):
         if nombre in FASES_SOLO_CORRIDA_MANANA and not es_corrida_manana:
             continue
+        antes_gmail = gmail_client.contador_llamadas()
         try:
             fases[nombre] = funcion(
                 contexto_corrida,
@@ -99,11 +102,14 @@ def correr(
             mensaje = f"{type(e).__name__}: {e}"
             bitacora_mod.registrar(f"Fase '{nombre}' falló: {mensaje}")
             fases[nombre] = {"fase": nombre, "error": mensaje}
+        despues_gmail = gmail_client.contador_llamadas()
+        llamadas_gmail[nombre] = {k: despues_gmail[k] - antes_gmail[k] for k in despues_gmail}
 
     return {
         "fecha_hoy": contexto_corrida.get("fecha_hoy"),
         "corrida": contexto_corrida.get("corrida"),
         "fases": fases,
+        "llamadas_gmail": llamadas_gmail,
         "mapa_audiencias_ruta": contexto_corrida.get("mapa_audiencias", {}).get("ruta"),
     }
 
@@ -252,7 +258,10 @@ def main(argv=None) -> int:
     que Nico se entere por el panel de que hay un token que reautorizar.
     `correr()` va a fallar cada fase por su cuenta y el panel las va a
     mostrar en error."""
-    if not _asegurar_contexto():
+    antes_contexto = gmail_client.contador_llamadas()
+    contexto_listo = _asegurar_contexto()
+    despues_contexto = gmail_client.contador_llamadas()
+    if not contexto_listo:
         bitacora_mod.registrar(
             "Ciclo: contexto de corrida no listo (token caído) — se corre igual "
             "para que el panel avise"
@@ -262,6 +271,14 @@ def main(argv=None) -> int:
     resultado = correr_y_enviar_panel()
     despues = uso_tokens.resumen()
 
+    resultado["llamadas_gmail"] = {
+        "contexto": {k: despues_contexto[k] - antes_contexto[k] for k in despues_contexto},
+        **resultado.get("llamadas_gmail", {}),
+    }
+    bitacora_mod.registrar(
+        "Ciclo: solicitudes a Gmail por etapa — "
+        + ", ".join(f"{n}={d['solicitudes']}" for n, d in resultado["llamadas_gmail"].items())
+    )
     resultado["uso_tokens"] = {
         "llamadas": despues["llamadas"] - antes["llamadas"],
         "input_tokens": despues["input_tokens"] - antes["input_tokens"],

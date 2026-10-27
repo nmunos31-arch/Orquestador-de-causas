@@ -545,6 +545,14 @@ def _procesar_minuta(
         return False
 
     docs_antes = _docs_minuta_existentes(carpeta)
+    if docs_antes:
+        # Ya hay una minuta en la carpeta (de una corrida anterior cuya
+        # detección de mtime falló, o hecha a mano): no reinvocar la skill
+        # en cada corrida — solo registrar el hito como cumplido.
+        registro_mod.registrar_causa(rit, {"minuta_ejecutada": True}, ruta=ruta_registro_causas)
+        bitacora_mod.registrar("Minuta ya existía en la carpeta — hito marcado sin reinvocar la skill", rit=rit)
+        return False
+
     resultado = _invocar_minuta_laboral(carpeta, rit)
     if resultado.get("error"):
         acciones.append({

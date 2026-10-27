@@ -305,9 +305,19 @@ def correr(
         else:
             tipo_audiencia = mapa_audiencias.get("rit_a_audiencia", {}).get(rit, {}).get("tipo")
             carpeta_causa = Path(carpeta)
-            carpeta_destino = carpeta_destino_por_tipo_audiencia(carpeta_causa, tipo_audiencia)
 
-            guardados = _guardar_adjuntos_confiables(mensajes_hilos, carpeta_destino)
+            carpeta_exhibicion = None
+            fecha_preparatoria = None
+            if tipo_audiencia == "Juicio":
+                fecha_preparatoria_registrada = causa.get("fecha_audiencia")
+                if fecha_preparatoria_registrada and fecha_preparatoria_registrada < contexto_corrida["fecha_hoy"]:
+                    fecha_preparatoria = fecha_preparatoria_registrada
+                    carpeta_exhibicion = carpeta_destino_por_tipo_audiencia(carpeta_causa, "Juicio")
+
+            guardados_normal, guardados_exhibicion = _guardar_adjuntos_confiables(
+                mensajes_hilos, carpeta_causa, carpeta_exhibicion, fecha_preparatoria,
+            )
+            guardados = guardados_normal + guardados_exhibicion
             if guardados:
                 con_documentos_nuevos += 1
                 item = {
@@ -315,13 +325,13 @@ def correr(
                     "titulo": f"{causa.get('demandante', '')} con {causa.get('empresa', '')}",
                     "detalle": f"{len(guardados)} documentos nuevos: {', '.join(g['filename'] for g in guardados)}",
                 }
-                if tipo_audiencia == "Juicio":
+                if guardados_exhibicion:
                     item["etiqueta"] = "Exhibición de documentos"
                 items.append(item)
                 bitacora_mod.registrar(
                     f"Goteo: se guardaron {len(guardados)} documentos nuevos "
                     f"({', '.join(g['filename'] for g in guardados)})"
-                    + (", en Exhibición de documentos por audiencia de juicio" if tipo_audiencia == "Juicio" else ""),
+                    + (", en Exhibición de documentos por audiencia de juicio" if guardados_exhibicion else ""),
                     rit=rit,
                 )
 
@@ -355,17 +365,62 @@ def correr(
     return resumen
 
 
-def _guardar_adjuntos_confiables(mensajes_hilos: list[dict], carpeta_destino: Path) -> list[dict]:
+def _mensaje_posterior_a_preparatoria(mensaje: dict, fecha_preparatoria: str) -> bool:
+    """True solo si el header `date` de `mensaje` se pudo parsear y cae en
+    `fecha_preparatoria` o después. A diferencia de `_mensaje_es_desde` (que
+    conserva los mensajes sin fecha clara porque ahí lo más seguro es no
+    descartar contenido), acá un mensaje sin fecha utilizable se trata como
+    False: es más seguro guardarlo en la carpeta normal de la causa que
+    etiquetarlo como "Exhibición de documentos" sin poder confirmar que es
+    posterior a la audiencia preparatoria ya realizada (ver memoria/feedback:
+    un adjunto viejo que recién ahora se guarda por primera vez no es
+    exhibición de documentos solo porque la próxima audiencia agendada sea de
+    juicio)."""
+    valor = mensaje.get("date")
+    if not valor:
+        return False
+    try:
+        fecha_mensaje = seguimiento_mod.parsear_fecha(valor)
+    except (TypeError, ValueError):
+        return False
+    if fecha_mensaje is None:
+        return False
+    return str(fecha_mensaje.date()) >= fecha_preparatoria
+
+
+def _guardar_adjuntos_confiables(
+    mensajes_hilos: list[dict],
+    carpeta_normal: Path,
+    carpeta_exhibicion: Path | None = None,
+    fecha_preparatoria: str | None = None,
+) -> tuple[list[dict], list[dict]]:
     """Guarda los adjuntos de `mensajes_hilos` que vengan de un remitente
     confiable, salvo `invite.ics` (ver subagentes/goteo.md, "Filtro de
     remitente confiable" y "Adjunto a excluir siempre"). `guardar_adjunto` ya
     hace de-dupe por nombre y por tamaño de bytes, así que no hace falta
-    listar la carpeta antes. Devuelve la lista de adjuntos efectivamente
-    guardados (con su `filename` original)."""
-    guardados = []
+    listar la carpeta antes.
+
+    Si se pasan `carpeta_exhibicion` y `fecha_preparatoria` (la audiencia
+    preparatoria de la causa, ya realizada), los adjuntos de un mensaje
+    fechado en o después de esa audiencia se guardan ahí; el resto —
+    incluidos los de fecha anterior o no parseable, que pueden ser correo
+    viejo que recién hoy se procesa por primera vez — van a `carpeta_normal`.
+    Sin esos dos parámetros, todo va a `carpeta_normal`.
+
+    Devuelve `(guardados_normal, guardados_exhibicion)`, cada uno con los
+    adjuntos efectivamente guardados (con su `filename` original)."""
+    guardados_normal: list[dict] = []
+    guardados_exhibicion: list[dict] = []
     for mensaje in mensajes_hilos:
         if not es_remitente_confiable(mensaje.get("sender", "")):
             continue
+        va_a_exhibicion = (
+            carpeta_exhibicion is not None
+            and fecha_preparatoria is not None
+            and _mensaje_posterior_a_preparatoria(mensaje, fecha_preparatoria)
+        )
+        carpeta_destino = carpeta_exhibicion if va_a_exhibicion else carpeta_normal
+        destino_lista = guardados_exhibicion if va_a_exhibicion else guardados_normal
         for adjunto in mensaje.get("adjuntos", []):
             nombre = adjunto["filename"]
             if nombre in NOMBRES_ADJUNTO_EXCLUIDOS:
@@ -375,8 +430,8 @@ def _guardar_adjuntos_confiables(mensajes_hilos: list[dict], carpeta_destino: Pa
                 continue
             resultado = carpetas_mod.guardar_adjunto(carpeta_destino, nombre, contenido)
             if resultado["guardado"]:
-                guardados.append(adjunto)
-    return guardados
+                destino_lista.append(adjunto)
+    return guardados_normal, guardados_exhibicion
 
 
 

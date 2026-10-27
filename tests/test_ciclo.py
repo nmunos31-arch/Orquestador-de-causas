@@ -314,3 +314,27 @@ class TestCicloDespachaSeguimientoYCalendarioSoloEnLaManana:
 
         assert resultado["fases"]["seguimiento"]["fase"] == "seguimiento"
         assert resultado["fases"]["calendario"]["fase"] == "calendario"
+
+
+class TestLlamadasGmailPorFase:
+    def test_cuenta_las_solicitudes_a_gmail_de_cada_fase(self, tmp_path, monkeypatch):
+        ruta_contexto = tmp_path / "_contexto_corrida.json"
+        ruta_contexto.write_text(json.dumps({"fecha_hoy": "2026-09-15", "corrida": "tarde"}), encoding="utf-8")
+
+        def fase_falsa(contexto, **kwargs):
+            ciclo.gmail_client._CONTADOR["solicitudes"] += 3
+            return {"fase": "x"}
+
+        monkeypatch.setattr(ciclo.fases_smu, "correr", fase_falsa)
+        monkeypatch.setattr(ciclo.fases_goteo, "correr", lambda c, **k: {"fase": "goteo"})
+        monkeypatch.setattr(ciclo.fases_agenda, "correr", lambda c, **k: {"fase": "agenda"})
+
+        resultado = ciclo.correr(
+            ruta_contexto=ruta_contexto,
+            ruta_registro_causas=tmp_path / "r.json",
+            ruta_registro_ceco=tmp_path / "c.json",
+        )
+
+        assert resultado["llamadas_gmail"]["smu"]["solicitudes"] == 3
+        assert resultado["llamadas_gmail"]["goteo"]["solicitudes"] == 0
+        assert "seguimiento" not in resultado["llamadas_gmail"]

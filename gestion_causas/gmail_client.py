@@ -36,6 +36,7 @@ Sheets, pero con un token.json SEPARADO autorizado con la cuenta del trabajo
 
 import base64
 import sys
+import time
 from pathlib import Path
 
 CLIENT_SECRET_PATH = str(
@@ -149,12 +150,60 @@ def obtener_credenciales(permitir_login: bool = True):
     return creds
 
 
+# Esperas (segundos) entre reintentos cuando Gmail corta por cuota "units per
+# minute": el backoff de googleapiclient (~30 s en total) no alcanza a cubrir
+# la ventana de 1 minuto, asi que se espera lo suficiente para que se renueve.
+ESPERAS_CUOTA_SEG = (20, 40, 65)
+
+_CONTADOR = {"solicitudes": 0, "esperas_por_cuota": 0}
+
+
+def contador_llamadas() -> dict:
+    """Copia del acumulado de solicitudes a Gmail hechas por este proceso
+    (cada reintento por cuota cuenta como una solicitud mas); los reintentos
+    internos de googleapiclient no se ven. Sirve para saber que fase consume
+    la cuota "units per minute": restar dos lecturas."""
+    return dict(_CONTADOR)
+
+
+def _es_error_de_cuota(error) -> bool:
+    estado = getattr(getattr(error, "resp", None), "status", None)
+    if estado == 429:
+        return True
+    contenido = error.content or b""
+    if isinstance(contenido, str):
+        contenido = contenido.encode("utf-8", "ignore")
+    return estado == 403 and b"ateLimitExceeded" in contenido
+
+
+def _solicitud_con_espera_por_cuota():
+    from googleapiclient.errors import HttpError
+    from googleapiclient.http import HttpRequest
+
+    class SolicitudConEsperaPorCuota(HttpRequest):
+        def execute(self, http=None, num_retries=0):
+            for espera in (*ESPERAS_CUOTA_SEG, None):
+                _CONTADOR["solicitudes"] += 1
+                try:
+                    return super().execute(num_retries=num_retries, http=http)
+                except HttpError as e:
+                    if espera is None or not _es_error_de_cuota(e):
+                        raise
+                    log(f"Cuota de Gmail agotada (403/429); esperando {espera}s para reintentar.")
+                    _CONTADOR["esperas_por_cuota"] += 1
+                    time.sleep(espera)
+
+    return SolicitudConEsperaPorCuota
+
+
 def construir_servicio(credenciales=None, permitir_login: bool = True):
     from googleapiclient.discovery import build
 
     if credenciales is None:
         credenciales = obtener_credenciales(permitir_login=permitir_login)
-    return build("gmail", "v1", credentials=credenciales)
+    return build(
+        "gmail", "v1", credentials=credenciales, requestBuilder=_solicitud_con_espera_por_cuota()
+    )
 
 
 def diagnostico(servicio=None, permitir_login: bool = True) -> dict:

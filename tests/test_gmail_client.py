@@ -346,3 +346,63 @@ class TestReintentosAnteCuotaDeGmail:
         fuente = inspect.getsource(gmail_client)
         assert ".execute()" not in fuente
         assert fuente.count(".execute(num_retries=") == fuente.count(".execute(")
+
+
+class TestEsperaPorCuota:
+    def _error(self, estado, cuerpo):
+        import httplib2
+        from googleapiclient.errors import HttpError
+
+        return HttpError(httplib2.Response({"status": estado}), cuerpo)
+
+    def _solicitud(self, monkeypatch, respuestas):
+        from googleapiclient.http import HttpRequest
+
+        esperas = []
+        monkeypatch.setattr(gmail_client.time, "sleep", esperas.append)
+        llamadas = []
+
+        def falso_execute(self, http=None, num_retries=0):
+            llamadas.append(num_retries)
+            r = respuestas.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return r
+
+        monkeypatch.setattr(HttpRequest, "execute", falso_execute)
+        clase = gmail_client._solicitud_con_espera_por_cuota()
+        solicitud = clase(None, lambda r, c: c, "http://x", "GET")
+        return solicitud, esperas, llamadas
+
+    def test_reintenta_tras_403_de_cuota_y_devuelve_resultado(self, monkeypatch):
+        err = self._error(403, b'{"error": {"errors": [{"reason": "rateLimitExceeded"}]}}')
+        solicitud, esperas, llamadas = self._solicitud(monkeypatch, [err, err, {"ok": 1}])
+        assert solicitud.execute(num_retries=5) == {"ok": 1}
+        assert esperas == [20, 40]
+        assert llamadas == [5, 5, 5]
+
+    def test_reintenta_tras_429(self, monkeypatch):
+        err = self._error(429, b"too many")
+        solicitud, esperas, _ = self._solicitud(monkeypatch, [err, {"ok": 1}])
+        assert solicitud.execute() == {"ok": 1}
+        assert esperas == [20]
+
+    def test_error_403_que_no_es_de_cuota_no_se_reintenta(self, monkeypatch):
+        import pytest
+        from googleapiclient.errors import HttpError
+
+        err = self._error(403, b'{"error": {"errors": [{"reason": "forbidden"}]}}')
+        solicitud, esperas, _ = self._solicitud(monkeypatch, [err])
+        with pytest.raises(HttpError):
+            solicitud.execute()
+        assert esperas == []
+
+    def test_se_rinde_tras_agotar_las_esperas(self, monkeypatch):
+        import pytest
+        from googleapiclient.errors import HttpError
+
+        err = self._error(403, b'{"reason": "userRateLimitExceeded"}')
+        solicitud, esperas, _ = self._solicitud(monkeypatch, [err] * 4)
+        with pytest.raises(HttpError):
+            solicitud.execute()
+        assert esperas == [20, 40, 65]
