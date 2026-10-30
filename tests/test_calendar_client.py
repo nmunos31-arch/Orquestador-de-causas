@@ -287,11 +287,13 @@ class TestClasificarTipoAudiencia:
     def test_audiencia_preparatoria(self):
         assert calendar_client.clasificar_tipo_audiencia("Audiencia preparatoria RIT O-1-2026") == "Preparatoria"
 
-    def test_reunion_preparatoria_es_alias_de_preparatoria(self):
-        # Redacción real y mayoritaria en el calendario del tribunal (confirmado
-        # 2026-09-01: 16 de 24 audiencias activas la usaban en vez de "audiencia
-        # preparatoria").
-        assert calendar_client.clasificar_tipo_audiencia('Reunión preparatoria "Tiznado con Salcobrand" M-744-2026') == "Preparatoria"
+    def test_reunion_preparatoria_no_es_alias_de_preparatoria(self):
+        # Confirmado 2026-10-30: Nico corrigió que "reunión preparatoria"
+        # nunca fue un alias válido de audiencia preparatoria — solo cuenta
+        # un título literal ("audiencia preparatoria"/"aud preparatoria").
+        # En la práctica, es_evento_no_audiencia la descarta antes de llegar
+        # acá (ver TestEsEventoNoAudiencia).
+        assert calendar_client.clasificar_tipo_audiencia('Reunión preparatoria "Tiznado con Salcobrand" M-744-2026') == "Ambiguo"
 
     def test_titulo_sin_tipo_reconocible_es_ambiguo(self):
         assert calendar_client.clasificar_tipo_audiencia("Reunion con cliente M-1-2026") == "Ambiguo"
@@ -313,10 +315,11 @@ class TestEsEventoNoAudiencia:
     def test_reunion_informativa_no_es_audiencia(self):
         assert calendar_client.es_evento_no_audiencia("Reunión informativa Sáez con Preunic") is True
 
-    def test_reunion_preparatoria_si_es_audiencia(self):
-        # No confundir con "reunión informativa": "reunión preparatoria" es
-        # alias real de la audiencia preparatoria (ver clasificar_tipo_audiencia).
-        assert calendar_client.es_evento_no_audiencia('Reunión preparatoria "Tiznado con Salcobrand" M-744-2026') is False
+    def test_reunion_preparatoria_no_es_audiencia(self):
+        # Confirmado 2026-10-30: "reunión preparatoria" nunca fue un alias
+        # válido de audiencia preparatoria — es una reunión interna como
+        # cualquier otra.
+        assert calendar_client.es_evento_no_audiencia('Reunión preparatoria "Tiznado con Salcobrand" M-744-2026') is True
 
     def test_audiencia_unica_si_es_audiencia(self):
         assert calendar_client.es_evento_no_audiencia("Audiencia Unica M-643-2026") is False
@@ -387,10 +390,11 @@ class TestMapaAudienciasPorRit:
         assert mapa == {}
 
     def test_rit_monitorio_ignora_reunion_preparatoria_y_usa_la_audiencia_unica(self):
-        # Bug confirmado 2026-09-22 con M-875-2026: el tribunal agendó una
-        # "Reunión preparatoria" interna antes de la audiencia única real. Un
-        # RIT M- no tiene etapa preparatoria separada, así que esa reunión no
-        # debe tapar a la audiencia única aunque sea cronológicamente anterior.
+        # Bug confirmado 2026-09-22 con M-875-2026, y confirmado 2026-10-30
+        # que "reunión preparatoria" nunca es audiencia (para ningún RIT):
+        # el tribunal agendó una "Reunión preparatoria" interna antes de la
+        # audiencia única real, y esa reunión no debe tapar a la audiencia
+        # única aunque sea cronológicamente anterior.
         eventos = [
             {"fecha": date(2026, 9, 25), "resumen": 'Reunión preparatoria "Silva con Rendic Hermanos" M-875-2026'},
             {"fecha": date(2026, 9, 29), "resumen": 'Audiencia Única "Silva con Rendic Hermanos" M-875-2026'},
@@ -399,16 +403,18 @@ class TestMapaAudienciasPorRit:
         assert mapa["M-875-2026"]["fecha"] == "2026-09-29"
         assert mapa["M-875-2026"]["tipo"] == "Única"
 
-    def test_rit_no_monitorio_si_respeta_reunion_preparatoria_mas_proxima(self):
-        # El filtro es solo para RIT M- (monitorio); un O-/T- sí puede tener
-        # una etapa preparatoria real separada de la audiencia de juicio.
+    def test_reunion_preparatoria_en_rit_no_monitorio_tampoco_tapa_la_audiencia_real(self):
+        # Confirmado 2026-10-30: a diferencia del supuesto anterior (ver bug
+        # 2026-10-01 con O-161-2026), "reunión preparatoria" no es un caso
+        # especial a filtrar solo cuando hay Juicio entre los candidatos —
+        # es_evento_no_audiencia ya la descarta siempre, sea RIT M- o no.
         eventos = [
             {"fecha": date(2026, 9, 25), "resumen": 'Reunión preparatoria "Tiznado con Salcobrand" O-744-2026'},
             {"fecha": date(2026, 9, 29), "resumen": 'Audiencia de Juicio O-744-2026'},
         ]
         mapa = calendar_client.mapa_audiencias_por_rit(["O-744-2026"], eventos, hoy=date(2026, 9, 22))
-        assert mapa["O-744-2026"]["fecha"] == "2026-09-25"
-        assert mapa["O-744-2026"]["tipo"] == "Preparatoria"
+        assert mapa["O-744-2026"]["fecha"] == "2026-09-29"
+        assert mapa["O-744-2026"]["tipo"] == "Juicio"
 
 
 class TestLoginNoInteractivo:

@@ -247,11 +247,19 @@ def es_evento_no_audiencia(resumen: str) -> bool:
     Confirmado 2026-09-03: Nico corrigió que O-809-2026 ("Vence plazo para
     contestar"), T-186-2026 (idem), T-995-2026 (idem) y T-26-2026 ("Reunión
     informativa") no son audiencias — no hay que forzarlas a
-    Única/Preparatoria/Juicio ni reportarlas como "audiencia ambigua"."""
+    Única/Preparatoria/Juicio ni reportarlas como "audiencia ambigua".
+
+    Confirmado 2026-10-30: Nico corrigió que M-23-2026 ("Reunión de
+    coordinación") tampoco es audiencia, y que "reunión preparatoria" nunca
+    fue un alias válido de audiencia — solo cuenta como audiencia un título
+    que diga literalmente "audiencia preparatoria", "audiencia de juicio" o
+    "audiencia única" (ver clasificar_tipo_audiencia). Cualquier título que
+    diga "reunión", sea cual sea la palabra que lo siga, es una reunión
+    interna, no una audiencia que reportar como ambigua."""
     texto = _normalizar_texto(resumen).replace(".", "")
     if "vence plazo" in texto:
         return True
-    if "reunion informativa" in texto:
+    if "reunion" in texto:
         return True
     return False
 
@@ -273,12 +281,6 @@ def clasificar_tipo_audiencia(resumen: str) -> str:
     if "audiencia unica" in texto or "aud unica" in texto:
         return "Única"
     if "audiencia preparatoria" in texto or "aud preparatoria" in texto:
-        return "Preparatoria"
-    if "reunion preparatoria" in texto:
-        # Alias real observado en el calendario (ej. 'Reunión preparatoria
-        # "Tiznado con Salcobrand" M-744-2026') — el tribunal la agenda así
-        # aunque procesalmente es la audiencia preparatoria. Confirmado
-        # 2026-09-01: 16 de 24 audiencias activas usaban esta redacción.
         return "Preparatoria"
     return "Ambiguo"
 
@@ -313,22 +315,24 @@ def mapa_audiencias_por_rit(rits: list[str], eventos: list[dict], hoy: date | No
     Un RIT M- (procedimiento monitorio) no tiene etapa preparatoria separada
     de la audiencia — solo audiencia única — así que un evento clasificado
     como "Preparatoria" para un RIT M- también se descarta antes de elegir
-    "el primero futuro" (bug confirmado 2026-09-22 con M-875-2026: el
-    tribunal agendó, además de la "Audiencia Única" real del 29/09, una
-    "Reunión preparatoria" interna el 25/09 — al ser cronológicamente
-    anterior, `primer_evento_futuro` se quedaba con ella y clasificaba mal
-    toda la causa como "Preparatoria", salteando el hito de ofrecimiento a
-    Román y disparando de más el de la minuta).
+    "el primero futuro" (bug confirmado 2026-09-22 con M-875-2026, con una
+    "Audiencia preparatoria" literal agendada por error antes de la
+    "Audiencia Única" real: al ser cronológicamente anterior,
+    `primer_evento_futuro` se quedaba con ella y clasificaba mal toda la
+    causa como "Preparatoria", salteando el hito de ofrecimiento a Román y
+    disparando de más el de la minuta).
 
     Mismo problema aparece en causas no-M- cuando ya hay una "Audiencia de
     juicio" agendada: si la etapa preparatoria ya se resolvió (porque el
-    tribunal fijó juicio), un evento "Reunión preparatoria" que aparezca
-    antes de esa fecha es una reunión interna de preparación para el
-    juicio, no una audiencia real — así que si entre los candidatos hay un
-    "Juicio", se descartan los "Preparatoria" igual que para M- (bug
-    confirmado 2026-10-01 con O-161-2026: "Reunión preparatoria" el 13/10
-    era reunión interna, la audiencia real era "Audiencia de juicio" el
-    15/10). Devuelve `{rit: {"fecha": "YYYY-MM-DD", "resumen": str, "tipo": str}}`."""
+    tribunal fijó juicio), una "Audiencia preparatoria" literal que
+    aparezca antes de esa fecha no debe tapar a la audiencia de juicio real
+    — así que si entre los candidatos hay un "Juicio", se descartan los
+    "Preparatoria" igual que para M- (bug confirmado 2026-10-01 con
+    O-161-2026). Nota: "reunión preparatoria" (sin la palabra "audiencia")
+    nunca llega a ser candidata — `es_evento_no_audiencia` la descarta antes,
+    para cualquier RIT (confirmado 2026-10-30: nunca fue un alias válido de
+    audiencia, ver clasificar_tipo_audiencia). Devuelve
+    `{rit: {"fecha": "YYYY-MM-DD", "resumen": str, "tipo": str}}`."""
     resultado = {}
     for rit in rits:
         candidatos = [e for e in buscar_eventos_por_rit(eventos, rit) if not es_evento_no_audiencia(e["resumen"])]
