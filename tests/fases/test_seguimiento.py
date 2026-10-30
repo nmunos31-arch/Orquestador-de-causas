@@ -140,17 +140,18 @@ class TestEvaluarInsistencia:
         assert resultado == "insistencia"
         assert len(items) == 1
         seguimiento_guardado = registro_mod.obtener_seguimiento("thread-1", ruta=rutas["ruta_registro_seguimiento"])
-        assert len(seguimiento_guardado["avisos"]) == 1
+        assert seguimiento_guardado["avisos"] == []
+        assert seguimiento_guardado["borrador_pendiente"] == {"fecha": "2026-09-16"}
 
     def test_no_duplica_si_ya_hay_borrador_en_la_cadena(self, tmp_path, monkeypatch):
         rutas = _registrar_pedido(tmp_path, tipo="acuerdo", fecha_envio="2026-09-15")
-        monkeypatch.setattr(seguimiento.gmail_client, "listar_borradores_de_hilo", lambda *a, **k: [{"id": "draft-existente"}])
         llamadas_crear = []
         monkeypatch.setattr(seguimiento.gmail_client, "crear_borrador", lambda *a, **k: llamadas_crear.append(1))
+        hilo = [_mensaje(sender=seguimiento.CUENTA_TRABAJO, fecha="Tue, 15 Sep 2026 12:00:00 -0400", id="draft-existente", es_borrador=True)]
 
         resultado = seguimiento._evaluar_insistencia(
             {"thread_id": "thread-1", "tipo": "acuerdo", "fecha_envio": "2026-09-15", "rit": "M-1-2026"},
-            "2026-09-16", [], [], [],
+            "2026-09-16", hilo, [], [],
             rutas["ruta_registro_pedidos"], rutas["ruta_registro_seguimiento"], rutas["ruta_registro_causas"],
         )
 
@@ -159,15 +160,18 @@ class TestEvaluarInsistencia:
 
     def test_pasa_a_gestion_manual_si_causa_no_tiene_audiencia_agendada(self, tmp_path, monkeypatch):
         rutas = _registrar_pedido(tmp_path, tipo="acuerdo", fecha_envio="2026-09-01")
-        # 2 avisos previos ya registrados -> el 3ro exige mirar fecha_audiencia
-        registro_mod.registrar_aviso("thread-1", "acuerdo-daniela", "2026-09-01", rit="M-1-2026", ruta=rutas["ruta_registro_seguimiento"])
-        registro_mod.registrar_aviso("thread-1", "acuerdo-daniela", "2026-09-05", rit="M-1-2026", ruta=rutas["ruta_registro_seguimiento"])
+        # 2 avisos enviados por Nico después del pedido -> el 3ro exige mirar fecha_audiencia
+        hilo = [
+            _mensaje(sender=seguimiento.CUENTA_TRABAJO, fecha="Tue, 01 Sep 2026 10:00:00 -0400", id="msg-pedido"),
+            _mensaje(sender=seguimiento.CUENTA_TRABAJO, fecha="Sat, 05 Sep 2026 10:00:00 -0400", id="aviso-1"),
+            _mensaje(sender=seguimiento.CUENTA_TRABAJO, fecha="Tue, 08 Sep 2026 10:00:00 -0400", id="aviso-2"),
+        ]
         registro_mod.registrar_causa("M-1-2026", {}, ruta=rutas["ruta_registro_causas"])  # sin fecha_audiencia
 
         acciones = []
         resultado = seguimiento._evaluar_insistencia(
-            {"thread_id": "thread-1", "tipo": "acuerdo", "fecha_envio": "2026-09-01", "rit": "M-1-2026"},
-            "2026-09-16", [], acciones, [],
+            {"thread_id": "thread-1", "tipo": "acuerdo", "fecha_envio": "2026-09-01", "rit": "M-1-2026", "message_id": "msg-pedido"},
+            "2026-09-16", hilo, acciones, [],
             rutas["ruta_registro_pedidos"], rutas["ruta_registro_seguimiento"], rutas["ruta_registro_causas"],
         )
 
@@ -405,3 +409,77 @@ class TestCorrerDePuntaAPunta:
         metricas = {m["etiqueta"]: m["valor"] for m in resumen["metricas"]}
         assert metricas["Insistencias creadas"] == 1
         assert metricas["Pedidos abiertos revisados"] == 1
+
+
+class TestAvisosDesdeLoEnviado:
+    NICO = "nmunoz@gomezyriesco.cl"
+
+    def _evaluar(self, tmp_path, monkeypatch, hilo, hoy, fecha_envio="2026-09-15", extra_pedido=None):
+        rutas = _registrar_pedido(tmp_path, tipo="acuerdo", fecha_envio=fecha_envio)
+        monkeypatch.setattr(seguimiento.gmail_client, "crear_borrador", lambda *a, **k: {"id": "draft-1"})
+        monkeypatch.setattr(seguimiento.bitacora_mod, "registrar", lambda *a, **k: None)
+        pedido = {
+            "thread_id": "thread-1", "tipo": "acuerdo", "fecha_envio": fecha_envio,
+            "rit": "M-1-2026", "destinatario": "x@y.cl", "message_id": "msg-pedido", **(extra_pedido or {}),
+        }
+        acciones, items = [], []
+        resultado = seguimiento._evaluar_insistencia(
+            pedido, hoy, hilo, acciones, items,
+            rutas["ruta_registro_pedidos"], rutas["ruta_registro_seguimiento"], rutas["ruta_registro_causas"],
+        )
+        return resultado, rutas, acciones
+
+    def test_borrador_borrado_no_cuenta_como_aviso(self, tmp_path, monkeypatch):
+        rutas = _registrar_pedido(tmp_path, tipo="acuerdo", fecha_envio="2026-09-15")
+        registro_mod.registrar_aviso("thread-1", "causa-laboral", "2026-09-15", rit="M-1-2026", draft_id="borrador-viejo", ruta=rutas["ruta_registro_seguimiento"])
+        hilo = [_mensaje(sender=self.NICO, fecha="Tue, 15 Sep 2026 10:00:00 -0400", id="msg-pedido")]
+
+        resultado, rutas, _ = self._evaluar(tmp_path, monkeypatch, hilo, "2026-09-16")
+
+        assert resultado == "insistencia"
+        assert registro_mod.obtener_seguimiento("thread-1", ruta=rutas["ruta_registro_seguimiento"])["avisos"] == []
+
+    def test_insistencia_manual_cuenta_como_aviso(self, tmp_path, monkeypatch):
+        hilo = [
+            _mensaje(sender=self.NICO, fecha="Tue, 15 Sep 2026 10:00:00 -0400", id="msg-pedido"),
+            _mensaje(sender=self.NICO, fecha="Tue, 15 Sep 2026 18:00:00 -0400", id="msg-manual"),
+        ]
+
+        resultado, rutas, _ = self._evaluar(tmp_path, monkeypatch, hilo, "2026-09-16")
+
+        assert resultado == "sin_novedad"
+        avisos = registro_mod.obtener_seguimiento("thread-1", ruta=rutas["ruta_registro_seguimiento"])["avisos"]
+        assert [a["message_id"] for a in avisos] == ["msg-manual"]
+
+    def test_avisos_inflados_se_recalculan(self, tmp_path, monkeypatch):
+        rutas = _registrar_pedido(tmp_path, tipo="acuerdo", fecha_envio="2026-09-15")
+        for dia in ["2026-09-15", "2026-09-16", "2026-09-17", "2026-09-18", "2026-09-21"]:
+            registro_mod.registrar_aviso("thread-1", "causa-laboral", dia, rit="M-1-2026", draft_id="d-" + dia, ruta=rutas["ruta_registro_seguimiento"])
+        hilo = [
+            _mensaje(sender=self.NICO, fecha="Tue, 15 Sep 2026 10:00:00 -0400", id="msg-pedido"),
+            _mensaje(sender=self.NICO, fecha="Wed, 16 Sep 2026 10:00:00 -0400", id="a1"),
+            _mensaje(sender=self.NICO, fecha="Thu, 17 Sep 2026 10:00:00 -0400", id="a2"),
+        ]
+
+        self._evaluar(tmp_path, monkeypatch, hilo, "2026-10-30")
+
+        avisos = registro_mod.obtener_seguimiento("thread-1", ruta=rutas["ruta_registro_seguimiento"])["avisos"]
+        assert len(avisos) == 2
+
+    def test_borrador_pendiente_genera_accion_y_no_duplica(self, tmp_path, monkeypatch):
+        rutas = _registrar_pedido(tmp_path, tipo="acuerdo", fecha_envio="2026-09-10")
+        registro_mod.sincronizar_avisos("thread-1", [], "causa-laboral", "M-1-2026", {"fecha": "2026-09-10"}, ruta=rutas["ruta_registro_seguimiento"])
+        hilo = [
+            _mensaje(sender=self.NICO, fecha="Thu, 10 Sep 2026 10:00:00 -0400", id="msg-pedido"),
+            _mensaje(sender=self.NICO, fecha="Thu, 10 Sep 2026 12:00:00 -0400", id="draft-msg", es_borrador=True),
+        ]
+        llamadas_crear = []
+        monkeypatch.setattr(seguimiento.gmail_client, "crear_borrador", lambda *a, **k: llamadas_crear.append(1))
+
+        resultado, _, acciones = self._evaluar(tmp_path, monkeypatch, hilo, "2026-09-15", fecha_envio="2026-09-10")
+
+        assert resultado == "sin_novedad"
+        assert llamadas_crear == []
+        assert len(acciones) == 1
+        assert "pendiente de enviar" in acciones[0]["que"]
+        assert acciones[0]["urgencia"] == "media"

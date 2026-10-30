@@ -29,6 +29,7 @@ CUENTA_ACUERDO_DANIELA = "dsanchezv@smu.cl"
 DOMINIO_INTERNO = "@gomezyriesco.cl"
 
 UMBRAL_DIAS_HABILES_INSISTENCIA_DOCUMENTOS = 4
+UMBRAL_DIAS_HABILES_BORRADOR_PENDIENTE = 2
 
 TEXTO_A_DOCUMENTOS = "los documentos solicitados"
 TEXTO_A_ACUERDO = "el correo anterior"
@@ -186,11 +187,17 @@ def _cuerpo_con_lista(cuerpo_texto: str, items: list[str]) -> str:
     return antes_html + _texto_a_lista_html(items) + despues_html
 
 
+def _borradores_del_hilo(mensajes_hilo: list[dict]) -> list[dict]:
+    """Borradores sin enviar que hay en la cadena (ya marcados en
+    `gmail_client.aplanar_mensaje`)."""
+    return [m for m in mensajes_hilo if m.get("es_borrador")]
+
+
 def _crear_insistencia(pedido: dict, tipo: str, mensajes_hilo: list[dict]) -> tuple[bool, str | None]:
     """Crea el borrador de insistencia (texto A). El comando nunca duplica:
     si la cadena ya tiene otro borrador sin enviar, lo reusa."""
     thread_id = pedido["thread_id"]
-    existentes = gmail_client.listar_borradores_de_hilo(thread_id)
+    existentes = _borradores_del_hilo(mensajes_hilo)
     if existentes:
         return False, existentes[0]["id"]
 
@@ -213,7 +220,7 @@ def _crear_recordatorio_faltantes(
     `tipo: documentos` con respuesta parcial). Mismo criterio de no
     duplicar que `_crear_insistencia`."""
     thread_id = pedido["thread_id"]
-    existentes = gmail_client.listar_borradores_de_hilo(thread_id)
+    existentes = _borradores_del_hilo(mensajes_hilo)
     if existentes:
         return False, existentes[0]["id"]
 
@@ -261,6 +268,26 @@ def _evaluar_insistencia(
     fecha_envio = pedido["fecha_envio"]
     rit = pedido.get("rit")
 
+    # Los avisos salen de lo que Nico realmente envió después del pedido, no
+    # de los borradores que creó el bot: un borrador borrado no cuenta, y una
+    # insistencia escrita a mano sí. Un borrador sin enviar que sigue en la
+    # cadena se muestra como acción si ya lleva varios días hábiles.
+    momento_envio = _momento_envio(pedido, mensajes_hilo)
+    enviados = seguimiento_mod.enviados_propios(mensajes_hilo, CUENTA_TRABAJO, desde=momento_envio)
+    avisos = [{"fecha": str(seguimiento_mod.momento(m).date()), "message_id": m["id"]} for m in enviados]
+    pendiente = None
+    if _borradores_del_hilo(mensajes_hilo):
+        entrada = registro_mod.obtener_seguimiento(thread_id, ruta_registro_seguimiento) or {}
+        pendiente = entrada.get("borrador_pendiente") or {"fecha": fecha_hoy}
+        dias_pendiente = dias_mod.dias_habiles_entre(pendiente["fecha"], fecha_hoy)
+        if dias_pendiente >= UMBRAL_DIAS_HABILES_BORRADOR_PENDIENTE:
+            acciones.append({
+                "rit": rit,
+                "que": f"Insistencia pendiente de enviar hace {dias_pendiente} días hábiles",
+                "urgencia": "media",
+            })
+    registro_mod.sincronizar_avisos(thread_id, avisos, _tipo_aviso(pedido), rit, pendiente, ruta=ruta_registro_seguimiento)
+
     if tipo == "documentos":
         corresponde = dias_mod.dias_habiles_entre(fecha_envio, fecha_hoy) >= UMBRAL_DIAS_HABILES_INSISTENCIA_DOCUMENTOS
     else:
@@ -290,8 +317,8 @@ def _evaluar_insistencia(
     if not creado:
         return "sin_novedad"
 
-    registro_mod.registrar_aviso(
-        thread_id, _tipo_aviso(pedido), fecha_hoy, rit=rit, draft_id=draft_id, ruta=ruta_registro_seguimiento
+    registro_mod.sincronizar_avisos(
+        thread_id, avisos, _tipo_aviso(pedido), rit, {"fecha": fecha_hoy}, ruta=ruta_registro_seguimiento
     )
     items.append({
         "rit": rit, "titulo": pedido.get("destinatario", ""),

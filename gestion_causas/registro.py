@@ -322,6 +322,39 @@ def registrar_aviso(
     return entrada
 
 
+def sincronizar_avisos(
+    thread_id: str,
+    avisos: list,
+    tipo: str,
+    rit: str | None,
+    borrador_pendiente: dict | None,
+    ruta: Path = RUTA_REGISTRO_SEGUIMIENTO,
+) -> dict:
+    """Reemplaza los avisos de `thread_id` por los que Nico realmente envió
+    (salen de Gmail, no de los borradores que creó el bot). `avisos` es una
+    lista de {"fecha": AAAA-MM-DD, "message_id"} en orden cronológico; se
+    numera sola. `borrador_pendiente` ({"fecha": AAAA-MM-DD}) marca un
+    borrador de insistencia creado y todavía sin enviar; None lo limpia."""
+    with _lock(ruta):
+        registro = cargar_registro_seguimiento(ruta)
+        entrada = registro.setdefault(thread_id, {"tipo": tipo, "rit": rit, "avisos": []})
+        entrada["tipo"] = tipo
+        if rit:
+            entrada["rit"] = rit
+        entrada["avisos"] = [
+            {"n": n, "fecha": str(_parsear_fecha(a["fecha"])), "message_id": a["message_id"]}
+            for n, a in enumerate(avisos, start=1)
+        ]
+        if borrador_pendiente:
+            entrada["borrador_pendiente"] = borrador_pendiente
+        else:
+            entrada.pop("borrador_pendiente", None)
+        entrada["ultima_revision"] = datetime.now().isoformat()
+        registro[thread_id] = entrada
+        _guardar(ruta, registro)
+    return entrada
+
+
 UMBRAL_TIER_LEJANO_DIAS = 14
 UMBRAL_TIER_MEDIO_DIAS = 8
 CADENCIA_TIER_LEJANO_HABILES = (4, 2)

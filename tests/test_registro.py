@@ -526,3 +526,29 @@ class TestMigrarPedidosBootstrap:
         assert resultado["creados"] == []
         assert resultado["ya_existian"] == ["t1"]
         assert len(registro_mod.cargar_registro_pedidos(ruta_pedidos)) == 1
+
+
+class TestSincronizarAvisos:
+    def test_reemplaza_avisos_y_los_numera(self, tmp_path):
+        ruta = tmp_path / "seguimiento.json"
+        for dia in ["2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-05"]:
+            registro_mod.registrar_aviso("t1", "documentos", dia, rit="M-1-2026", draft_id="d-" + dia, ruta=ruta)
+
+        registro_mod.sincronizar_avisos(
+            "t1",
+            [{"fecha": "2026-09-08", "message_id": "m-a"}, {"fecha": "2026-09-09", "message_id": "m-b"}],
+            "documentos", "M-1-2026", None, ruta=ruta,
+        )
+
+        avisos = registro_mod.obtener_seguimiento("t1", ruta=ruta)["avisos"]
+        assert [a["n"] for a in avisos] == [1, 2]
+        assert [a["message_id"] for a in avisos] == ["m-a", "m-b"]
+        assert all("draft_id" not in a for a in avisos)
+
+    def test_guarda_y_limpia_borrador_pendiente(self, tmp_path):
+        ruta = tmp_path / "seguimiento.json"
+        registro_mod.sincronizar_avisos("t1", [], "documentos", "M-1-2026", {"fecha": "2026-09-10"}, ruta=ruta)
+        assert registro_mod.obtener_seguimiento("t1", ruta=ruta)["borrador_pendiente"] == {"fecha": "2026-09-10"}
+
+        registro_mod.sincronizar_avisos("t1", [], "documentos", "M-1-2026", None, ruta=ruta)
+        assert "borrador_pendiente" not in registro_mod.obtener_seguimiento("t1", ruta=ruta)
