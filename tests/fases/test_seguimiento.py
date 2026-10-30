@@ -1,6 +1,8 @@
 import json
+from datetime import datetime
 
 from gestion_causas import registro as registro_mod
+from gestion_causas import seguimiento as seguimiento_mod
 from gestion_causas.fases import seguimiento
 
 
@@ -59,13 +61,44 @@ class TestMensajesPosteriores:
             "rit_a_hilos": {"M-1-2026": ["thread-1", "thread-2"]},
             "hilos": {"thread-2": [_mensaje(fecha="Thu, 17 Sep 2026 10:00:00 -0400")]},
         }
-        resultado = seguimiento._mensajes_posteriores("thread-1", mensajes_hilo, "2026-09-01", "M-1-2026", mapa_hilos)
+        resultado = seguimiento._mensajes_posteriores(
+            "thread-1", mensajes_hilo, seguimiento_mod.momento_desde_fecha("2026-09-01"), "M-1-2026", mapa_hilos
+        )
         assert len(resultado) == 2
 
     def test_sin_rit_no_busca_otros_hilos(self):
         mensajes_hilo = [_mensaje(fecha="Wed, 16 Sep 2026 10:00:00 -0400")]
-        resultado = seguimiento._mensajes_posteriores("thread-1", mensajes_hilo, "2026-09-01", None, {})
+        resultado = seguimiento._mensajes_posteriores(
+            "thread-1", mensajes_hilo, seguimiento_mod.momento_desde_fecha("2026-09-01"), None, {}
+        )
         assert len(resultado) == 1
+
+    def test_respuesta_del_mismo_dia_cuenta(self):
+        momento_envio = datetime.fromisoformat("2026-09-15T09:00:00-04:00")
+        mensajes_hilo = [_mensaje(fecha="Tue, 15 Sep 2026 15:00:00 -0400")]
+        resultado = seguimiento._mensajes_posteriores("thread-1", mensajes_hilo, momento_envio, None, {})
+        assert len(resultado) == 1
+
+    def test_excluye_borradores_y_mensajes_propios(self):
+        momento_envio = datetime.fromisoformat("2026-09-15T09:00:00-04:00")
+        mensajes_hilo = [
+            _mensaje(sender="nmunoz@gomezyriesco.cl", fecha="Tue, 15 Sep 2026 10:00:00 -0400"),
+            _mensaje(sender="nmunoz@gomezyriesco.cl", fecha="Tue, 15 Sep 2026 11:00:00 -0400", es_borrador=True),
+            _mensaje(sender="contraparte@externo.cl", fecha="Tue, 15 Sep 2026 12:00:00 -0400"),
+        ]
+        resultado = seguimiento._mensajes_posteriores("thread-1", mensajes_hilo, momento_envio, None, {})
+        assert [m["sender"] for m in resultado] == ["contraparte@externo.cl"]
+
+    def test_momento_envio_pedido_legado_sin_message_id(self):
+        pedido = {"fecha_envio": "2026-09-15"}
+        assert seguimiento._momento_envio(pedido, []) == seguimiento_mod.momento_desde_fecha("2026-09-15")
+
+    def test_momento_envio_usa_el_message_id_del_pedido(self):
+        mensajes_hilo = [_mensaje(fecha="Tue, 15 Sep 2026 10:30:00 -0400")]
+        mensajes_hilo[0]["id"] = "msg-envio"
+        pedido = {"fecha_envio": "2026-09-15", "message_id": "msg-envio"}
+        momento = seguimiento._momento_envio(pedido, mensajes_hilo)
+        assert momento == datetime.fromisoformat("2026-09-15T10:30:00-04:00")
 
 
 class TestCuerpoConLista:

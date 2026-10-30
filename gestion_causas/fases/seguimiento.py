@@ -12,8 +12,7 @@ borradores) ni borra ni cierra nada sin que Nico lo revise."""
 from __future__ import annotations
 
 import html as html_mod
-import re
-from datetime import date
+from datetime import date, datetime
 from email.utils import getaddresses
 from pathlib import Path
 
@@ -100,22 +99,42 @@ def _clasificar_pedido(pedido: dict, mensajes_posteriores_reales: list[dict]) ->
     )
 
 
+def _momento_envio(pedido: dict, mensajes_hilo: list[dict]) -> datetime:
+    """Hora exacta en que Nico envió el pedido. Prioridad: el `momento_envio`
+    guardado al dar de alta; si falta (pedido legado), el mensaje del hilo
+    con el `message_id` del pedido; y si tampoco, la medianoche de
+    `fecha_envio` en America/Santiago."""
+    if pedido.get("momento_envio"):
+        return datetime.fromisoformat(pedido["momento_envio"])
+    message_id = pedido.get("message_id")
+    if message_id:
+        for m in mensajes_hilo:
+            if m.get("id") == message_id:
+                return seguimiento_mod.momento(m)
+    return seguimiento_mod.momento_desde_fecha(pedido["fecha_envio"])
+
+
 def _mensajes_posteriores(
-    thread_id: str, mensajes_hilo: list[dict], fecha_envio: str, rit: str | None, mapa_hilos: dict
+    thread_id: str, mensajes_hilo: list[dict], momento_envio: datetime, rit: str | None, mapa_hilos: dict
 ) -> list[dict]:
-    """Mensajes con fecha posterior a `fecha_envio`: los del hilo original
-    más los de otros hilos del mismo RIT que el barrido combinado de la
-    corrida (mapa_hilos) haya encontrado (seguimiento.md paso 3b) — Gmail no
-    siempre encadena por los headers reales, la respuesta puede llegar en un
-    hilo que parece "separado" aunque el pedido esté en otro."""
-    fecha_envio_dt = date.fromisoformat(fecha_envio)
+    """Mensajes enviados DESPUÉS de `momento_envio` por alguien que no es
+    Nico: los del hilo original más los de otros hilos del mismo RIT que el
+    barrido combinado de la corrida (mapa_hilos) haya encontrado (seguimiento.md
+    paso 3b) — Gmail no siempre encadena por los headers reales, la respuesta
+    puede llegar en un hilo que parece "separado" aunque el pedido esté en
+    otro. Descarta borradores (aún no enviados) y los propios de Nico."""
     candidatos = list(mensajes_hilo)
     if rit:
         for otro_thread_id in mapa_hilos.get("rit_a_hilos", {}).get(rit, []):
             if otro_thread_id == thread_id:
                 continue
             candidatos += mapa_hilos.get("hilos", {}).get(otro_thread_id, [])
-    return [m for m in candidatos if seguimiento_mod.parsear_fecha(m["date"]).date() > fecha_envio_dt]
+    return [
+        m for m in candidatos
+        if not m.get("es_borrador", False)
+        and seguimiento_mod.extraer_direccion(m.get("sender", "")) != CUENTA_TRABAJO
+        and seguimiento_mod.momento(m) > momento_envio
+    ]
 
 
 def _nombre_para_saludo(destinatario: str) -> str:
@@ -306,7 +325,8 @@ def _procesar_pedido(
         return "sin_novedad"
 
     mensajes_hilo = _leer_hilo_cacheado(thread_id, cache_hilos)
-    posteriores = _mensajes_posteriores(thread_id, mensajes_hilo, fecha_envio, rit, mapa_hilos)
+    momento_envio = _momento_envio(pedido, mensajes_hilo)
+    posteriores = _mensajes_posteriores(thread_id, mensajes_hilo, momento_envio, rit, mapa_hilos)
     posteriores_reales = [
         m for m in posteriores if not seguimiento_mod.parece_cierre_sin_pedido(m.get("cuerpo_texto", ""))
     ]
@@ -421,16 +441,16 @@ def _verificar_borradores_pendientes(
         thread_id = causa.get("thread_id")
         ultimo_propio = None
         if thread_id:
-            for m in _leer_hilo_cacheado(thread_id, cache_hilos):
-                if seguimiento_mod.extraer_direccion(m.get("sender", "")) == CUENTA_TRABAJO:
-                    ultimo_propio = m
+            propios = seguimiento_mod.enviados_propios(_leer_hilo_cacheado(thread_id, cache_hilos), CUENTA_TRABAJO)
+            ultimo_propio = propios[-1] if propios else None
 
         if ultimo_propio is not None:
             destinatarios = seguimiento_mod.destinatarios_de_ultimo_propio(ultimo_propio, CUENTA_TRABAJO)
             fecha_envio = str(seguimiento_mod.parsear_fecha(ultimo_propio["date"]).date())
             registro_mod.registrar_pedido(thread_id, {
                 "rit": rit, "tipo": "documentos", "message_id": ultimo_propio["id"],
-                "fecha_envio": fecha_envio, "destinatario": destinatarios["para"],
+                "fecha_envio": fecha_envio, "momento_envio": seguimiento_mod.momento(ultimo_propio).isoformat(),
+                "destinatario": destinatarios["para"],
                 "items_pedidos": causa.get("documentos_solicitados") or [],
                 "estado": "esperando", "origen": "borrador_enviado",
             }, ruta=ruta_registro_pedidos)
@@ -457,18 +477,19 @@ def _pedidos_desde_etiqueta(ruta_registro_pedidos: Path) -> dict:
             ya_registrados.append(thread_id)
             continue
         mensajes = gmail_client.leer_hilo(thread_id)
-        propios = [m for m in mensajes if seguimiento_mod.extraer_direccion(m.get("sender", "")) == CUENTA_TRABAJO]
+        propios = seguimiento_mod.enviados_propios(mensajes, CUENTA_TRABAJO)
         if not propios:
             continue
         ultimo_propio = propios[-1]
         destinatarios = seguimiento_mod.destinatarios_de_ultimo_propio(ultimo_propio, CUENTA_TRABAJO)
         asunto_normalizado = seguimiento_mod.normalizar_asunto(ultimo_propio["subject"])
-        tiene_lista = bool(re.search(r"^\s*(\d+[.)]|[-*])\s+\S", ultimo_propio["cuerpo_texto"], re.MULTILINE))
+        tiene_lista = bool(seguimiento_mod.extraer_items_lista(ultimo_propio["cuerpo_texto"]))
         datos = {
             "rit": registro_mod.extraer_rit(asunto_normalizado + " " + ultimo_propio["cuerpo_texto"]),
             "tipo": "documentos" if tiene_lista else "acuerdo",
             "message_id": ultimo_propio["id"],
             "fecha_envio": str(seguimiento_mod.parsear_fecha(ultimo_propio["date"]).date()),
+            "momento_envio": seguimiento_mod.momento(ultimo_propio).isoformat(),
             "destinatario": destinatarios["para"],
             "estado": "esperando",
             "origen": "etiqueta",
