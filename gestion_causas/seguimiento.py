@@ -11,6 +11,7 @@ devuelve gmail_client.leer_mensaje / cli.cmd_leer_hilo: dict con "id",
 así se testean sin credenciales — mismo criterio que agenda.py y registro.py.
 """
 
+import html
 import re
 from datetime import date, datetime, timedelta
 from email.utils import getaddresses, parsedate_to_datetime
@@ -243,6 +244,28 @@ def extraer_items_lista(cuerpo_texto: str) -> list[str]:
     """Ítems de una lista numerada (`1.`, `2)`) o con viñetas (`-`, `*`) del
     cuerpo de un correo, sin el marcador. Vacío si el correo no trae lista."""
     return _REGEX_ITEM_LISTA.findall(cuerpo_texto or "")
+
+
+_REGEX_ETIQUETA_HTML = re.compile(r"<[^>]+>")
+
+
+def bloque_citado_html(mensaje: dict) -> str:
+    """Bloque "El <fecha>, <remitente> escribió:" con el cuerpo de `mensaje`
+    citado, igual que arma Gmail al responder: así el borrador queda dentro de
+    la cadena como respuesta real. Si el cuerpo viene en HTML, quita las
+    etiquetas; el texto resultante se escapa."""
+    texto = mensaje.get("cuerpo_texto") or ""
+    if _REGEX_ETIQUETA_HTML.search(texto):
+        texto = html.unescape(_REGEX_ETIQUETA_HTML.sub("", texto))
+    cuerpo_html = "<br>".join(html.escape(linea) for linea in texto.splitlines())
+    cuando = momento(mensaje).astimezone(ZONA_NEGOCIO).strftime("%d-%m-%Y %H:%M")
+    remitente = html.escape(mensaje.get("sender", ""))
+    return (
+        '<br><div class="gmail_quote">'
+        f'<div class="gmail_attr">El {cuando}, {remitente} escribió:</div>'
+        '<blockquote class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex">'
+        f"{cuerpo_html}</blockquote></div>"
+    )
 
 
 # ── Barrido combinado de Gmail por RIT (goteo.md paso 2 / seguimiento.md

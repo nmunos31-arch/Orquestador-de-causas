@@ -145,24 +145,16 @@ def _nombre_para_saludo(destinatario: str) -> str:
 
 
 def _destinatarios_pedido(pedido: dict, mensajes_hilo: list[dict]) -> dict:
-    """"Para" = destinatario registrado en el pedido (o, si viene vacío, el
-    `to` del último mensaje propio del hilo); "CC" = el resto de los
-    participantes del hilo, sin incluir a Nico ni duplicar el "para"."""
-    para = pedido.get("destinatario") or ""
-    if not para:
-        propios = [m for m in mensajes_hilo if seguimiento_mod.extraer_direccion(m.get("sender", "")) == CUENTA_TRABAJO]
-        if propios:
-            para = seguimiento_mod.destinatarios_de_ultimo_propio(propios[-1], CUENTA_TRABAJO)["para"]
-
-    vistos = {CUENTA_TRABAJO, (para or "").strip().lower()}
-    cc: list[str] = []
-    for m in mensajes_hilo:
-        for campo in ("sender", "to", "cc"):
-            for _nombre, direccion in getaddresses([m.get(campo, "") or ""]):
-                direccion = direccion.strip().lower()
-                if direccion and direccion not in vistos:
-                    vistos.add(direccion)
-                    cc.append(direccion)
+    """Responder a todos el último correo que Nico envió: "Para" = destinatario
+    registrado en el pedido (o, si viene vacío, el del último envío); "CC" =
+    el resto de To y Cc de ese último envío, sin Nico ni repetir el "para".
+    No suma participantes de mensajes anteriores del hilo."""
+    propios = seguimiento_mod.enviados_propios(mensajes_hilo, CUENTA_TRABAJO)
+    ultimo = seguimiento_mod.destinatarios_de_ultimo_propio(propios[-1], CUENTA_TRABAJO) if propios else {"para": "", "cc": []}
+    para = pedido.get("destinatario") or ultimo["para"]
+    para_normalizado = (para or "").strip().lower()
+    todos = ([ultimo["para"]] if ultimo["para"] else []) + ultimo["cc"]
+    cc = [d for d in todos if d != para_normalizado and d != CUENTA_TRABAJO]
     return {"para": para, "cc": ", ".join(cc)}
 
 
@@ -170,6 +162,23 @@ def _asunto_respuesta(mensajes_hilo: list[dict]) -> str:
     asunto_base = mensajes_hilo[-1].get("subject", "") if mensajes_hilo else ""
     asunto_normalizado = seguimiento_mod.normalizar_asunto(asunto_base)
     return f"Re: {asunto_normalizado}" if asunto_normalizado else "Re:"
+
+
+def _nombre_para_saludo_desde_hilo(para: str, mensajes_hilo: list[dict]) -> str:
+    """Nombre de pila con el que Nico escribió a `para` en su último envío
+    (el nombre visible del "Para"); si no lo tiene, la parte antes de la @."""
+    propios = seguimiento_mod.enviados_propios(mensajes_hilo, CUENTA_TRABAJO)
+    if propios:
+        for nombre, direccion in getaddresses([propios[-1].get("to", "") or ""]):
+            if nombre.strip() and direccion.strip().lower() == (para or "").strip().lower():
+                return seguimiento_mod.extraer_nombre_pila(f"{nombre} <{direccion}>")
+    return _nombre_para_saludo(para)
+
+
+def _citado_html(mensajes_hilo: list[dict]) -> str:
+    """Bloque citado del último mensaje real de la cadena (sin borradores)."""
+    no_borradores = [m for m in mensajes_hilo if not m.get("es_borrador")]
+    return seguimiento_mod.bloque_citado_html(no_borradores[-1]) if no_borradores else ""
 
 
 def _texto_plano_a_html(texto: str) -> str:
@@ -201,13 +210,13 @@ def _crear_insistencia(pedido: dict, tipo: str, mensajes_hilo: list[dict]) -> tu
     if existentes:
         return False, existentes[0]["id"]
 
-    nombre = _nombre_para_saludo(pedido.get("destinatario", ""))
+    destinatarios = _destinatarios_pedido(pedido, mensajes_hilo)
+    nombre = _nombre_para_saludo_desde_hilo(destinatarios["para"], mensajes_hilo)
     que_insistir = TEXTO_A_DOCUMENTOS if tipo == "documentos" else TEXTO_A_ACUERDO
     cuerpo = f"Estimado/a {nombre}:\n\nJunto con saludar, ruego tener presente {que_insistir}.\n\nAtentamente,"
-    destinatarios = _destinatarios_pedido(pedido, mensajes_hilo)
     asunto = _asunto_respuesta(mensajes_hilo)
     borrador = gmail_client.crear_borrador(
-        destinatarios["para"], asunto, _texto_plano_a_html(cuerpo),
+        destinatarios["para"], asunto, _texto_plano_a_html(cuerpo) + _citado_html(mensajes_hilo),
         thread_id=thread_id, html=True, cc=destinatarios["cc"] or None,
     )
     return True, borrador["id"]
@@ -224,13 +233,13 @@ def _crear_recordatorio_faltantes(
     if existentes:
         return False, existentes[0]["id"]
 
-    nombre = _nombre_para_saludo(pedido.get("destinatario", ""))
+    destinatarios = _destinatarios_pedido(pedido, mensajes_hilo)
+    nombre = _nombre_para_saludo_desde_hilo(destinatarios["para"], mensajes_hilo)
     cuerpo_base = (
         f"Estimado/a {nombre}:\n\nJunto con saludar, ruego tener presente que se "
         "encuentran pendiente los siguientes documentos:\n\n[[LISTA]]\n\nAtentamente,"
     )
-    cuerpo_html = _cuerpo_con_lista(cuerpo_base, faltantes)
-    destinatarios = _destinatarios_pedido(pedido, mensajes_hilo)
+    cuerpo_html = _cuerpo_con_lista(cuerpo_base, faltantes) + _citado_html(mensajes_hilo)
     asunto = _asunto_respuesta(mensajes_hilo)
     borrador = gmail_client.crear_borrador(
         destinatarios["para"], asunto, cuerpo_html,

@@ -357,3 +357,24 @@ class TestExtraerItemsLista:
 
     def test_sin_lista_devuelve_vacio(self):
         assert seguimiento.extraer_items_lista("Solo un texto sin lista") == []
+
+
+class TestBloqueCitadoHtml:
+    def test_cita_fecha_remitente_y_cuerpo_escapado(self):
+        mensaje = _mensaje("Daniela <dsanchezv@smu.cl>", fecha="Tue, 15 Sep 2026 10:00:00 -0400", cuerpo="Hola & <b>adios</b>")
+        html_citado = seguimiento.bloque_citado_html(mensaje)
+        assert "gmail_quote" in html_citado
+        assert "15-09-2026" in html_citado
+        assert "Daniela &lt;dsanchezv@smu.cl&gt;" in html_citado
+        assert "Hola &amp; adios" in html_citado
+        assert "<b>" not in html_citado
+
+    def test_quita_etiquetas_html_del_cuerpo(self):
+        mensaje = _mensaje("contraparte@externo.cl", fecha="Tue, 15 Sep 2026 10:00:00 -0400", cuerpo="<p>Hola</p>")
+        html_citado = seguimiento.bloque_citado_html(mensaje)
+        assert "Hola" in html_citado
+        assert "&lt;p&gt;" not in html_citado
+
+    def test_texto_plano_con_menor_que_se_escapa(self):
+        mensaje = _mensaje("contraparte@externo.cl", fecha="Tue, 15 Sep 2026 10:00:00 -0400", cuerpo="a < b")
+        assert "a &lt; b" in seguimiento.bloque_citado_html(mensaje)

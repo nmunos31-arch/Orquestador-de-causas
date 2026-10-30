@@ -483,3 +483,32 @@ class TestAvisosDesdeLoEnviado:
         assert len(acciones) == 1
         assert "pendiente de enviar" in acciones[0]["que"]
         assert acciones[0]["urgencia"] == "media"
+
+
+class TestBorradorIntegradoACadena:
+    def test_cc_sale_solo_del_ultimo_enviado_propio(self):
+        hilo = [
+            _mensaje(sender="nmunoz@gomezyriesco.cl", fecha="Thu, 10 Sep 2026 10:00:00 -0400",
+                     to="viejo@otro.cl, a@x.cl", id="m1"),
+            _mensaje(sender="nmunoz@gomezyriesco.cl", fecha="Mon, 14 Sep 2026 10:00:00 -0400",
+                     to="Daniela <d@smu.cl>", cc="cc@smu.cl", id="m2"),
+            _mensaje(sender="contraparte@externo.cl", fecha="Tue, 15 Sep 2026 10:00:00 -0400", id="m3"),
+        ]
+        destinatarios = seguimiento._destinatarios_pedido({"destinatario": "d@smu.cl"}, hilo)
+        assert destinatarios["para"] == "d@smu.cl"
+        assert destinatarios["cc"] == "cc@smu.cl"
+
+    def test_saludo_usa_nombre_visible_del_ultimo_envio(self):
+        hilo = [_mensaje(sender="nmunoz@gomezyriesco.cl", fecha="Mon, 14 Sep 2026 10:00:00 -0400",
+                         to="Daniela Sánchez <dsanchezv@smu.cl>", id="m2")]
+        assert seguimiento._nombre_para_saludo_desde_hilo("dsanchezv@smu.cl", hilo) == "Daniela"
+
+    def test_borrador_de_insistencia_incluye_bloque_citado(self, monkeypatch):
+        capturados = []
+        monkeypatch.setattr(seguimiento.gmail_client, "crear_borrador", lambda *a, **k: capturados.append(a) or {"id": "d1"})
+        hilo = [
+            _mensaje(sender="nmunoz@gomezyriesco.cl", fecha="Mon, 14 Sep 2026 10:00:00 -0400", to="d@smu.cl", id="m2"),
+            _mensaje(sender="d@smu.cl", fecha="Tue, 15 Sep 2026 10:00:00 -0400", cuerpo="Recibido", id="m3"),
+        ]
+        seguimiento._crear_insistencia({"thread_id": "thread-1", "destinatario": "d@smu.cl"}, "documentos", hilo)
+        assert "gmail_quote" in capturados[0][2]
