@@ -456,45 +456,107 @@ def _leer_hilo_cacheado(thread_id: str, cache_hilos: dict) -> list[dict]:
     return cache_hilos[thread_id]
 
 
+UMBRAL_DIAS_CORRIDOS_BUSCAR_ENVIO = 30
+
+
+def _desde_borrador(causa: dict) -> datetime | None:
+    """Momento desde el que se busca el envío del borrador de documentos: el de
+    la búsqueda ya en curso, el de creación del borrador, o (causas viejas) el
+    alta de la causa."""
+    valor = (
+        causa.get("borrador_documentos_buscar_envio_desde")
+        or causa.get("borrador_documentos_creado")
+        or causa.get("primera_vez_registrada")
+    )
+    if not valor:
+        return None
+    momento = datetime.fromisoformat(valor)
+    return momento if momento.tzinfo else momento.replace(tzinfo=seguimiento_mod.ZONA_NEGOCIO)
+
+
+def _buscar_envio_del_borrador(causa: dict, cache_hilos: dict, desde: datetime):
+    """Último envío propio posterior a `desde` (hora exacta): primero en la
+    cadena original de la causa; si no está, en los envíos de Gmail que
+    mencionen el RIT (Nico pudo reescribir el borrador como correo nuevo).
+    Devuelve (thread_id, mensaje) o None."""
+    thread_id = causa.get("thread_id")
+    if thread_id:
+        propios = seguimiento_mod.enviados_propios(_leer_hilo_cacheado(thread_id, cache_hilos), CUENTA_TRABAJO, desde=desde)
+        if propios:
+            return thread_id, propios[-1]
+    rit = causa.get("rit")
+    if not rit:
+        return None
+    for resumen in gmail_client.buscar_hilos(f'in:sent after:{desde.strftime("%Y/%m/%d")} "{rit}"'):
+        propios = seguimiento_mod.enviados_propios(_leer_hilo_cacheado(resumen["id"], cache_hilos), CUENTA_TRABAJO, desde=desde)
+        if propios:
+            return resumen["id"], propios[-1]
+    return None
+
+
 def _verificar_borradores_pendientes(
-    ruta_registro_causas: Path, ruta_registro_pedidos: Path, cache_hilos: dict
+    ruta_registro_causas: Path, ruta_registro_pedidos: Path, cache_hilos: dict, acciones: list[dict]
 ) -> dict:
     """Paso 1a: para cada causa con un borrador de documentos registrado,
-    revisa si Nico ya lo envió (mismo criterio que
-    `cli.cmd_verificar_borradores_pendientes`, llamando a `registro_mod`/
-    `gmail_client` directo en vez de por subprocess)."""
-    causas = registro_mod.causas_con_borrador_pendiente(ruta=ruta_registro_causas)
+    revisa si Nico ya lo envió. Un envío anterior a la creación del borrador no
+    cuenta. Si el borrador desapareció sin que se detecte el envío, queda
+    pendiente de búsqueda (y se avisa) hasta encontrarlo o por
+    UMBRAL_DIAS_CORRIDOS_BUSCAR_ENVIO días."""
+    causas = (
+        registro_mod.causas_con_borrador_pendiente(ruta=ruta_registro_causas)
+        + registro_mod.causas_buscando_envio_borrador(ruta=ruta_registro_causas)
+    )
     pendientes = []
     enviados = []
     descartados = []
+    ahora = datetime.now(seguimiento_mod.ZONA_NEGOCIO)
     for causa in causas:
-        draft_id = causa["borrador_documentos_draft_id"]
+        draft_id = causa.get("borrador_documentos_draft_id")
         rit = causa.get("rit")
-        if gmail_client.borrador_existe(draft_id):
+        if draft_id and gmail_client.borrador_existe(draft_id):
             pendientes.append({"rit": rit, "draft_id": draft_id, "thread_id": causa.get("thread_id")})
             continue
 
-        thread_id = causa.get("thread_id")
-        ultimo_propio = None
-        if thread_id:
-            propios = seguimiento_mod.enviados_propios(_leer_hilo_cacheado(thread_id, cache_hilos), CUENTA_TRABAJO)
-            ultimo_propio = propios[-1] if propios else None
-
-        if ultimo_propio is not None:
-            destinatarios = seguimiento_mod.destinatarios_de_ultimo_propio(ultimo_propio, CUENTA_TRABAJO)
-            fecha_envio = str(seguimiento_mod.parsear_fecha(ultimo_propio["date"]).date())
-            registro_mod.registrar_pedido(thread_id, {
-                "rit": rit, "tipo": "documentos", "message_id": ultimo_propio["id"],
-                "fecha_envio": fecha_envio, "momento_envio": seguimiento_mod.momento(ultimo_propio).isoformat(),
+        desde = _desde_borrador(causa) or ahora
+        hallazgo = _buscar_envio_del_borrador(causa, cache_hilos, desde)
+        if hallazgo:
+            hilo_id, ultimo = hallazgo
+            destinatarios = seguimiento_mod.destinatarios_de_ultimo_propio(ultimo, CUENTA_TRABAJO)
+            fecha_envio = str(seguimiento_mod.momento(ultimo).date())
+            registro_mod.registrar_pedido(hilo_id, {
+                "rit": rit, "tipo": "documentos", "message_id": ultimo["id"],
+                "fecha_envio": fecha_envio, "momento_envio": seguimiento_mod.momento(ultimo).isoformat(),
                 "destinatario": destinatarios["para"],
                 "items_pedidos": causa.get("documentos_solicitados") or [],
                 "estado": "esperando", "origen": "borrador_enviado",
             }, ruta=ruta_registro_pedidos)
-            enviados.append({"rit": rit, "thread_id": thread_id, "fecha_envio": fecha_envio})
-        else:
-            descartados.append(rit)
+            enviados.append({"rit": rit, "thread_id": hilo_id, "fecha_envio": fecha_envio})
+            registro_mod.registrar_causa(rit, {
+                "borrador_documentos_draft_id": None, "borrador_documentos_buscar_envio_desde": None,
+            }, ruta=ruta_registro_causas)
+            continue
 
-        registro_mod.registrar_causa(rit, {"borrador_documentos_draft_id": None}, ruta=ruta_registro_causas)
+        if (ahora - desde).days >= UMBRAL_DIAS_CORRIDOS_BUSCAR_ENVIO:
+            descartados.append(rit)
+            acciones.append({
+                "rit": rit,
+                "que": f"Borrador de documentos ya no está y no se detectó el envío en {UMBRAL_DIAS_CORRIDOS_BUSCAR_ENVIO} días — se dejó de buscar",
+                "urgencia": "baja",
+            })
+            registro_mod.registrar_causa(rit, {
+                "borrador_documentos_draft_id": None, "borrador_documentos_buscar_envio_desde": None,
+            }, ruta=ruta_registro_causas)
+            continue
+
+        acciones.append({
+            "rit": rit,
+            "que": "Borrador de documentos ya no está y no se detectó el envío — revisar",
+            "urgencia": "media",
+        })
+        registro_mod.registrar_causa(rit, {
+            "borrador_documentos_draft_id": None,
+            "borrador_documentos_buscar_envio_desde": desde.isoformat(),
+        }, ruta=ruta_registro_causas)
     return {"pendientes": pendientes, "enviados": enviados, "descartados": descartados}
 
 
@@ -578,7 +640,7 @@ def correr(
     mapa_hilos = mapas_mod.leer_mapa_hilos(contexto_corrida)
     cache_hilos: dict = dict(mapa_hilos.get("hilos") or {})
 
-    verificacion = _verificar_borradores_pendientes(ruta_registro_causas, ruta_registro_pedidos, cache_hilos)
+    verificacion = _verificar_borradores_pendientes(ruta_registro_causas, ruta_registro_pedidos, cache_hilos, acciones)
     etiqueta = _pedidos_desde_etiqueta(ruta_registro_pedidos)
     for creado in etiqueta["creados"]:
         if not creado.get("rit"):

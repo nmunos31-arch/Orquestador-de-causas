@@ -1,5 +1,6 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
+from email.utils import format_datetime
 
 from gestion_causas import registro as registro_mod
 from gestion_causas import seguimiento as seguimiento_mod
@@ -512,3 +513,76 @@ class TestBorradorIntegradoACadena:
         ]
         seguimiento._crear_insistencia({"thread_id": "thread-1", "destinatario": "d@smu.cl"}, "documentos", hilo)
         assert "gmail_quote" in capturados[0][2]
+
+
+class TestBorradorDocumentosBorradoOReescrito:
+    NICO = "nmunoz@gomezyriesco.cl"
+    CREADO = datetime.now(seguimiento_mod.ZONA_NEGOCIO) - timedelta(days=2)
+
+    def _verificar(self, tmp_path, monkeypatch, causa_extra, hilo, buscar=None, leer=None):
+        ruta_causas = tmp_path / "registro_causas.json"
+        ruta_pedidos = tmp_path / "registro_pedidos.json"
+        registro_mod.registrar_causa(
+            "M-1-2026",
+            {"thread_id": "thread-1", "borrador_documentos_draft_id": "draft-1",
+             "documentos_solicitados": ["Contrato"], **causa_extra},
+            ruta=ruta_causas,
+        )
+        monkeypatch.setattr(seguimiento.gmail_client, "borrador_existe", lambda draft_id: False)
+        monkeypatch.setattr(seguimiento.gmail_client, "buscar_hilos", buscar or (lambda *a, **k: []))
+        if leer:
+            monkeypatch.setattr(seguimiento.gmail_client, "leer_hilo", leer)
+        acciones = []
+        resultado = seguimiento._verificar_borradores_pendientes(ruta_causas, ruta_pedidos, {"thread-1": hilo}, acciones)
+        return resultado, ruta_causas, ruta_pedidos, acciones
+
+    def test_mensaje_propio_anterior_al_borrador_no_cuenta_como_envio(self, tmp_path, monkeypatch):
+        antes = format_datetime(self.CREADO - timedelta(days=1))
+        hilo = [_mensaje(sender=self.NICO, fecha=antes, id="viejo")]
+
+        resultado, ruta_causas, ruta_pedidos, acciones = self._verificar(
+            tmp_path, monkeypatch, {"borrador_documentos_creado": self.CREADO.isoformat()}, hilo,
+        )
+
+        assert resultado["enviados"] == []
+        assert registro_mod.obtener_pedido("thread-1", ruta=ruta_pedidos) is None
+        causa = registro_mod.obtener_causa("M-1-2026", ruta=ruta_causas)
+        assert causa["borrador_documentos_buscar_envio_desde"] == self.CREADO.isoformat()
+        assert len(acciones) == 1
+        assert acciones[0]["urgencia"] == "media"
+
+    def test_reescrito_como_correo_nuevo_se_detecta(self, tmp_path, monkeypatch):
+        antes = format_datetime(self.CREADO - timedelta(days=1))
+        despues = format_datetime(self.CREADO + timedelta(days=1))
+        hilo = [_mensaje(sender=self.NICO, fecha=antes, id="viejo")]
+        otro_hilo = [_mensaje(sender=self.NICO, fecha=despues, id="nuevo", subject="Consulta documentos")]
+
+        resultado, _, ruta_pedidos, _ = self._verificar(
+            tmp_path, monkeypatch, {"borrador_documentos_creado": self.CREADO.isoformat()}, hilo,
+            buscar=lambda *a, **k: [{"id": "thread-otro"}],
+            leer=lambda thread_id, **k: otro_hilo,
+        )
+
+        assert resultado["enviados"][0]["thread_id"] == "thread-otro"
+        pedido = registro_mod.obtener_pedido("thread-otro", ruta=ruta_pedidos)
+        assert pedido["origen"] == "borrador_enviado"
+        assert pedido["items_pedidos"] == ["Contrato"]
+
+    def test_sin_envio_detectado_avisa_y_queda_pendiente_de_busqueda(self, tmp_path, monkeypatch):
+        hilo = []
+
+        resultado, ruta_causas, _, acciones = self._verificar(
+            tmp_path, monkeypatch, {"borrador_documentos_creado": self.CREADO.isoformat()}, hilo,
+        )
+
+        assert resultado["enviados"] == []
+        assert "no se detectó el envío" in acciones[0]["que"]
+        assert registro_mod.causas_buscando_envio_borrador(ruta=ruta_causas)[0]["rit"] == "M-1-2026"
+
+    def test_causa_legada_sin_fecha_de_borrador_no_rompe(self, tmp_path, monkeypatch):
+        hilo = [_mensaje(sender=self.NICO, fecha=format_datetime(self.CREADO - timedelta(days=1)), id="viejo")]
+
+        resultado, _, _, acciones = self._verificar(tmp_path, monkeypatch, {}, hilo)
+
+        assert resultado["enviados"] == []
+        assert len(acciones) == 1

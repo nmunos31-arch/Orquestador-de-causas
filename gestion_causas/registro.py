@@ -183,6 +183,17 @@ def causas_con_borrador_pendiente(ruta: Path = RUTA_REGISTRO_CAUSAS) -> list:
     ]
 
 
+def causas_buscando_envio_borrador(ruta: Path = RUTA_REGISTRO_CAUSAS) -> list:
+    """Causas cuyo borrador de documentos desapareció sin que se detectara el
+    envío (`borrador_documentos_buscar_envio_desde` seteado y sin draft vigente):
+    la fase seguimiento sigue buscando su envío en Gmail."""
+    return [
+        entrada for entrada in cargar_registro_causas(ruta).values()
+        if entrada.get("borrador_documentos_buscar_envio_desde")
+        and not entrada.get("borrador_documentos_draft_id")
+    ]
+
+
 def causas_para_goteo(
     hoy=None, dias_ventana_post_audiencia: int = 60, ruta: Path = RUTA_REGISTRO_CAUSAS
 ) -> list:
