@@ -244,30 +244,38 @@ def obtener_hilo(thread_id: str, servicio=None) -> dict:
     return servicio.users().threads().get(userId="me", id=thread_id, format="full").execute(num_retries=NUM_REINTENTOS_HTTP)
 
 
+def aplanar_mensaje(mensaje_crudo: dict) -> dict:
+    """Aplana un mensaje crudo de Gmail a {"id", "thread_id", "subject",
+    "sender", "to", "cc", "date", "cuerpo_texto", "adjuntos", "labels",
+    "es_borrador", "message_id_header"}. `es_borrador` es True si Gmail lo
+    marca como DRAFT: un borrador sin enviar vive dentro del mismo hilo y no
+    debe contarse como correo propio enviado."""
+    headers = {h["name"].lower(): h["value"] for h in mensaje_crudo["payload"].get("headers", [])}
+    labels = mensaje_crudo.get("labelIds", [])
+    return {
+        "id": mensaje_crudo["id"],
+        "thread_id": mensaje_crudo["threadId"],
+        "subject": headers.get("subject", ""),
+        "sender": headers.get("from", ""),
+        "to": headers.get("to", ""),
+        "cc": headers.get("cc", ""),
+        "date": headers.get("date", ""),
+        "cuerpo_texto": _extraer_texto_plano(mensaje_crudo["payload"]),
+        "adjuntos": _listar_adjuntos(mensaje_crudo["payload"]),
+        "labels": labels,
+        "es_borrador": "DRAFT" in labels,
+        "message_id_header": headers.get("message-id", ""),
+    }
+
+
 def leer_hilo(thread_id: str, servicio=None) -> list[dict]:
-    """Trae todos los mensajes de un hilo, aplanados a
-    {"id", "thread_id", "subject", "sender", "to", "cc", "date",
-    "cuerpo_texto", "adjuntos"} — mismo formato que usa `cli.cmd_leer_hilo`.
+    """Trae todos los mensajes de un hilo aplanados con `aplanar_mensaje`.
     Reusado por los drivers Python de las fases (`fases/smu.py`, etc.) para
     no repetir esta lógica."""
     if servicio is None:
         servicio = construir_servicio()
     hilo = obtener_hilo(thread_id, servicio=servicio)
-    mensajes = []
-    for mensaje_crudo in hilo.get("messages", []):
-        headers = {h["name"].lower(): h["value"] for h in mensaje_crudo["payload"].get("headers", [])}
-        mensajes.append({
-            "id": mensaje_crudo["id"],
-            "thread_id": mensaje_crudo["threadId"],
-            "subject": headers.get("subject", ""),
-            "sender": headers.get("from", ""),
-            "to": headers.get("to", ""),
-            "cc": headers.get("cc", ""),
-            "date": headers.get("date", ""),
-            "cuerpo_texto": _extraer_texto_plano(mensaje_crudo["payload"]),
-            "adjuntos": _listar_adjuntos(mensaje_crudo["payload"]),
-        })
-    return mensajes
+    return [aplanar_mensaje(mensaje_crudo) for mensaje_crudo in hilo.get("messages", [])]
 
 
 def cabeceras_respuesta_de_hilo(thread_id: str, servicio=None) -> dict:
@@ -289,7 +297,10 @@ def cabeceras_respuesta_de_hilo(thread_id: str, servicio=None) -> dict:
     hilo = servicio.users().threads().get(
         userId="me", id=thread_id, format="metadata", metadataHeaders=["Message-ID", "References"]
     ).execute(num_retries=NUM_REINTENTOS_HTTP)
-    mensajes = hilo.get("messages", [])
+    # Un borrador sin enviar (DRAFT) no es un mensaje real de la cadena: si
+    # se usara como respuesta, In-Reply-To apuntaría a un Message-ID que el
+    # destinatario nunca va a recibir.
+    mensajes = [m for m in hilo.get("messages", []) if "DRAFT" not in m.get("labelIds", [])]
     if not mensajes:
         return {"in_reply_to": None, "references": None}
 
@@ -526,6 +537,11 @@ def listar_borradores_de_hilo(thread_id: str, servicio=None) -> list[dict]:
     todos = servicio.users().drafts().list(userId="me").execute(num_retries=NUM_REINTENTOS_HTTP).get("drafts", [])
     resultado = []
     for borrador in todos:
+        # El listado ya trae el threadId del borrador: si es de otro hilo, no
+        # gastamos una llamada de detalle (cuota de Gmail, ver seguimiento).
+        thread_listado = borrador.get("message", {}).get("threadId")
+        if thread_listado and thread_listado != thread_id:
+            continue
         detalle = servicio.users().drafts().get(userId="me", id=borrador["id"]).execute(num_retries=NUM_REINTENTOS_HTTP)
         if detalle.get("message", {}).get("threadId") == thread_id:
             resultado.append(detalle)
