@@ -389,6 +389,16 @@ def _procesar_pedido(
             return "completo"
 
         if estado == "parcial" and tipo == "documentos":
+            if not pedido.get("items_pedidos"):
+                # Sin la lista de lo pedido no se sabe qué falta: no se cierra
+                # ni se manda recordatorio, queda para revisar a mano.
+                acciones.append({
+                    "rit": rit,
+                    "que": "Respuesta parcial a pedido sin lista de documentos — revisar",
+                    "urgencia": "media",
+                })
+                registro_mod.registrar_pedido(thread_id, {}, ruta=ruta_registro_pedidos)
+                return "sin_novedad"
             items_recibidos = sorted(
                 set(pedido.get("items_recibidos") or []) | set(clasificacion.get("items_recibidos") or [])
             )
@@ -571,24 +581,32 @@ def _pedidos_desde_etiqueta(ruta_registro_pedidos: Path) -> dict:
     ya_registrados = []
     for hilo in hilos:
         thread_id = hilo["id"]
-        if registro_mod.obtener_pedido(thread_id, ruta=ruta_registro_pedidos) is not None:
+        existente = registro_mod.obtener_pedido(thread_id, ruta=ruta_registro_pedidos)
+        if existente is not None and existente.get("estado", "esperando") in registro_mod.ESTADOS_PEDIDO_ABIERTO:
             ya_registrados.append(thread_id)
             continue
         mensajes = gmail_client.leer_hilo(thread_id)
-        propios = seguimiento_mod.enviados_propios(mensajes, CUENTA_TRABAJO)
+        # Un pedido ya cerrado solo se reabre si Nico envió algo después de él
+        # (re-etiquetó el hilo para un pedido nuevo); si no, sigue cerrado.
+        desde = _momento_envio(existente, mensajes) if existente and (existente.get("momento_envio") or existente.get("fecha_envio")) else None
+        propios = seguimiento_mod.enviados_propios(mensajes, CUENTA_TRABAJO, desde=desde)
         if not propios:
+            if existente is not None:
+                ya_registrados.append(thread_id)
             continue
         ultimo_propio = propios[-1]
         destinatarios = seguimiento_mod.destinatarios_de_ultimo_propio(ultimo_propio, CUENTA_TRABAJO)
         asunto_normalizado = seguimiento_mod.normalizar_asunto(ultimo_propio["subject"])
-        tiene_lista = bool(seguimiento_mod.extraer_items_lista(ultimo_propio["cuerpo_texto"]))
+        items = seguimiento_mod.extraer_items_lista(ultimo_propio["cuerpo_texto"])
         datos = {
             "rit": registro_mod.extraer_rit(asunto_normalizado + " " + ultimo_propio["cuerpo_texto"]),
-            "tipo": "documentos" if tiene_lista else "acuerdo",
+            "tipo": "documentos" if items else "acuerdo",
             "message_id": ultimo_propio["id"],
             "fecha_envio": str(seguimiento_mod.parsear_fecha(ultimo_propio["date"]).date()),
             "momento_envio": seguimiento_mod.momento(ultimo_propio).isoformat(),
             "destinatario": destinatarios["para"],
+            "items_pedidos": items,
+            "items_recibidos": [],
             "estado": "esperando",
             "origen": "etiqueta",
             "label_id": label_id,

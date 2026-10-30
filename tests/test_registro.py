@@ -552,3 +552,33 @@ class TestSincronizarAvisos:
 
         registro_mod.sincronizar_avisos("t1", [], "documentos", "M-1-2026", None, ruta=ruta)
         assert "borrador_pendiente" not in registro_mod.obtener_seguimiento("t1", ruta=ruta)
+
+
+class TestBootstrapDescartaBorradorHuerfano:
+    def test_pendiente_envio_sin_causa_vigente_pasa_a_descartado(self, tmp_path):
+        ruta_pedidos = tmp_path / "pedidos.json"
+        ruta_causas = tmp_path / "causas.json"
+        ruta_seguimiento = tmp_path / "seguimiento.json"
+        registro_mod.registrar_pedido("borrador:draft-huerfano", {
+            "thread_id": "thread-x", "rit": "M-9-2026", "tipo": "documentos", "draft_id": "draft-huerfano",
+            "estado": "pendiente_envio", "origen": "bootstrap_borrador",
+        }, ruta=ruta_pedidos)
+        registro_mod.registrar_causa("M-1-2026", {"borrador_documentos_draft_id": "draft-vigente"}, ruta=ruta_causas)
+
+        registro_mod.migrar_pedidos_bootstrap(ruta_pedidos=ruta_pedidos, ruta_seguimiento=ruta_seguimiento, ruta_causas=ruta_causas)
+
+        assert registro_mod.obtener_pedido("borrador:draft-huerfano", ruta=ruta_pedidos)["estado"] == "descartado"
+
+    def test_pendiente_envio_con_causa_vigente_se_mantiene(self, tmp_path):
+        ruta_pedidos = tmp_path / "pedidos.json"
+        ruta_causas = tmp_path / "causas.json"
+        ruta_seguimiento = tmp_path / "seguimiento.json"
+        registro_mod.registrar_pedido("borrador:draft-1", {
+            "thread_id": "thread-1", "rit": "M-1-2026", "tipo": "documentos", "draft_id": "draft-1",
+            "estado": "pendiente_envio", "origen": "bootstrap_borrador",
+        }, ruta=ruta_pedidos)
+        registro_mod.registrar_causa("M-1-2026", {"borrador_documentos_draft_id": "draft-1"}, ruta=ruta_causas)
+
+        registro_mod.migrar_pedidos_bootstrap(ruta_pedidos=ruta_pedidos, ruta_seguimiento=ruta_seguimiento, ruta_causas=ruta_causas)
+
+        assert registro_mod.obtener_pedido("borrador:draft-1", ruta=ruta_pedidos)["estado"] == "pendiente_envio"

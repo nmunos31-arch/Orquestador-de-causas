@@ -602,5 +602,12 @@ def migrar_pedidos_bootstrap(
             }
             creados.append(clave)
 
+        # Un borrador de documentos que ya no figura en ninguna causa (se envió
+        # o se borró) no puede quedar pendiente para siempre.
+        drafts_vigentes = {c.get("borrador_documentos_draft_id") for c in cargar_registro_causas(ruta_causas).values()}
+        for pedido in pedidos.values():
+            if pedido.get("estado") == "pendiente_envio" and pedido.get("draft_id") not in drafts_vigentes:
+                pedido["estado"] = "descartado"
+
         _guardar(ruta_pedidos, pedidos)
     return {"creados": creados, "ya_existian": ya_existian}

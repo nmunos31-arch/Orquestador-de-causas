@@ -586,3 +586,64 @@ class TestBorradorDocumentosBorradoOReescrito:
 
         assert resultado["enviados"] == []
         assert len(acciones) == 1
+
+
+class TestPedidosSinItemsYReapertura:
+    NICO = "nmunoz@gomezyriesco.cl"
+
+    def test_alta_por_etiqueta_extrae_los_items_de_la_lista(self, tmp_path, monkeypatch):
+        ruta_pedidos = tmp_path / "registro_pedidos.json"
+        hilo = [_mensaje(sender=self.NICO, fecha="Tue, 01 Sep 2026 10:00:00 -0400", cuerpo="1. Contrato\n2. Finiquito", id="p1")]
+        monkeypatch.setattr(seguimiento.gmail_client, "obtener_o_crear_etiqueta", lambda *a, **k: "label-1")
+        monkeypatch.setattr(seguimiento.gmail_client, "buscar_hilos", lambda *a, **k: [{"id": "thread-1"}])
+        monkeypatch.setattr(seguimiento.gmail_client, "leer_hilo", lambda thread_id, **k: hilo)
+
+        resultado = seguimiento._pedidos_desde_etiqueta(ruta_pedidos)
+
+        assert resultado["creados"][0]["items_pedidos"] == ["Contrato", "Finiquito"]
+        assert registro_mod.obtener_pedido("thread-1", ruta=ruta_pedidos)["items_pedidos"] == ["Contrato", "Finiquito"]
+
+    def test_parcial_sin_items_no_cierra_ni_recuerda(self, tmp_path, monkeypatch):
+        rutas = _registrar_pedido(tmp_path, items_pedidos=[], message_id="msg-pedido")
+        hilo = [
+            _mensaje(sender=self.NICO, fecha="Tue, 01 Sep 2026 10:00:00 -0400", id="msg-pedido"),
+            _mensaje(sender="contraparte@externo.cl", fecha="Wed, 02 Sep 2026 10:00:00 -0400", id="resp"),
+        ]
+        monkeypatch.setattr(seguimiento, "_clasificar_pedido", lambda pedido, posteriores: {"estado": "parcial", "items_recibidos": [], "motivo": ""})
+        llamadas_crear = []
+        monkeypatch.setattr(seguimiento.gmail_client, "crear_borrador", lambda *a, **k: llamadas_crear.append(1))
+        pedido = registro_mod.obtener_pedido("thread-1", ruta=rutas["ruta_registro_pedidos"])
+        acciones, items = [], []
+
+        resultado = seguimiento._procesar_pedido(
+            pedido, "2026-09-03", {}, rutas["ruta_registro_pedidos"], rutas["ruta_registro_seguimiento"],
+            rutas["ruta_registro_causas"], acciones, items, {"thread-1": hilo},
+        )
+
+        assert resultado == "sin_novedad"
+        assert llamadas_crear == []
+        assert "sin lista de documentos" in acciones[0]["que"]
+        assert registro_mod.obtener_pedido("thread-1", ruta=rutas["ruta_registro_pedidos"])["estado"] == "esperando"
+
+    def test_reetiquetado_reabre_pedido_cerrado_con_envio_nuevo(self, tmp_path, monkeypatch):
+        ruta_pedidos = tmp_path / "registro_pedidos.json"
+        registro_mod.registrar_pedido("thread-1", {
+            "rit": "M-1-2026", "tipo": "documentos", "message_id": "msg-viejo", "fecha_envio": "2026-09-01",
+            "momento_envio": "2026-09-01T10:00:00-04:00", "estado": "completo", "items_recibidos": ["Contrato"],
+            "origen": "etiqueta",
+        }, ruta=ruta_pedidos)
+        hilo = [
+            _mensaje(sender=self.NICO, fecha="Tue, 01 Sep 2026 10:00:00 -0400", cuerpo="1. Contrato", id="msg-viejo"),
+            _mensaje(sender=self.NICO, fecha="Thu, 10 Sep 2026 10:00:00 -0400", cuerpo="1. Liquidaciones", id="msg-nuevo"),
+        ]
+        monkeypatch.setattr(seguimiento.gmail_client, "obtener_o_crear_etiqueta", lambda *a, **k: "label-1")
+        monkeypatch.setattr(seguimiento.gmail_client, "buscar_hilos", lambda *a, **k: [{"id": "thread-1"}])
+        monkeypatch.setattr(seguimiento.gmail_client, "leer_hilo", lambda thread_id, **k: hilo)
+
+        seguimiento._pedidos_desde_etiqueta(ruta_pedidos)
+
+        pedido = registro_mod.obtener_pedido("thread-1", ruta=ruta_pedidos)
+        assert pedido["estado"] == "esperando"
+        assert pedido["message_id"] == "msg-nuevo"
+        assert pedido["items_recibidos"] == []
+        assert pedido["items_pedidos"] == ["Liquidaciones"]
