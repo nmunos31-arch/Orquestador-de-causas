@@ -1,7 +1,7 @@
 """Tests de gestion_causas.seguimiento: análisis puro de hilos (sin red),
 para las Fases 5 y 6 (correos sin respuesta / documentos pendientes)."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from gestion_causas import seguimiento
 
@@ -295,3 +295,65 @@ class TestEsRemitenteConfiable:
 
     def test_remitente_vacio_no_es_confiable(self):
         assert not seguimiento.es_remitente_confiable("")
+
+
+def _mensaje_propio(fecha: str, borrador=False, id_="m-propio"):
+    return {
+        "id": id_,
+        "subject": "Re: Causa laboral M-1-2026",
+        "sender": "Nico <nmunoz@gomezyriesco.cl>",
+        "to": "contraparte@externo.cl",
+        "cc": "",
+        "date": fecha,
+        "cuerpo_texto": "",
+        "adjuntos": [],
+        "es_borrador": borrador,
+    }
+
+
+class TestEnviadosPropios:
+    def test_excluye_borradores_y_mensajes_ajenos(self):
+        mensajes = [
+            _mensaje_propio("Tue, 15 Sep 2026 10:00:00 -0400", id_="enviado"),
+            _mensaje_propio("Tue, 15 Sep 2026 11:00:00 -0400", borrador=True, id_="borrador"),
+            _mensaje("contraparte@externo.cl", "Tue, 15 Sep 2026 12:00:00 -0400"),
+        ]
+        resultado = seguimiento.enviados_propios(mensajes, "nmunoz@gomezyriesco.cl")
+        assert [m["id"] for m in resultado] == ["enviado"]
+
+    def test_filtra_por_momento_estricto(self):
+        mensajes = [_mensaje_propio("Tue, 15 Sep 2026 10:00:00 -0400")]
+        antes = datetime.fromisoformat("2026-09-15T09:00:00-04:00")
+        igual = datetime.fromisoformat("2026-09-15T10:00:00-04:00")
+        assert len(seguimiento.enviados_propios(mensajes, "nmunoz@gomezyriesco.cl", desde=antes)) == 1
+        assert len(seguimiento.enviados_propios(mensajes, "nmunoz@gomezyriesco.cl", desde=igual)) == 0
+
+    def test_mensaje_sin_clave_es_borrador_cuenta_como_enviado(self):
+        mensaje = _mensaje_propio("Tue, 15 Sep 2026 10:00:00 -0400")
+        del mensaje["es_borrador"]
+        resultado = seguimiento.enviados_propios([mensaje], "nmunoz@gomezyriesco.cl")
+        assert len(resultado) == 1
+
+    def test_ordena_por_momento(self):
+        mensajes = [
+            _mensaje_propio("Wed, 16 Sep 2026 10:00:00 -0400", id_="b"),
+            _mensaje_propio("Tue, 15 Sep 2026 10:00:00 -0400", id_="a"),
+        ]
+        resultado = seguimiento.enviados_propios(mensajes, "nmunoz@gomezyriesco.cl")
+        assert [m["id"] for m in resultado] == ["a", "b"]
+
+
+class TestMomentoDesdeFecha:
+    def test_usa_medianoche_de_santiago(self):
+        momento = seguimiento.momento_desde_fecha("2026-09-15")
+        assert momento.replace(tzinfo=None) == datetime(2026, 9, 15, 0, 0)
+        assert momento.utcoffset() in (timedelta(hours=-3), timedelta(hours=-4))
+
+
+class TestExtraerItemsLista:
+    def test_extrae_numerados_y_con_guion(self):
+        cuerpo = "Hola,\n1. Contrato\n2) Finiquito\n- EERR\ntexto suelto"
+        assert seguimiento.extraer_items_lista(cuerpo) == ["Contrato", "Finiquito", "EERR"]
+
+    def test_sin_lista_devuelve_vacio(self):
+        assert seguimiento.extraer_items_lista("Solo un texto sin lista") == []
