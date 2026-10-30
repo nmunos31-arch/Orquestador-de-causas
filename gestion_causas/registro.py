@@ -183,6 +183,17 @@ def causas_con_borrador_pendiente(ruta: Path = RUTA_REGISTRO_CAUSAS) -> list:
     ]
 
 
+def causas_buscando_envio_borrador(ruta: Path = RUTA_REGISTRO_CAUSAS) -> list:
+    """Causas cuyo borrador de documentos desapareció sin que se detectara el
+    envío (`borrador_documentos_buscar_envio_desde` seteado y sin draft vigente):
+    la fase seguimiento sigue buscando su envío en Gmail."""
+    return [
+        entrada for entrada in cargar_registro_causas(ruta).values()
+        if entrada.get("borrador_documentos_buscar_envio_desde")
+        and not entrada.get("borrador_documentos_draft_id")
+    ]
+
+
 def causas_para_goteo(
     hoy=None, dias_ventana_post_audiencia: int = 60, ruta: Path = RUTA_REGISTRO_CAUSAS
 ) -> list:
@@ -316,6 +327,39 @@ def registrar_aviso(
             "fecha": str(_parsear_fecha(fecha)),
             "draft_id": draft_id,
         })
+        entrada["ultima_revision"] = datetime.now().isoformat()
+        registro[thread_id] = entrada
+        _guardar(ruta, registro)
+    return entrada
+
+
+def sincronizar_avisos(
+    thread_id: str,
+    avisos: list,
+    tipo: str,
+    rit: str | None,
+    borrador_pendiente: dict | None,
+    ruta: Path = RUTA_REGISTRO_SEGUIMIENTO,
+) -> dict:
+    """Reemplaza los avisos de `thread_id` por los que Nico realmente envió
+    (salen de Gmail, no de los borradores que creó el bot). `avisos` es una
+    lista de {"fecha": AAAA-MM-DD, "message_id"} en orden cronológico; se
+    numera sola. `borrador_pendiente` ({"fecha": AAAA-MM-DD}) marca un
+    borrador de insistencia creado y todavía sin enviar; None lo limpia."""
+    with _lock(ruta):
+        registro = cargar_registro_seguimiento(ruta)
+        entrada = registro.setdefault(thread_id, {"tipo": tipo, "rit": rit, "avisos": []})
+        entrada["tipo"] = tipo
+        if rit:
+            entrada["rit"] = rit
+        entrada["avisos"] = [
+            {"n": n, "fecha": str(_parsear_fecha(a["fecha"])), "message_id": a["message_id"]}
+            for n, a in enumerate(avisos, start=1)
+        ]
+        if borrador_pendiente:
+            entrada["borrador_pendiente"] = borrador_pendiente
+        else:
+            entrada.pop("borrador_pendiente", None)
         entrada["ultima_revision"] = datetime.now().isoformat()
         registro[thread_id] = entrada
         _guardar(ruta, registro)
@@ -557,6 +601,13 @@ def migrar_pedidos_bootstrap(
                 "ultima_revision": datetime.now().isoformat(),
             }
             creados.append(clave)
+
+        # Un borrador de documentos que ya no figura en ninguna causa (se envió
+        # o se borró) no puede quedar pendiente para siempre.
+        drafts_vigentes = {c.get("borrador_documentos_draft_id") for c in cargar_registro_causas(ruta_causas).values()}
+        for pedido in pedidos.values():
+            if pedido.get("estado") == "pendiente_envio" and pedido.get("draft_id") not in drafts_vigentes:
+                pedido["estado"] = "descartado"
 
         _guardar(ruta_pedidos, pedidos)
     return {"creados": creados, "ya_existian": ya_existian}

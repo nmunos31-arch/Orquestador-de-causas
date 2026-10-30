@@ -12,8 +12,7 @@ borradores) ni borra ni cierra nada sin que Nico lo revise."""
 from __future__ import annotations
 
 import html as html_mod
-import re
-from datetime import date
+from datetime import date, datetime
 from email.utils import getaddresses
 from pathlib import Path
 
@@ -30,6 +29,7 @@ CUENTA_ACUERDO_DANIELA = "dsanchezv@smu.cl"
 DOMINIO_INTERNO = "@gomezyriesco.cl"
 
 UMBRAL_DIAS_HABILES_INSISTENCIA_DOCUMENTOS = 4
+UMBRAL_DIAS_HABILES_BORRADOR_PENDIENTE = 2
 
 TEXTO_A_DOCUMENTOS = "los documentos solicitados"
 TEXTO_A_ACUERDO = "el correo anterior"
@@ -100,22 +100,42 @@ def _clasificar_pedido(pedido: dict, mensajes_posteriores_reales: list[dict]) ->
     )
 
 
+def _momento_envio(pedido: dict, mensajes_hilo: list[dict]) -> datetime:
+    """Hora exacta en que Nico envió el pedido. Prioridad: el `momento_envio`
+    guardado al dar de alta; si falta (pedido legado), el mensaje del hilo
+    con el `message_id` del pedido; y si tampoco, la medianoche de
+    `fecha_envio` en America/Santiago."""
+    if pedido.get("momento_envio"):
+        return datetime.fromisoformat(pedido["momento_envio"])
+    message_id = pedido.get("message_id")
+    if message_id:
+        for m in mensajes_hilo:
+            if m.get("id") == message_id:
+                return seguimiento_mod.momento(m)
+    return seguimiento_mod.momento_desde_fecha(pedido["fecha_envio"])
+
+
 def _mensajes_posteriores(
-    thread_id: str, mensajes_hilo: list[dict], fecha_envio: str, rit: str | None, mapa_hilos: dict
+    thread_id: str, mensajes_hilo: list[dict], momento_envio: datetime, rit: str | None, mapa_hilos: dict
 ) -> list[dict]:
-    """Mensajes con fecha posterior a `fecha_envio`: los del hilo original
-    más los de otros hilos del mismo RIT que el barrido combinado de la
-    corrida (mapa_hilos) haya encontrado (seguimiento.md paso 3b) — Gmail no
-    siempre encadena por los headers reales, la respuesta puede llegar en un
-    hilo que parece "separado" aunque el pedido esté en otro."""
-    fecha_envio_dt = date.fromisoformat(fecha_envio)
+    """Mensajes enviados DESPUÉS de `momento_envio` por alguien que no es
+    Nico: los del hilo original más los de otros hilos del mismo RIT que el
+    barrido combinado de la corrida (mapa_hilos) haya encontrado (seguimiento.md
+    paso 3b) — Gmail no siempre encadena por los headers reales, la respuesta
+    puede llegar en un hilo que parece "separado" aunque el pedido esté en
+    otro. Descarta borradores (aún no enviados) y los propios de Nico."""
     candidatos = list(mensajes_hilo)
     if rit:
         for otro_thread_id in mapa_hilos.get("rit_a_hilos", {}).get(rit, []):
             if otro_thread_id == thread_id:
                 continue
             candidatos += mapa_hilos.get("hilos", {}).get(otro_thread_id, [])
-    return [m for m in candidatos if seguimiento_mod.parsear_fecha(m["date"]).date() > fecha_envio_dt]
+    return [
+        m for m in candidatos
+        if not m.get("es_borrador", False)
+        and seguimiento_mod.extraer_direccion(m.get("sender", "")) != CUENTA_TRABAJO
+        and seguimiento_mod.momento(m) > momento_envio
+    ]
 
 
 def _nombre_para_saludo(destinatario: str) -> str:
@@ -125,24 +145,16 @@ def _nombre_para_saludo(destinatario: str) -> str:
 
 
 def _destinatarios_pedido(pedido: dict, mensajes_hilo: list[dict]) -> dict:
-    """"Para" = destinatario registrado en el pedido (o, si viene vacío, el
-    `to` del último mensaje propio del hilo); "CC" = el resto de los
-    participantes del hilo, sin incluir a Nico ni duplicar el "para"."""
-    para = pedido.get("destinatario") or ""
-    if not para:
-        propios = [m for m in mensajes_hilo if seguimiento_mod.extraer_direccion(m.get("sender", "")) == CUENTA_TRABAJO]
-        if propios:
-            para = seguimiento_mod.destinatarios_de_ultimo_propio(propios[-1], CUENTA_TRABAJO)["para"]
-
-    vistos = {CUENTA_TRABAJO, (para or "").strip().lower()}
-    cc: list[str] = []
-    for m in mensajes_hilo:
-        for campo in ("sender", "to", "cc"):
-            for _nombre, direccion in getaddresses([m.get(campo, "") or ""]):
-                direccion = direccion.strip().lower()
-                if direccion and direccion not in vistos:
-                    vistos.add(direccion)
-                    cc.append(direccion)
+    """Responder a todos el último correo que Nico envió: "Para" = destinatario
+    registrado en el pedido (o, si viene vacío, el del último envío); "CC" =
+    el resto de To y Cc de ese último envío, sin Nico ni repetir el "para".
+    No suma participantes de mensajes anteriores del hilo."""
+    propios = seguimiento_mod.enviados_propios(mensajes_hilo, CUENTA_TRABAJO)
+    ultimo = seguimiento_mod.destinatarios_de_ultimo_propio(propios[-1], CUENTA_TRABAJO) if propios else {"para": "", "cc": []}
+    para = pedido.get("destinatario") or ultimo["para"]
+    para_normalizado = (para or "").strip().lower()
+    todos = ([ultimo["para"]] if ultimo["para"] else []) + ultimo["cc"]
+    cc = [d for d in todos if d != para_normalizado and d != CUENTA_TRABAJO]
     return {"para": para, "cc": ", ".join(cc)}
 
 
@@ -150,6 +162,23 @@ def _asunto_respuesta(mensajes_hilo: list[dict]) -> str:
     asunto_base = mensajes_hilo[-1].get("subject", "") if mensajes_hilo else ""
     asunto_normalizado = seguimiento_mod.normalizar_asunto(asunto_base)
     return f"Re: {asunto_normalizado}" if asunto_normalizado else "Re:"
+
+
+def _nombre_para_saludo_desde_hilo(para: str, mensajes_hilo: list[dict]) -> str:
+    """Nombre de pila con el que Nico escribió a `para` en su último envío
+    (el nombre visible del "Para"); si no lo tiene, la parte antes de la @."""
+    propios = seguimiento_mod.enviados_propios(mensajes_hilo, CUENTA_TRABAJO)
+    if propios:
+        for nombre, direccion in getaddresses([propios[-1].get("to", "") or ""]):
+            if nombre.strip() and direccion.strip().lower() == (para or "").strip().lower():
+                return seguimiento_mod.extraer_nombre_pila(f"{nombre} <{direccion}>")
+    return _nombre_para_saludo(para)
+
+
+def _citado_html(mensajes_hilo: list[dict]) -> str:
+    """Bloque citado del último mensaje real de la cadena (sin borradores)."""
+    no_borradores = [m for m in mensajes_hilo if not m.get("es_borrador")]
+    return seguimiento_mod.bloque_citado_html(no_borradores[-1]) if no_borradores else ""
 
 
 def _texto_plano_a_html(texto: str) -> str:
@@ -167,21 +196,27 @@ def _cuerpo_con_lista(cuerpo_texto: str, items: list[str]) -> str:
     return antes_html + _texto_a_lista_html(items) + despues_html
 
 
+def _borradores_del_hilo(mensajes_hilo: list[dict]) -> list[dict]:
+    """Borradores sin enviar que hay en la cadena (ya marcados en
+    `gmail_client.aplanar_mensaje`)."""
+    return [m for m in mensajes_hilo if m.get("es_borrador")]
+
+
 def _crear_insistencia(pedido: dict, tipo: str, mensajes_hilo: list[dict]) -> tuple[bool, str | None]:
     """Crea el borrador de insistencia (texto A). El comando nunca duplica:
     si la cadena ya tiene otro borrador sin enviar, lo reusa."""
     thread_id = pedido["thread_id"]
-    existentes = gmail_client.listar_borradores_de_hilo(thread_id)
+    existentes = _borradores_del_hilo(mensajes_hilo)
     if existentes:
         return False, existentes[0]["id"]
 
-    nombre = _nombre_para_saludo(pedido.get("destinatario", ""))
+    destinatarios = _destinatarios_pedido(pedido, mensajes_hilo)
+    nombre = _nombre_para_saludo_desde_hilo(destinatarios["para"], mensajes_hilo)
     que_insistir = TEXTO_A_DOCUMENTOS if tipo == "documentos" else TEXTO_A_ACUERDO
     cuerpo = f"Estimado/a {nombre}:\n\nJunto con saludar, ruego tener presente {que_insistir}.\n\nAtentamente,"
-    destinatarios = _destinatarios_pedido(pedido, mensajes_hilo)
     asunto = _asunto_respuesta(mensajes_hilo)
     borrador = gmail_client.crear_borrador(
-        destinatarios["para"], asunto, _texto_plano_a_html(cuerpo),
+        destinatarios["para"], asunto, _texto_plano_a_html(cuerpo) + _citado_html(mensajes_hilo),
         thread_id=thread_id, html=True, cc=destinatarios["cc"] or None,
     )
     return True, borrador["id"]
@@ -194,17 +229,17 @@ def _crear_recordatorio_faltantes(
     `tipo: documentos` con respuesta parcial). Mismo criterio de no
     duplicar que `_crear_insistencia`."""
     thread_id = pedido["thread_id"]
-    existentes = gmail_client.listar_borradores_de_hilo(thread_id)
+    existentes = _borradores_del_hilo(mensajes_hilo)
     if existentes:
         return False, existentes[0]["id"]
 
-    nombre = _nombre_para_saludo(pedido.get("destinatario", ""))
+    destinatarios = _destinatarios_pedido(pedido, mensajes_hilo)
+    nombre = _nombre_para_saludo_desde_hilo(destinatarios["para"], mensajes_hilo)
     cuerpo_base = (
         f"Estimado/a {nombre}:\n\nJunto con saludar, ruego tener presente que se "
         "encuentran pendiente los siguientes documentos:\n\n[[LISTA]]\n\nAtentamente,"
     )
-    cuerpo_html = _cuerpo_con_lista(cuerpo_base, faltantes)
-    destinatarios = _destinatarios_pedido(pedido, mensajes_hilo)
+    cuerpo_html = _cuerpo_con_lista(cuerpo_base, faltantes) + _citado_html(mensajes_hilo)
     asunto = _asunto_respuesta(mensajes_hilo)
     borrador = gmail_client.crear_borrador(
         destinatarios["para"], asunto, cuerpo_html,
@@ -242,6 +277,26 @@ def _evaluar_insistencia(
     fecha_envio = pedido["fecha_envio"]
     rit = pedido.get("rit")
 
+    # Los avisos salen de lo que Nico realmente envió después del pedido, no
+    # de los borradores que creó el bot: un borrador borrado no cuenta, y una
+    # insistencia escrita a mano sí. Un borrador sin enviar que sigue en la
+    # cadena se muestra como acción si ya lleva varios días hábiles.
+    momento_envio = _momento_envio(pedido, mensajes_hilo)
+    enviados = seguimiento_mod.enviados_propios(mensajes_hilo, CUENTA_TRABAJO, desde=momento_envio)
+    avisos = [{"fecha": str(seguimiento_mod.momento(m).date()), "message_id": m["id"]} for m in enviados]
+    pendiente = None
+    if _borradores_del_hilo(mensajes_hilo):
+        entrada = registro_mod.obtener_seguimiento(thread_id, ruta_registro_seguimiento) or {}
+        pendiente = entrada.get("borrador_pendiente") or {"fecha": fecha_hoy}
+        dias_pendiente = dias_mod.dias_habiles_entre(pendiente["fecha"], fecha_hoy)
+        if dias_pendiente >= UMBRAL_DIAS_HABILES_BORRADOR_PENDIENTE:
+            acciones.append({
+                "rit": rit,
+                "que": f"Insistencia pendiente de enviar hace {dias_pendiente} días hábiles",
+                "urgencia": "media",
+            })
+    registro_mod.sincronizar_avisos(thread_id, avisos, _tipo_aviso(pedido), rit, pendiente, ruta=ruta_registro_seguimiento)
+
     if tipo == "documentos":
         corresponde = dias_mod.dias_habiles_entre(fecha_envio, fecha_hoy) >= UMBRAL_DIAS_HABILES_INSISTENCIA_DOCUMENTOS
     else:
@@ -271,8 +326,8 @@ def _evaluar_insistencia(
     if not creado:
         return "sin_novedad"
 
-    registro_mod.registrar_aviso(
-        thread_id, _tipo_aviso(pedido), fecha_hoy, rit=rit, draft_id=draft_id, ruta=ruta_registro_seguimiento
+    registro_mod.sincronizar_avisos(
+        thread_id, avisos, _tipo_aviso(pedido), rit, {"fecha": fecha_hoy}, ruta=ruta_registro_seguimiento
     )
     items.append({
         "rit": rit, "titulo": pedido.get("destinatario", ""),
@@ -306,7 +361,8 @@ def _procesar_pedido(
         return "sin_novedad"
 
     mensajes_hilo = _leer_hilo_cacheado(thread_id, cache_hilos)
-    posteriores = _mensajes_posteriores(thread_id, mensajes_hilo, fecha_envio, rit, mapa_hilos)
+    momento_envio = _momento_envio(pedido, mensajes_hilo)
+    posteriores = _mensajes_posteriores(thread_id, mensajes_hilo, momento_envio, rit, mapa_hilos)
     posteriores_reales = [
         m for m in posteriores if not seguimiento_mod.parece_cierre_sin_pedido(m.get("cuerpo_texto", ""))
     ]
@@ -333,6 +389,16 @@ def _procesar_pedido(
             return "completo"
 
         if estado == "parcial" and tipo == "documentos":
+            if not pedido.get("items_pedidos"):
+                # Sin la lista de lo pedido no se sabe qué falta: no se cierra
+                # ni se manda recordatorio, queda para revisar a mano.
+                acciones.append({
+                    "rit": rit,
+                    "que": "Respuesta parcial a pedido sin lista de documentos — revisar",
+                    "urgencia": "media",
+                })
+                registro_mod.registrar_pedido(thread_id, {}, ruta=ruta_registro_pedidos)
+                return "sin_novedad"
             items_recibidos = sorted(
                 set(pedido.get("items_recibidos") or []) | set(clasificacion.get("items_recibidos") or [])
             )
@@ -400,45 +466,107 @@ def _leer_hilo_cacheado(thread_id: str, cache_hilos: dict) -> list[dict]:
     return cache_hilos[thread_id]
 
 
+UMBRAL_DIAS_CORRIDOS_BUSCAR_ENVIO = 30
+
+
+def _desde_borrador(causa: dict) -> datetime | None:
+    """Momento desde el que se busca el envío del borrador de documentos: el de
+    la búsqueda ya en curso, el de creación del borrador, o (causas viejas) el
+    alta de la causa."""
+    valor = (
+        causa.get("borrador_documentos_buscar_envio_desde")
+        or causa.get("borrador_documentos_creado")
+        or causa.get("primera_vez_registrada")
+    )
+    if not valor:
+        return None
+    momento = datetime.fromisoformat(valor)
+    return momento if momento.tzinfo else momento.replace(tzinfo=seguimiento_mod.ZONA_NEGOCIO)
+
+
+def _buscar_envio_del_borrador(causa: dict, cache_hilos: dict, desde: datetime):
+    """Último envío propio posterior a `desde` (hora exacta): primero en la
+    cadena original de la causa; si no está, en los envíos de Gmail que
+    mencionen el RIT (Nico pudo reescribir el borrador como correo nuevo).
+    Devuelve (thread_id, mensaje) o None."""
+    thread_id = causa.get("thread_id")
+    if thread_id:
+        propios = seguimiento_mod.enviados_propios(_leer_hilo_cacheado(thread_id, cache_hilos), CUENTA_TRABAJO, desde=desde)
+        if propios:
+            return thread_id, propios[-1]
+    rit = causa.get("rit")
+    if not rit:
+        return None
+    for resumen in gmail_client.buscar_hilos(f'in:sent after:{desde.strftime("%Y/%m/%d")} "{rit}"'):
+        propios = seguimiento_mod.enviados_propios(_leer_hilo_cacheado(resumen["id"], cache_hilos), CUENTA_TRABAJO, desde=desde)
+        if propios:
+            return resumen["id"], propios[-1]
+    return None
+
+
 def _verificar_borradores_pendientes(
-    ruta_registro_causas: Path, ruta_registro_pedidos: Path, cache_hilos: dict
+    ruta_registro_causas: Path, ruta_registro_pedidos: Path, cache_hilos: dict, acciones: list[dict]
 ) -> dict:
     """Paso 1a: para cada causa con un borrador de documentos registrado,
-    revisa si Nico ya lo envió (mismo criterio que
-    `cli.cmd_verificar_borradores_pendientes`, llamando a `registro_mod`/
-    `gmail_client` directo en vez de por subprocess)."""
-    causas = registro_mod.causas_con_borrador_pendiente(ruta=ruta_registro_causas)
+    revisa si Nico ya lo envió. Un envío anterior a la creación del borrador no
+    cuenta. Si el borrador desapareció sin que se detecte el envío, queda
+    pendiente de búsqueda (y se avisa) hasta encontrarlo o por
+    UMBRAL_DIAS_CORRIDOS_BUSCAR_ENVIO días."""
+    causas = (
+        registro_mod.causas_con_borrador_pendiente(ruta=ruta_registro_causas)
+        + registro_mod.causas_buscando_envio_borrador(ruta=ruta_registro_causas)
+    )
     pendientes = []
     enviados = []
     descartados = []
+    ahora = datetime.now(seguimiento_mod.ZONA_NEGOCIO)
     for causa in causas:
-        draft_id = causa["borrador_documentos_draft_id"]
+        draft_id = causa.get("borrador_documentos_draft_id")
         rit = causa.get("rit")
-        if gmail_client.borrador_existe(draft_id):
+        if draft_id and gmail_client.borrador_existe(draft_id):
             pendientes.append({"rit": rit, "draft_id": draft_id, "thread_id": causa.get("thread_id")})
             continue
 
-        thread_id = causa.get("thread_id")
-        ultimo_propio = None
-        if thread_id:
-            for m in _leer_hilo_cacheado(thread_id, cache_hilos):
-                if seguimiento_mod.extraer_direccion(m.get("sender", "")) == CUENTA_TRABAJO:
-                    ultimo_propio = m
-
-        if ultimo_propio is not None:
-            destinatarios = seguimiento_mod.destinatarios_de_ultimo_propio(ultimo_propio, CUENTA_TRABAJO)
-            fecha_envio = str(seguimiento_mod.parsear_fecha(ultimo_propio["date"]).date())
-            registro_mod.registrar_pedido(thread_id, {
-                "rit": rit, "tipo": "documentos", "message_id": ultimo_propio["id"],
-                "fecha_envio": fecha_envio, "destinatario": destinatarios["para"],
+        desde = _desde_borrador(causa) or ahora
+        hallazgo = _buscar_envio_del_borrador(causa, cache_hilos, desde)
+        if hallazgo:
+            hilo_id, ultimo = hallazgo
+            destinatarios = seguimiento_mod.destinatarios_de_ultimo_propio(ultimo, CUENTA_TRABAJO)
+            fecha_envio = str(seguimiento_mod.momento(ultimo).date())
+            registro_mod.registrar_pedido(hilo_id, {
+                "rit": rit, "tipo": "documentos", "message_id": ultimo["id"],
+                "fecha_envio": fecha_envio, "momento_envio": seguimiento_mod.momento(ultimo).isoformat(),
+                "destinatario": destinatarios["para"],
                 "items_pedidos": causa.get("documentos_solicitados") or [],
                 "estado": "esperando", "origen": "borrador_enviado",
             }, ruta=ruta_registro_pedidos)
-            enviados.append({"rit": rit, "thread_id": thread_id, "fecha_envio": fecha_envio})
-        else:
-            descartados.append(rit)
+            enviados.append({"rit": rit, "thread_id": hilo_id, "fecha_envio": fecha_envio})
+            registro_mod.registrar_causa(rit, {
+                "borrador_documentos_draft_id": None, "borrador_documentos_buscar_envio_desde": None,
+            }, ruta=ruta_registro_causas)
+            continue
 
-        registro_mod.registrar_causa(rit, {"borrador_documentos_draft_id": None}, ruta=ruta_registro_causas)
+        if (ahora - desde).days >= UMBRAL_DIAS_CORRIDOS_BUSCAR_ENVIO:
+            descartados.append(rit)
+            acciones.append({
+                "rit": rit,
+                "que": f"Borrador de documentos ya no está y no se detectó el envío en {UMBRAL_DIAS_CORRIDOS_BUSCAR_ENVIO} días — se dejó de buscar",
+                "urgencia": "baja",
+            })
+            registro_mod.registrar_causa(rit, {
+                "borrador_documentos_draft_id": None, "borrador_documentos_buscar_envio_desde": None,
+            }, ruta=ruta_registro_causas)
+            continue
+
+        acciones.append({
+            "rit": rit,
+            "que": "Borrador de documentos ya no está y no se detectó el envío — revisar",
+            "urgencia": "media",
+        })
+        registro_mod.registrar_causa(rit, {
+            "borrador_documentos_draft_id": None,
+            "borrador_documentos_buscar_envio_desde": desde.isoformat(),
+        }, ruta=ruta_registro_causas)
     return {"pendientes": pendientes, "enviados": enviados, "descartados": descartados}
 
 
@@ -453,23 +581,32 @@ def _pedidos_desde_etiqueta(ruta_registro_pedidos: Path) -> dict:
     ya_registrados = []
     for hilo in hilos:
         thread_id = hilo["id"]
-        if registro_mod.obtener_pedido(thread_id, ruta=ruta_registro_pedidos) is not None:
+        existente = registro_mod.obtener_pedido(thread_id, ruta=ruta_registro_pedidos)
+        if existente is not None and existente.get("estado", "esperando") in registro_mod.ESTADOS_PEDIDO_ABIERTO:
             ya_registrados.append(thread_id)
             continue
         mensajes = gmail_client.leer_hilo(thread_id)
-        propios = [m for m in mensajes if seguimiento_mod.extraer_direccion(m.get("sender", "")) == CUENTA_TRABAJO]
+        # Un pedido ya cerrado solo se reabre si Nico envió algo después de él
+        # (re-etiquetó el hilo para un pedido nuevo); si no, sigue cerrado.
+        desde = _momento_envio(existente, mensajes) if existente and (existente.get("momento_envio") or existente.get("fecha_envio")) else None
+        propios = seguimiento_mod.enviados_propios(mensajes, CUENTA_TRABAJO, desde=desde)
         if not propios:
+            if existente is not None:
+                ya_registrados.append(thread_id)
             continue
         ultimo_propio = propios[-1]
         destinatarios = seguimiento_mod.destinatarios_de_ultimo_propio(ultimo_propio, CUENTA_TRABAJO)
         asunto_normalizado = seguimiento_mod.normalizar_asunto(ultimo_propio["subject"])
-        tiene_lista = bool(re.search(r"^\s*(\d+[.)]|[-*])\s+\S", ultimo_propio["cuerpo_texto"], re.MULTILINE))
+        items = seguimiento_mod.extraer_items_lista(ultimo_propio["cuerpo_texto"])
         datos = {
             "rit": registro_mod.extraer_rit(asunto_normalizado + " " + ultimo_propio["cuerpo_texto"]),
-            "tipo": "documentos" if tiene_lista else "acuerdo",
+            "tipo": "documentos" if items else "acuerdo",
             "message_id": ultimo_propio["id"],
             "fecha_envio": str(seguimiento_mod.parsear_fecha(ultimo_propio["date"]).date()),
+            "momento_envio": seguimiento_mod.momento(ultimo_propio).isoformat(),
             "destinatario": destinatarios["para"],
+            "items_pedidos": items,
+            "items_recibidos": [],
             "estado": "esperando",
             "origen": "etiqueta",
             "label_id": label_id,
@@ -521,7 +658,7 @@ def correr(
     mapa_hilos = mapas_mod.leer_mapa_hilos(contexto_corrida)
     cache_hilos: dict = dict(mapa_hilos.get("hilos") or {})
 
-    verificacion = _verificar_borradores_pendientes(ruta_registro_causas, ruta_registro_pedidos, cache_hilos)
+    verificacion = _verificar_borradores_pendientes(ruta_registro_causas, ruta_registro_pedidos, cache_hilos, acciones)
     etiqueta = _pedidos_desde_etiqueta(ruta_registro_pedidos)
     for creado in etiqueta["creados"]:
         if not creado.get("rit"):

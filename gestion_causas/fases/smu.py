@@ -18,7 +18,7 @@ import os
 import sys
 import tempfile
 import unicodedata
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from gestion_causas import bitacora as bitacora_mod
@@ -388,6 +388,7 @@ def correr(
 
         documentos_solicitados: list[str] = []
         draft_id = None
+        borrador_creado_en = None
         if demanda_disponible:
             documentos_solicitados = _armar_lista_documentos(ajustes, eerr_reusado=eerr_copiado)
             existentes = gmail_client.listar_borradores_de_hilo(thread_id)
@@ -399,6 +400,7 @@ def correr(
                     destinatario, asunto, cuerpo_html, thread_id=thread_id, html=True
                 )
                 draft_id = borrador.get("id")
+                borrador_creado_en = datetime.now().astimezone().isoformat()
                 borradores_creados += 1
             else:
                 draft_id = existentes[0]["id"]
@@ -416,6 +418,7 @@ def correr(
                 "fecha_despido": ajustes.get("fecha_despido"),
                 "borrador_documentos_draft_id": draft_id,
                 "documentos_solicitados": documentos_solicitados,
+                **({"borrador_documentos_creado": borrador_creado_en} if borrador_creado_en else {}),
             },
             ruta=ruta_registro_causas,
         )

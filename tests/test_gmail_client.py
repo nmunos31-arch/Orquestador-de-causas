@@ -406,3 +406,100 @@ class TestEsperaPorCuota:
         with pytest.raises(HttpError):
             solicitud.execute()
         assert esperas == [20, 40, 65]
+
+
+class _ServicioHiloConBorrador:
+    """Stub de threads().get(format=metadata|full) y drafts().list()/get()
+    para probar que los borradores del hilo se distinguen de los enviados."""
+
+    def __init__(self, mensajes_hilo, borradores_list=None, borradores_detalle=None):
+        self._mensajes = mensajes_hilo
+        self._borradores_list = borradores_list or []
+        self._borradores_detalle = borradores_detalle or {}
+        self.gets_de_borrador = []
+
+    def users(self):
+        return self
+
+    def threads(self):
+        return self
+
+    def drafts(self):
+        return self
+
+    def get(self, userId, id, format=None, metadataHeaders=None):
+        if format is None and id in self._borradores_detalle:
+            self.gets_de_borrador.append(id)
+            return _Ejecutable(self._borradores_detalle[id])
+        if format is None and id not in self._borradores_detalle:
+            self.gets_de_borrador.append(id)
+            return _Ejecutable({})
+        return _Ejecutable({"messages": self._mensajes})
+
+    def list(self, userId):
+        return _Ejecutable({"drafts": self._borradores_list})
+
+
+def _mensaje_crudo(id_, labels, message_id="<m@x>", asunto="Causa M-1-2026"):
+    return {
+        "id": id_,
+        "threadId": "thread-1",
+        "labelIds": labels,
+        "payload": {
+            "headers": [
+                {"name": "Subject", "value": asunto},
+                {"name": "From", "value": "nmunoz@gomezyriesco.cl"},
+                {"name": "Message-ID", "value": message_id},
+            ],
+            "mimeType": "text/plain",
+            "body": {"data": ""},
+        },
+    }
+
+
+class TestAplanarMensajeMarcaBorrador:
+    def test_borrador_tiene_es_borrador_true(self):
+        mensaje = gmail_client.aplanar_mensaje(_mensaje_crudo("m1", ["DRAFT"]))
+        assert mensaje["es_borrador"] is True
+
+    def test_enviado_tiene_es_borrador_false(self):
+        mensaje = gmail_client.aplanar_mensaje(_mensaje_crudo("m1", ["SENT"]))
+        assert mensaje["es_borrador"] is False
+
+    def test_sin_label_ids_no_es_borrador(self):
+        crudo = _mensaje_crudo("m1", [])
+        del crudo["labelIds"]
+        mensaje = gmail_client.aplanar_mensaje(crudo)
+        assert mensaje["es_borrador"] is False
+
+    def test_expone_message_id_header_y_labels(self):
+        mensaje = gmail_client.aplanar_mensaje(_mensaje_crudo("m1", ["SENT"], message_id="<abc@x>"))
+        assert mensaje["message_id_header"] == "<abc@x>"
+        assert mensaje["labels"] == ["SENT"]
+
+
+class TestCabecerasIgnoranBorradorFinal:
+    def test_in_reply_to_sale_del_ultimo_mensaje_no_borrador(self):
+        servicio = _ServicioHiloConBorrador([
+            _mensaje_crudo("m1", ["SENT"], message_id="<real@x>"),
+            _mensaje_crudo("m2", ["DRAFT"], message_id="<draft@x>"),
+        ])
+        cabeceras = gmail_client.cabeceras_respuesta_de_hilo("thread-1", servicio=servicio)
+        assert cabeceras["in_reply_to"] == "<real@x>"
+
+
+class TestListarBorradoresSoloDelHilo:
+    def test_no_pide_detalle_de_borradores_de_otros_hilos(self):
+        listado = [
+            {"id": "d1", "message": {"threadId": "thread-1"}},
+            {"id": "d2", "message": {"threadId": "thread-2"}},
+            {"id": "d3", "message": {"threadId": "thread-1"}},
+        ]
+        detalles = {
+            "d1": {"id": "d1", "message": {"threadId": "thread-1"}},
+            "d3": {"id": "d3", "message": {"threadId": "thread-1"}},
+        }
+        servicio = _ServicioHiloConBorrador([], borradores_list=listado, borradores_detalle=detalles)
+        resultado = gmail_client.listar_borradores_de_hilo("thread-1", servicio=servicio)
+        assert [b["id"] for b in resultado] == ["d1", "d3"]
+        assert servicio.gets_de_borrador == ["d1", "d3"]

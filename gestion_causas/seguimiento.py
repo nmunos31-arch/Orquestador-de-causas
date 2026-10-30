@@ -11,9 +11,11 @@ devuelve gmail_client.leer_mensaje / cli.cmd_leer_hilo: dict con "id",
 así se testean sin credenciales — mismo criterio que agenda.py y registro.py.
 """
 
+import html
 import re
 from datetime import date, datetime, timedelta
 from email.utils import getaddresses, parsedate_to_datetime
+from zoneinfo import ZoneInfo
 
 _PREFIJOS_ASUNTO = re.compile(r"^\s*(re|rv|fwd|fw)\s*:\s*", re.IGNORECASE)
 
@@ -204,6 +206,66 @@ def destinatarios_de_ultimo_propio(mensaje_propio: dict, direccion_propia: str) 
     if not direcciones:
         return {"para": "", "cc": []}
     return {"para": direcciones[0], "cc": direcciones[1:]}
+
+
+ZONA_NEGOCIO = ZoneInfo("America/Santiago")
+
+_REGEX_ITEM_LISTA = re.compile(r"^\s*(?:\d+[.)]|[-*])[ \t]+(.+?)[ \t]*$", re.MULTILINE)
+
+
+def momento(mensaje: dict) -> datetime:
+    """Momento exacto en que se envió `mensaje` (hora con su zona, tomada del
+    header Date)."""
+    return parsear_fecha(mensaje["date"])
+
+
+def momento_desde_fecha(fecha_iso: str) -> datetime:
+    """Medianoche de `fecha_iso` (AAAA-MM-DD) en America/Santiago. Para pedidos
+    viejos que solo guardaron la fecha, sin hora de envío."""
+    return datetime.fromisoformat(fecha_iso).replace(tzinfo=ZONA_NEGOCIO)
+
+
+def enviados_propios(mensajes: list, direccion_propia: str, desde: datetime | None = None) -> list:
+    """Mensajes realmente enviados por `direccion_propia`: descarta los
+    borradores (`es_borrador`) y, si se entrega `desde`, los anteriores o
+    iguales a ese momento. Ordenados por hora de envío. Un mensaje sin la
+    clave `es_borrador` cuenta como enviado."""
+    propia = (direccion_propia or "").strip().lower()
+    propios = [
+        m for m in mensajes
+        if extraer_direccion(m.get("sender", "")) == propia
+        and not m.get("es_borrador", False)
+        and (desde is None or momento(m) > desde)
+    ]
+    return sorted(propios, key=momento)
+
+
+def extraer_items_lista(cuerpo_texto: str) -> list[str]:
+    """Ítems de una lista numerada (`1.`, `2)`) o con viñetas (`-`, `*`) del
+    cuerpo de un correo, sin el marcador. Vacío si el correo no trae lista."""
+    return _REGEX_ITEM_LISTA.findall(cuerpo_texto or "")
+
+
+_REGEX_ETIQUETA_HTML = re.compile(r"<[^>]+>")
+
+
+def bloque_citado_html(mensaje: dict) -> str:
+    """Bloque "El <fecha>, <remitente> escribió:" con el cuerpo de `mensaje`
+    citado, igual que arma Gmail al responder: así el borrador queda dentro de
+    la cadena como respuesta real. Si el cuerpo viene en HTML, quita las
+    etiquetas; el texto resultante se escapa."""
+    texto = mensaje.get("cuerpo_texto") or ""
+    if _REGEX_ETIQUETA_HTML.search(texto):
+        texto = html.unescape(_REGEX_ETIQUETA_HTML.sub("", texto))
+    cuerpo_html = "<br>".join(html.escape(linea) for linea in texto.splitlines())
+    cuando = momento(mensaje).astimezone(ZONA_NEGOCIO).strftime("%d-%m-%Y %H:%M")
+    remitente = html.escape(mensaje.get("sender", ""))
+    return (
+        '<br><div class="gmail_quote">'
+        f'<div class="gmail_attr">El {cuando}, {remitente} escribió:</div>'
+        '<blockquote class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex">'
+        f"{cuerpo_html}</blockquote></div>"
+    )
 
 
 # ── Barrido combinado de Gmail por RIT (goteo.md paso 2 / seguimiento.md

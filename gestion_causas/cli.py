@@ -81,21 +81,7 @@ def cmd_buscar_hilos(args) -> int:
 
 
 def cmd_leer_hilo(args) -> int:
-    hilo = gmail_client.obtener_hilo(args.thread_id)
-    mensajes = []
-    for mensaje_crudo in hilo.get("messages", []):
-        headers = {h["name"].lower(): h["value"] for h in mensaje_crudo["payload"].get("headers", [])}
-        mensajes.append({
-            "id": mensaje_crudo["id"],
-            "thread_id": mensaje_crudo["threadId"],
-            "subject": headers.get("subject", ""),
-            "sender": headers.get("from", ""),
-            "to": headers.get("to", ""),
-            "cc": headers.get("cc", ""),
-            "date": headers.get("date", ""),
-            "cuerpo_texto": gmail_client._extraer_texto_plano(mensaje_crudo["payload"]),
-            "adjuntos": gmail_client._listar_adjuntos(mensaje_crudo["payload"]),
-        })
+    mensajes = _mensajes_de_hilo(args.thread_id)
     _imprimir_json({"thread_id": args.thread_id, "mensajes": mensajes})
     return 0
 
@@ -346,21 +332,7 @@ def _mensajes_de_hilo(thread_id: str) -> list:
     """Trae y aplana los mensajes de un hilo al mismo formato que usa
     cmd_leer_hilo (con to/cc), para pasarlos a seguimiento.analizar_hilo."""
     hilo = gmail_client.obtener_hilo(thread_id)
-    mensajes = []
-    for mensaje_crudo in hilo.get("messages", []):
-        headers = {h["name"].lower(): h["value"] for h in mensaje_crudo["payload"].get("headers", [])}
-        mensajes.append({
-            "id": mensaje_crudo["id"],
-            "thread_id": mensaje_crudo["threadId"],
-            "subject": headers.get("subject", ""),
-            "sender": headers.get("from", ""),
-            "to": headers.get("to", ""),
-            "cc": headers.get("cc", ""),
-            "date": headers.get("date", ""),
-            "cuerpo_texto": gmail_client._extraer_texto_plano(mensaje_crudo["payload"]),
-            "adjuntos": gmail_client._listar_adjuntos(mensaje_crudo["payload"]),
-        })
-    return mensajes
+    return [gmail_client.aplanar_mensaje(mensaje_crudo) for mensaje_crudo in hilo.get("messages", [])]
 
 
 def cmd_hilos_sin_respuesta(args) -> int:
