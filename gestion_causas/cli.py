@@ -269,6 +269,14 @@ def verificar_borradores_pendientes(dry_run: bool = False) -> dict:
     - Nico lo BORRÓ a mano sin enviarlo: no hay mensaje propio nuevo que
       registrar como pedido — se reporta en 'descartados'.
 
+    Aunque el draft_id siga existiendo, si ya hay un mensaje propio en el
+    hilo más nuevo que `borrador_documentos_creado`, igual se trata como
+    ENVIADO: Nico pudo mandarlo cambiando los destinatarios (ej. "Responder
+    a todos"), lo que en Gmail deja un borrador nuevo y dicho borrador
+    original, el registrado, queda huérfano sin enviar ni borrar (casos
+    Ramírez y Muñoz, 03.11.2026) — mirar solo si el draft_id sigue vivo no
+    alcanza para saber que Nico no lo mandó.
+
     En ambos casos se limpia `borrador_documentos_draft_id` del registro de
     causas para no volver a chequearlo.
 
@@ -295,24 +303,27 @@ def verificar_borradores_pendientes(dry_run: bool = False) -> dict:
     for causa in registro_mod.causas_con_borrador_pendiente():
         draft_id = causa["borrador_documentos_draft_id"]
         rit = causa.get("rit")
-        if gmail_client.borrador_existe(draft_id):
-            pendientes.append({
-                "rit": rit,
-                "empresa": causa.get("empresa"),
-                "demandante": causa.get("demandante"),
-                "draft_id": draft_id,
-                "thread_id": causa.get("thread_id"),
-                "tipo": "documentos",
-            })
-            continue
-
         thread_id = causa.get("thread_id")
-        ultimo_propio = None
-        if thread_id:
-            mensajes = _mensajes_de_hilo(thread_id)
-            for m in mensajes:
-                if seguimiento_mod.extraer_direccion(m.get("sender", "")) == CUENTA_TRABAJO:
-                    ultimo_propio = m
+
+        if gmail_client.borrador_existe(draft_id):
+            ultimo_propio = _ultimo_propio_posterior_a_creacion(causa, thread_id)
+            if ultimo_propio is None:
+                pendientes.append({
+                    "rit": rit,
+                    "empresa": causa.get("empresa"),
+                    "demandante": causa.get("demandante"),
+                    "draft_id": draft_id,
+                    "thread_id": thread_id,
+                    "tipo": "documentos",
+                })
+                continue
+        else:
+            ultimo_propio = None
+            if thread_id:
+                mensajes = _mensajes_de_hilo(thread_id)
+                for m in mensajes:
+                    if seguimiento_mod.extraer_direccion(m.get("sender", "")) == CUENTA_TRABAJO:
+                        ultimo_propio = m
 
         if ultimo_propio is not None:
             destinatarios = seguimiento_mod.destinatarios_de_ultimo_propio(ultimo_propio, CUENTA_TRABAJO)
@@ -365,6 +376,31 @@ def _mensajes_de_hilo(thread_id: str) -> list:
     cmd_leer_hilo (con to/cc), para pasarlos a seguimiento.analizar_hilo."""
     hilo = gmail_client.obtener_hilo(thread_id)
     return [gmail_client.aplanar_mensaje(mensaje_crudo) for mensaje_crudo in hilo.get("messages", [])]
+
+
+def _ultimo_propio_posterior_a_creacion(causa: dict, thread_id: str | None) -> dict | None:
+    """Último mensaje propio (nmunoz@gomezyriesco.cl) del hilo que sea más
+    nuevo que `borrador_documentos_creado` — indicio de que Nico ya mandó el
+    pedido de documentos por otra vía aunque el draft_id original siga
+    existiendo en Gmail (ver docstring de verificar_borradores_pendientes).
+    None si no hay fecha de creación registrada (causas viejas, de antes de
+    que smu.py guardara ese campo) o si no se encontró nada posterior."""
+    creado_en = causa.get("borrador_documentos_creado") or causa.get("primera_vez_registrada")
+    if not thread_id or not creado_en:
+        return None
+    desde = datetime.datetime.fromisoformat(creado_en)
+    if desde.tzinfo is None:
+        desde = desde.replace(tzinfo=seguimiento_mod.ZONA_NEGOCIO)
+    ultimo = None
+    for m in _mensajes_de_hilo(thread_id):
+        if seguimiento_mod.extraer_direccion(m.get("sender", "")) != CUENTA_TRABAJO:
+            continue
+        fecha_m = seguimiento_mod.parsear_fecha(m["date"])
+        if fecha_m.tzinfo is None:
+            fecha_m = fecha_m.replace(tzinfo=seguimiento_mod.ZONA_NEGOCIO)
+        if fecha_m > desde:
+            ultimo = m
+    return ultimo
 
 
 def cmd_hilos_sin_respuesta(args) -> int:
