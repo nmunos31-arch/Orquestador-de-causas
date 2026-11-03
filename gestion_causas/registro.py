@@ -183,6 +183,21 @@ def causas_con_borrador_pendiente(ruta: Path = RUTA_REGISTRO_CAUSAS) -> list:
     ]
 
 
+def causas_con_oferta_pendiente(ruta: Path = RUTA_REGISTRO_CAUSAS) -> list:
+    """Igual que `causas_con_borrador_pendiente`, pero para el borrador de
+    ofrecimiento de acuerdo de la fase "agenda" (campo
+    `oferta_borrador_draft_id`). Es un flujo separado porque antes de esto
+    `agenda.py` solo guardaba `oferta_borrador_creado: true` (un booleano
+    sin el draft_id), así que ese borrador nunca se podía verificar contra
+    Gmail ni aparecía en la bandeja de "Requiere tu atención" del panel —
+    quedaba sin enviar indefinidamente sin que nadie lo recordara (caso
+    detectado por Nico con el borrador de Moreno, 03.11.2026)."""
+    return [
+        entrada for entrada in cargar_registro_causas(ruta).values()
+        if entrada.get("oferta_borrador_draft_id")
+    ]
+
+
 def causas_buscando_envio_borrador(ruta: Path = RUTA_REGISTRO_CAUSAS) -> list:
     """Causas cuyo borrador de documentos desapareció sin que se detectara el
     envío (`borrador_documentos_buscar_envio_desde` seteado y sin draft vigente):

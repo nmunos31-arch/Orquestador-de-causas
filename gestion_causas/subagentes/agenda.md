@@ -219,10 +219,13 @@ g. **Busca si ya existe la cadena interna de esta causa** — Nico tiene la cost
      El comando ya evita duplicar si existe un borrador con ese mismo asunto — revisa
      `creado` en la respuesta.
 
-h. Si `creado` es true, registra que ya se hizo (para no repetirlo en corridas
-   futuras):
+h. Registra que ya se hizo (para no repetirlo en corridas futuras), guardando también el
+   `draft_id` devuelto por `crear-borrador` — sin el draft_id, `verificar-borradores-pendientes`
+   no puede chequear contra Gmail si Nico ya lo envió, y el borrador no aparece como
+   pendiente en el panel aunque siga sin enviar (caso detectado con el borrador de Moreno,
+   03.11.2026):
    ```
-   python -m gestion_causas.cli registrar-causa --rit "<rit>" --datos-json "<json con {\"oferta_borrador_creado\": true}>"
+   python -m gestion_causas.cli registrar-causa --rit "<rit>" --datos-json "<json con {\"oferta_borrador_creado\": true, \"oferta_borrador_draft_id\": \"<draft_id>\"}>"
    ```
    y anota en la bitácora.
 

@@ -315,6 +315,67 @@ class TestPanel:
         assert salida["simulado"] is True
 
 
+class TestVerificarBorradoresPendientesOfrecimiento:
+    """`verificar_borradores_pendientes` también revisa los borradores de
+    ofrecimiento de acuerdo (campo `oferta_borrador_draft_id`, agregado
+    junto con esta prueba) — antes de eso, un borrador de ofrecimiento sin
+    enviar nunca se reportaba como pendiente (caso Moreno, 03.11.2026)."""
+
+    def test_borrador_de_oferta_que_sigue_existiendo_queda_pendiente(self, monkeypatch):
+        import gestion_causas.cli as cli_mod
+
+        monkeypatch.setattr(cli_mod.registro_mod, "causas_con_borrador_pendiente", lambda: [])
+        monkeypatch.setattr(cli_mod.registro_mod, "causas_con_oferta_pendiente", lambda: [
+            {"rit": "M-461-2026", "empresa": "Rendic Hermanos", "demandante": "Moreno", "oferta_borrador_draft_id": "d-oferta-1"},
+        ])
+        monkeypatch.setattr(cli_mod.gmail_client, "borrador_existe", lambda draft_id: True)
+
+        resultado = cli_mod.verificar_borradores_pendientes()
+
+        assert resultado["pendientes"] == [{
+            "rit": "M-461-2026", "empresa": "Rendic Hermanos", "demandante": "Moreno",
+            "draft_id": "d-oferta-1", "thread_id": None, "tipo": "ofrecimiento",
+        }]
+        assert resultado["enviados"] == []
+
+    def test_borrador_de_oferta_ya_enviado_se_limpia_del_registro(self, monkeypatch):
+        import gestion_causas.cli as cli_mod
+
+        monkeypatch.setattr(cli_mod.registro_mod, "causas_con_borrador_pendiente", lambda: [])
+        monkeypatch.setattr(cli_mod.registro_mod, "causas_con_oferta_pendiente", lambda: [
+            {"rit": "M-461-2026", "oferta_borrador_draft_id": "d-oferta-1"},
+        ])
+        monkeypatch.setattr(cli_mod.gmail_client, "borrador_existe", lambda draft_id: False)
+        llamadas_registrar = []
+        monkeypatch.setattr(
+            cli_mod.registro_mod, "registrar_causa",
+            lambda rit, datos, **k: llamadas_registrar.append((rit, datos)),
+        )
+
+        resultado = cli_mod.verificar_borradores_pendientes()
+
+        assert resultado["pendientes"] == []
+        assert resultado["enviados"] == [{"rit": "M-461-2026", "tipo": "ofrecimiento"}]
+        assert llamadas_registrar == [("M-461-2026", {"oferta_borrador_draft_id": None})]
+
+    def test_dry_run_no_escribe_en_el_registro(self, monkeypatch):
+        import gestion_causas.cli as cli_mod
+
+        monkeypatch.setattr(cli_mod.registro_mod, "causas_con_borrador_pendiente", lambda: [])
+        monkeypatch.setattr(cli_mod.registro_mod, "causas_con_oferta_pendiente", lambda: [
+            {"rit": "M-461-2026", "oferta_borrador_draft_id": "d-oferta-1"},
+        ])
+        monkeypatch.setattr(cli_mod.gmail_client, "borrador_existe", lambda draft_id: False)
+
+        def _no_debe_llamarse(*a, **k):
+            raise AssertionError("dry_run no debe escribir en el registro")
+        monkeypatch.setattr(cli_mod.registro_mod, "registrar_causa", _no_debe_llamarse)
+
+        resultado = cli_mod.verificar_borradores_pendientes(dry_run=True)
+
+        assert resultado["enviados"] == [{"rit": "M-461-2026", "tipo": "ofrecimiento"}]
+
+
 class TestContextoCorrida:
     """Paso 0 del ciclo: resuelve una sola vez lo que las 4 fases
     comparten (fecha, tokens, cache de calendario). Sin red: los tres

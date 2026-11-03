@@ -452,7 +452,9 @@ def _procesar_ofrecimiento(
     asunto = _armar_asunto_ofrecimiento(causa, rit)
     draft_id, creado, borrador_ajeno_detectado = _crear_borrador_ofrecimiento(rit, cuerpo, asunto)
 
-    registro_mod.registrar_causa(rit, {"oferta_borrador_creado": True}, ruta=ruta_registro_causas)
+    registro_mod.registrar_causa(
+        rit, {"oferta_borrador_creado": True, "oferta_borrador_draft_id": draft_id}, ruta=ruta_registro_causas
+    )
     if creado:
         bitacora_mod.registrar(f"Borrador de ofrecimiento creado (draft {draft_id})", rit=rit)
     else:

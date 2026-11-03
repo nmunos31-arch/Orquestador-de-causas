@@ -360,10 +360,15 @@ def acciones_consolidadas(
                 rits_gestion_manual_reportados.add(rit)
     for b in (borradores_pendientes or []):
         detalle_empresa = f" ({b['empresa']} - {b['demandante']})" if b.get("empresa") else ""
+        es_ofrecimiento = b.get("tipo") == "ofrecimiento"
         acciones.append({
-            "origen": "smu",
+            "origen": "agenda" if es_ofrecimiento else "smu",
             "rit": b.get("rit", ""),
-            "que": f"Borrador de documentos sin enviar{detalle_empresa}",
+            "que": (
+                f"Borrador de ofrecimiento de acuerdo sin enviar{detalle_empresa}"
+                if es_ofrecimiento
+                else f"Borrador de documentos sin enviar{detalle_empresa}"
+            ),
             "urgencia": "media",
         })
     for c in causas:

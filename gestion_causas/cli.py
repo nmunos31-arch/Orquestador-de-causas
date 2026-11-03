@@ -272,14 +272,27 @@ def verificar_borradores_pendientes(dry_run: bool = False) -> dict:
     En ambos casos se limpia `borrador_documentos_draft_id` del registro de
     causas para no volver a chequearlo.
 
+    También revisa, igual contra Gmail, los borradores de ofrecimiento de
+    acuerdo de la fase "agenda" (campo `oferta_borrador_draft_id`) — hasta
+    03.11.2026 esa fase solo guardaba un booleano (`oferta_borrador_creado`)
+    sin el draft_id, así que esos borradores nunca entraban a esta
+    verificación ni aparecían como pendientes en el panel (caso Moreno). Acá
+    no se intenta distinguir enviado de descartado como con los de
+    documentos (no hay un pedido que dar de alta: si Nico ya lo envió, el
+    seguimiento de la respuesta lo cubre aparte vía la etiqueta
+    Esperando-Respuesta) — simplemente se reportan en 'pendientes' mientras
+    el borrador siga existiendo, y una vez que deja de existir (enviado o
+    descartado) se reportan en 'enviados' y se limpia el campo del registro
+    para no volver a chequearlo.
+
     Función pura (sin argparse ni stdout) para que tanto la CLI
     (`cmd_verificar_borradores_pendientes`) como `ciclo.py` la llamen
     directo, sin pasar por un subprocess."""
-    causas = registro_mod.causas_con_borrador_pendiente()
     pendientes = []
     enviados = []
     descartados = []
-    for causa in causas:
+
+    for causa in registro_mod.causas_con_borrador_pendiente():
         draft_id = causa["borrador_documentos_draft_id"]
         rit = causa.get("rit")
         if gmail_client.borrador_existe(draft_id):
@@ -289,6 +302,7 @@ def verificar_borradores_pendientes(dry_run: bool = False) -> dict:
                 "demandante": causa.get("demandante"),
                 "draft_id": draft_id,
                 "thread_id": causa.get("thread_id"),
+                "tipo": "documentos",
             })
             continue
 
@@ -314,12 +328,30 @@ def verificar_borradores_pendientes(dry_run: bool = False) -> dict:
                     "estado": "esperando",
                     "origen": "borrador_enviado",
                 })
-            enviados.append({"rit": rit, "thread_id": thread_id, "fecha_envio": fecha_envio})
+            enviados.append({"rit": rit, "thread_id": thread_id, "fecha_envio": fecha_envio, "tipo": "documentos"})
         else:
             descartados.append(rit)
 
         if not dry_run:
             registro_mod.registrar_causa(rit, {"borrador_documentos_draft_id": None})
+
+    for causa in registro_mod.causas_con_oferta_pendiente():
+        draft_id = causa["oferta_borrador_draft_id"]
+        rit = causa.get("rit")
+        if gmail_client.borrador_existe(draft_id):
+            pendientes.append({
+                "rit": rit,
+                "empresa": causa.get("empresa"),
+                "demandante": causa.get("demandante"),
+                "draft_id": draft_id,
+                "thread_id": causa.get("thread_id"),
+                "tipo": "ofrecimiento",
+            })
+            continue
+        enviados.append({"rit": rit, "tipo": "ofrecimiento"})
+        if not dry_run:
+            registro_mod.registrar_causa(rit, {"oferta_borrador_draft_id": None})
+
     return {"pendientes": pendientes, "enviados": enviados, "descartados": descartados}
 
 

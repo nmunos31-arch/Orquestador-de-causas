@@ -385,6 +385,18 @@ class TestAccionesConsolidadas:
         rits = {a["rit"] for a in acciones}
         assert rits == {"M-1-2026", "M-2-2026", "M-3-2026", "M-4-2026"}
 
+    def test_borrador_de_ofrecimiento_sin_enviar_se_distingue_del_de_documentos(self):
+        # Caso Moreno (03.11.2026): un borrador de ofrecimiento sin enviar
+        # debe quedar en la bandeja igual que uno de documentos, pero con un
+        # texto que diga que es una oferta de acuerdo, no documentos.
+        borradores = [{"rit": "M-461-2026", "empresa": "Rendic Hermanos", "demandante": "Moreno", "tipo": "ofrecimiento"}]
+
+        acciones = acciones_consolidadas([], [], [], borradores)
+
+        assert len(acciones) == 1
+        assert "ofrecimiento de acuerdo sin enviar" in acciones[0]["que"]
+        assert acciones[0]["origen"] == "agenda"
+
     def test_ignora_causas_y_pedidos_sin_novedad(self):
         causas = [{"rit": "M-1-2026", "fase": "Demanda guardada, en curso"}]
         pedidos = [{"rit": "M-2-2026", "estado": "esperando"}]

@@ -11,6 +11,7 @@ from gestion_causas.registro import (
     buscar_eerr_reusable,
     causa_ya_registrada,
     causas_con_borrador_pendiente,
+    causas_con_oferta_pendiente,
     causas_para_goteo,
     extraer_rit,
     normalizar_rit,
@@ -112,6 +113,42 @@ class TestCausasConBorradorPendiente:
         registrar_causa("M-3-2026", {"borrador_documentos_draft_id": None}, ruta)
 
         assert causas_con_borrador_pendiente(ruta) == []
+
+
+class TestCausasConOfertaPendiente:
+    def test_incluye_causa_con_draft_id_de_oferta_seteado(self, tmp_path):
+        ruta = tmp_path / "registro_causas.json"
+        registrar_causa(
+            "M-1-2026",
+            {"empresa": "Rendic Hermanos", "oferta_borrador_creado": True, "oferta_borrador_draft_id": "d1"},
+            ruta,
+        )
+
+        pendientes = causas_con_oferta_pendiente(ruta)
+
+        assert len(pendientes) == 1
+        assert pendientes[0]["rit"] == "M-1-2026"
+
+    def test_excluye_causa_con_oferta_creada_pero_sin_draft_id(self, tmp_path):
+        # Caso Moreno (M-461-2026, detectado por Nico 03.11.2026): antes de
+        # guardar oferta_borrador_draft_id en fases/agenda.py, el borrador de
+        # ofrecimiento nunca quedaba trazable — este caso no debe volver a
+        # aparecer silenciosamente como "sin seguimiento".
+        ruta = tmp_path / "registro_causas.json"
+        registrar_causa("M-2-2026", {"empresa": "Rendic Hermanos", "oferta_borrador_creado": True}, ruta)
+
+        assert causas_con_oferta_pendiente(ruta) == []
+
+    def test_excluye_causa_con_draft_id_limpiado_a_none(self, tmp_path):
+        ruta = tmp_path / "registro_causas.json"
+        registrar_causa(
+            "M-3-2026",
+            {"empresa": "Alvi", "oferta_borrador_creado": True, "oferta_borrador_draft_id": "d1"},
+            ruta,
+        )
+        registrar_causa("M-3-2026", {"oferta_borrador_draft_id": None}, ruta)
+
+        assert causas_con_oferta_pendiente(ruta) == []
 
 
 class TestReusoEerr:
